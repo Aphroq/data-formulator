@@ -39,6 +39,7 @@
 | 日期 | 阶段 | 实质变更 | 验证 | 提交 |
 | --- | --- | --- | --- | --- |
 | 2026-08-18 | 准备 | 核对 DataOperation plan hash、Sandbox、HMAC、Workspace 和前端刷新边界，建立共享文档与独立 Worktree | 固定源码审查、文档检查 | `docs: establish project plan` |
+| 2026-08-18 | 准备 | 增加仓库级 Agent 指南并配置 fork remote | 文档链接、范围和 Git remote 核对 | `docs: add repository agent guide` |
 
 ## 已确认决策
 

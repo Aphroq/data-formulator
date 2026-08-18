@@ -17,13 +17,14 @@
 - 三个 Feature 已各自建立工程记录文档。
 - `feat/analysis-integrations` 和 `feat/recipe-core` 已各自准备独立 Worktree。
 - Git 提交身份使用仓库本地配置 `aphroq <shi1490672988@qq.com>`。
+- `origin` 已配置为 `https://github.com/Aphroq/data-formulator.git`，`upstream` 保持 Microsoft 官方仓库。
+- 根目录 `AGENTS.md` 已建立，约束后续 Agent 的文档入口、分支边界、架构红线和验证门槛。
 
 ## 下一步
 
-1. 有可用 fork 后补充 `origin`。
-2. 在 Analysis 和 Recipe 两个分支分别落 M0 探针、最小契约和失败测试。
-3. Recipe 基础契约提交后创建 `feat/automation-workbench`。
+1. 在 Analysis 和 Recipe 两个分支分别落 M0 探针、最小契约和失败测试。
+2. Recipe 基础契约提交后创建 `feat/automation-workbench`。
 
 ## 阻塞
 
-本地开发不受阻塞。远端推送前需要提供或创建 fork，并配置 `origin`。
+当前没有已知阻塞。共享准备提交尚未推送到 `origin`。

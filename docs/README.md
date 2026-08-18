@@ -2,6 +2,8 @@
 
 本项目新增文档按“产品 → 架构 → 交付”三层组织，Feature 工程记录单独归档。下面只列新增部分；Data Formulator 上游已有的 `docs/dev-guides`、`docs/docs-cn` 等目录保持原样。
 
+编码 Agent 进入仓库后先读根目录 [`AGENTS.md`](../AGENTS.md)，再按本页顺序读取对应文档。
+
 ```text
 docs/
   README.md
