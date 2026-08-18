@@ -48,14 +48,14 @@ Recipe Core 已经可以保存、校验、发布和手动运行 Recipe，但入�
 | --- | --- | --- |
 | [Open WebUI Workspace](https://docs.openwebui.com/features/workspace/) | 用稳定的一级入口承载可复用资产；列表默认按最近更新组织 | 采用稳定的 `Automation` 一级入口和最近更新项目列表，不复制 Models/Knowledge/Tools 等多层标签 |
 | [Langflow Projects](https://docs.langflow.org/1.8.0/concepts-flows) | 以 Project 作为相关 Flow 的管理容器 | 将一个 Recipe identity 展示为一个 Automation project，版本留在项目内部，不把每个版本平铺成项目 |
-| [n8n Executions](https://docs.n8n.io/workflows/executions/all-executions/) | 执行记录既有全局入口，也能回到具体项目上下文 | 本阶段只预留 Runs 信息层级；等持久化 Run 契约落地后再增加 Runs Inbox，避免用同步手动运行伪装后台执行历史 |
+| [n8n Executions](https://docs.n8n.io/workflows/executions/all-executions/) | 执行记录既有全局入口，也能回到具体项目上下文 | 本阶段只展示当前操作返回的最近运行结果；等持久化 Run 契约落地后再增加 Runs Inbox，避免用同步手动运行伪装后台执行历史 |
 
 ### 信息架构
 
 - 全局左栏：`App`、`Automation`；`About` 作为低频辅助入口放在底部。
 - `/automation`：项目列表 + 当前项目详情，保留 `/recipes` 重定向以兼容已有链接。
 - 项目列表：每个 Recipe 只显示一次，展示名称、最新版本状态、版本数和更新时间。
-- 项目详情：项目说明、版本选择、状态、hash、参数、输入、步骤和与当前状态匹配的主操作。
+- 项目详情：项目说明、版本选择、状态、hash、参数、输入、步骤、与当前状态匹配的主操作，以及当前会话最近一次运行结果。
 - 创建入口：仍由分析产物的 `Save as Recipe` 触发；Automation 空状态和页头只引导返回 App，不新增无血缘的“空白自动化”。
 
 ### 范围与非范围
@@ -95,6 +95,7 @@ Recipe Core 已经可以保存、校验、发布和手动运行 Recipe，但入�
 - 启用后，从任意 App 页面一键进入 Automation；当前入口有明确选中态。
 - 一个含多个 RecipeVersion 的 Recipe 在项目列表中只出现一次，且可在详情内切换版本。
 - 各版本只能执行其状态允许的操作，现有参数 typed binding 保持不变。
+- 试运行或手动运行完成后，当前页展示状态、Run ID、步骤耗时、输出位置、最终产物标记和安全错误信息；切换版本时清除旧结果。
 - `Save as Recipe` 打开 `/automation?version=...`，旧 `/recipes?version=...` 无损重定向。
 - 页面在常用桌面宽度可用；窄屏导航不遮挡内容并保持键盘/读屏可达。
 - 不新增调度、Worker、LLM 调用或复杂编排依赖。
@@ -105,6 +106,7 @@ Recipe Core 已经可以保存、校验、发布和手动运行 Recipe，但入�
 - `/automation` 按 Recipe identity 聚合项目，项目内可切换不可变 RecipeVersion；现有 dry run、publish、run now、archive 和 typed parameter binding 原样复用。
 - `Save as Recipe` 改为进入 `/automation?version=...`；旧 `/recipes` 路径保留 query/hash 后重定向。
 - `AUTOMATION_ENABLED=false` 时导航入口隐藏且直接访问失败关闭；无活动 Workspace 时不展示跨 Workspace 数据。
+- 试运行和手动运行返回后展示轻量结果面板；它不冒充持久化运行历史，刷新页面后不承诺恢复。
 - 未加入节点画布、Scheduler、Worker、Runs Inbox、新数据库表或新的状态管理依赖。
 
 ## 实施顺序
@@ -126,6 +128,7 @@ Recipe Core 已经可以保存、校验、发布和手动运行 Recipe，但入�
 | 2026-08-18 | 准备 | 预留多 Worktree 本机实例和资源隔离约定 | 端口、数据目录、Worker/SQLite 边界和文档链接检查 | `docs: define multi-worktree runtime isolation` |
 | 2026-08-18 | M3-A 规划 | 确定左侧 Automation 入口、项目/版本信息架构、Recipe Core 复用边界和非范围 | Markdown 结构、外部参考链接、diff 范围检查 | `docs: plan lightweight automation workbench` |
 | 2026-08-19 | M3-A 实现 | 增加响应式全局左栏、Automation 项目/版本管理页、旧路由兼容、feature flag 和中英文文案 | 前端 49 files / 400 tests；后端 2220 passed；生产构建；桌面与 600px 窄屏浏览器检查 | `feat: add lightweight automation workbench` |
+| 2026-08-19 | M3-A 反馈完善 | 增加当前会话最近运行结果面板，展示状态、Run ID、步骤、耗时、输出位置、最终产物与错误，不扩展持久化 Runs Inbox | Automation 聚焦测试、前端全量测试、生产构建 | `feat: show latest automation run result` |
 
 ## 已确认决策
 

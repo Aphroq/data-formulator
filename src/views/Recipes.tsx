@@ -55,6 +55,12 @@ const statusColor = (status: RecipeVersionStatus) => {
     return 'warning' as const;
 };
 
+const executionStatusColor = (status: RecipeExecutionResult['status']) => {
+    if (status === 'succeeded') return 'success' as const;
+    if (status === 'needs_review') return 'warning' as const;
+    return 'error' as const;
+};
+
 const shortHash = (value: string) => value.includes(':')
     ? value.split(':').at(-1)?.slice(0, 12) ?? value
     : value.slice(0, 12);
@@ -65,6 +71,100 @@ const initialParameterValues = (parameters: RecipeParameter[]) => Object.fromEnt
         parameter.default === undefined ? '' : String(parameter.default),
     ]),
 );
+
+
+const RunResultPanel: FC<{
+    result: RecipeExecutionResult;
+    finalOutputStepIds: string[];
+}> = ({ result, finalOutputStepIds }) => {
+    const { t } = useTranslation();
+    const totalDuration = result.steps.reduce((total, step) => total + step.duration_ms, 0);
+    const finalOutputs = new Set(finalOutputStepIds);
+
+    return (
+        <Card
+            component="section"
+            aria-label={t('automation.runResult.title')}
+            variant="outlined"
+            sx={{ p: 2, bgcolor: 'action.hover' }}
+        >
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'flex-start', sm: 'center' }}>
+                <Typography variant="h6" component="h3" sx={{ flex: 1 }}>
+                    {t('automation.runResult.title')}
+                </Typography>
+                <Chip
+                    size="small"
+                    color={executionStatusColor(result.status)}
+                    label={t(`automation.runResult.status.${result.status}`)}
+                />
+            </Stack>
+
+            <Stack direction="row" spacing={1.5} useFlexGap flexWrap="wrap" sx={{ mt: 1 }}>
+                {result.run && (
+                    <>
+                        <Typography variant="caption" color="text.secondary">
+                            {t(`automation.runResult.kind.${result.run.kind}`)}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
+                            {t('automation.runResult.runId')}: {result.run.run_id}
+                        </Typography>
+                    </>
+                )}
+                <Typography variant="caption" color="text.secondary">
+                    {t('automation.runResult.summary', {
+                        count: result.steps.length,
+                        duration: totalDuration,
+                    })}
+                </Typography>
+            </Stack>
+
+            {result.error && (
+                <Alert severity={result.status === 'needs_review' ? 'warning' : 'error'} sx={{ mt: 1.5 }}>
+                    <Typography variant="body2" fontWeight={600}>{result.error.code}</Typography>
+                    <Typography variant="body2">{result.error.message}</Typography>
+                </Alert>
+            )}
+
+            <Divider sx={{ my: 1.5 }} />
+            <Typography variant="subtitle2" sx={{ mb: 1 }}>{t('automation.runResult.steps')}</Typography>
+            {result.steps.length === 0 ? (
+                <Typography variant="body2" color="text.secondary">
+                    {t('automation.runResult.noSteps')}
+                </Typography>
+            ) : (
+                <Stack spacing={1}>
+                    {result.steps.map((step, index) => (
+                        <Box key={`${step.step_id}-${index}`} sx={{ p: 1.25, border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.paper' }}>
+                            <Stack direction="row" spacing={1} alignItems="center" useFlexGap flexWrap="wrap">
+                                <Chip size="small" variant="outlined" label={index + 1} />
+                                <Typography variant="body2" fontWeight={600}>
+                                    {t(`recipes.stepKind.${step.kind}`)}
+                                </Typography>
+                                {finalOutputs.has(step.step_id) && (
+                                    <Chip size="small" color="primary" variant="outlined" label={t('automation.runResult.finalOutput')} />
+                                )}
+                                <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto' }}>
+                                    {t('automation.runResult.duration', { duration: step.duration_ms })}
+                                </Typography>
+                            </Stack>
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75, fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
+                                {t('automation.runResult.outputPath')}: {step.output_path}
+                            </Typography>
+                            <Stack direction="row" spacing={1.5} useFlexGap flexWrap="wrap" sx={{ mt: 0.5 }}>
+                                <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                                    {t('automation.runResult.contentHash')} {shortHash(step.content_hash)}
+                                </Typography>
+                                <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                                    {t('automation.runResult.schemaHash')} {shortHash(step.schema_hash)}
+                                </Typography>
+                            </Stack>
+                        </Box>
+                    ))}
+                </Stack>
+            )}
+        </Card>
+    );
+};
 
 function typedParameterValues(
     parameters: RecipeParameter[],
@@ -127,7 +227,9 @@ export const Automation: FC = () => {
     ): Promise<{ applied: boolean; error?: string }> => {
         if (requestSequence.current !== sequence) return { applied: false };
         setSelectedVersionId(versionId);
-        if (clearDetail) setDetail(null);
+        setDetail(null);
+        setLastRun(null);
+        setError('');
         try {
             const next = await getRecipeVersion(versionId);
             setSelectedRecipeId(next.recipe.recipe_id);
@@ -223,16 +325,12 @@ export const Automation: FC = () => {
         setLastRun(null);
         try {
             let completedNotice = '';
-            let completedError = '';
             let completedRun: RecipeExecutionResult | null = null;
             let completedVersion: RecipeVersionDetail['version'] | null = null;
             if (action === 'dry-run') {
                 const response = await dryRunRecipe(versionId, parameterValues());
                 completedRun = response.result;
-                completedVersion = response.version;
-                if (response.result.status !== 'succeeded') {
-                    completedError = response.result.error?.message || t('recipes.runFailed');
-                } else {
+                if (response.result.status === 'succeeded') {
                     completedNotice = t('recipes.dryRunSucceeded');
                 }
             } else if (action === 'publish') {
@@ -241,9 +339,7 @@ export const Automation: FC = () => {
             } else if (action === 'run') {
                 const result = await runRecipe(versionId, parameterValues());
                 completedRun = result;
-                if (result.status !== 'succeeded') {
-                    completedError = result.error?.message || t('recipes.runFailed');
-                } else {
+                if (result.status === 'succeeded') {
                     completedNotice = t('recipes.runSucceeded', { runId: result.run?.run_id });
                 }
             } else {
@@ -257,7 +353,6 @@ export const Automation: FC = () => {
                     : current);
             }
             setLastRun(completedRun);
-            setError(completedError);
             setNotice(completedNotice);
             const refreshOutcome = await refresh(versionId, {
                 surfaceError: false,
@@ -320,30 +415,6 @@ export const Automation: FC = () => {
                 </Stack>
                 {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
                 {notice && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setNotice('')}>{notice}</Alert>}
-                {warning && <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setWarning('')}>{warning}</Alert>}
-                {lastRun && (
-                    <Alert
-                        severity={lastRun.status === 'succeeded' ? 'success' : lastRun.status === 'failed' ? 'error' : 'warning'}
-                        sx={{ mb: 2 }}
-                    >
-                        <Stack spacing={0.75}>
-                            <Typography fontWeight={600}>{t('recipes.runSummary')}</Typography>
-                            <Stack direction="row" spacing={2} useFlexGap flexWrap="wrap">
-                                <Typography variant="body2">{t(`recipes.runStatus.${lastRun.status}`)}</Typography>
-                                {lastRun.run && (
-                                    <Typography variant="body2">{t('recipes.runId', { runId: lastRun.run.run_id })}</Typography>
-                                )}
-                                <Typography variant="body2">{t('recipes.runDuration', { duration: lastRunDuration })}</Typography>
-                                {lastRunStep && (
-                                    <Typography variant="body2">{t('recipes.lastStep', { step: lastRunStep.step_id })}</Typography>
-                                )}
-                            </Stack>
-                            {lastRun.status === 'needs_review' && (
-                                <Typography variant="body2">{t('recipes.needsReview')}</Typography>
-                            )}
-                        </Stack>
-                    </Alert>
-                )}
                 {loading && recipes.length === 0 ? (
                     <Paper variant="outlined" sx={{ minHeight: 260, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         <CircularProgress size={28} />
@@ -463,6 +534,13 @@ export const Automation: FC = () => {
                                     )}
                                     {busy && <CircularProgress size={24} sx={{ alignSelf: 'center' }} />}
                                 </Stack>
+
+                                {lastRun && (
+                                    <RunResultPanel
+                                        result={lastRun}
+                                        finalOutputStepIds={detail.spec.final_outputs.map(output => output.step_id)}
+                                    />
+                                )}
 
                                 <Divider />
                                 <Box>

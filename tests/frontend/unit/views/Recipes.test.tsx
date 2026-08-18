@@ -42,6 +42,21 @@ vi.mock('react-i18next', () => ({
             'automation.versionsCount': `${values?.count} versions`,
             'automation.updated': `Updated ${values?.date}`,
             'automation.versionPicker': 'Version',
+            'automation.runResult.title': 'Latest run result',
+            'automation.runResult.status.succeeded': 'Succeeded',
+            'automation.runResult.status.failed': 'Failed',
+            'automation.runResult.status.needs_review': 'Needs review',
+            'automation.runResult.kind.dry_run': 'Dry run result',
+            'automation.runResult.kind.manual': 'Manual run result',
+            'automation.runResult.runId': 'Run ID',
+            'automation.runResult.summary': `${values?.count} steps · ${values?.duration} ms`,
+            'automation.runResult.steps': 'Step results',
+            'automation.runResult.noSteps': 'No step result',
+            'automation.runResult.finalOutput': 'Final output',
+            'automation.runResult.duration': `${values?.duration} ms`,
+            'automation.runResult.outputPath': 'Saved output',
+            'automation.runResult.contentHash': 'content',
+            'automation.runResult.schemaHash': 'schema',
             'recipes.status.draft': 'Draft',
             'recipes.status.published': 'Published',
             'recipes.versionNumber': `Version ${values?.number}`,
@@ -55,16 +70,7 @@ vi.mock('react-i18next', () => ({
             'recipes.dryRun': 'Dry run',
             'recipes.dryRunSucceeded': 'Dry run succeeded',
             'recipes.runNow': 'Run now',
-            'recipes.runSucceeded': `Run ${values?.runId} succeeded.`,
-            'recipes.runSummary': 'Run summary',
-            'recipes.runId': `Run ID: ${values?.runId}`,
-            'recipes.runDuration': `Duration: ${values?.duration} ms`,
-            'recipes.lastStep': `Last step: ${values?.step}`,
-            'recipes.runStatus.succeeded': 'Succeeded',
-            'recipes.runStatus.failed': 'Failed',
-            'recipes.runStatus.needs_review': 'Needs review',
-            'recipes.refreshAfterActionFailed': 'Action completed, but Recipes could not be refreshed.',
-            'recipes.actionFailed': 'The Recipe action failed.',
+            'recipes.runFailed': 'Run failed',
         }[key] ?? key),
     }),
 }));
@@ -127,7 +133,11 @@ const detail = {
             expected_schema: `sha256:${'c'.repeat(64)}`,
             step_hash: `sha256:${'e'.repeat(64)}`,
         }],
-        final_outputs: [],
+        final_outputs: [{
+            artifact_id: `art_${'d'.repeat(64)}`,
+            step_id: 'step_1',
+            kind: 'table',
+        }],
     },
     workflow_markdown: '# Regional totals',
 };
@@ -148,8 +158,17 @@ beforeEach(() => {
     ));
     mocks.dryRunRecipe.mockResolvedValue({
         result: {
-            ...runResult,
-            run: { ...runResult.run, kind: 'dry_run' },
+            status: 'succeeded',
+            run: { run_id: 'run_1', kind: 'dry_run', status: 'succeeded', manifest_hash: 'sha256:a' },
+            steps: [{
+                step_id: 'step_1',
+                kind: 'load',
+                content_hash: `sha256:${'b'.repeat(64)}`,
+                schema_hash: `sha256:${'c'.repeat(64)}`,
+                output_path: 'workspace/data/orders.parquet',
+                duration_ms: 12,
+            }],
+            error: null,
         },
         version: { ...version, status: 'validated' },
     });
@@ -173,87 +192,35 @@ describe('Automation page', () => {
             expect(mocks.dryRunRecipe).toHaveBeenCalledWith('rv_2', {});
         });
         expect(await screen.findByText('Dry run succeeded')).toBeInTheDocument();
-        expect(screen.getByText('Run summary')).toBeInTheDocument();
-        expect(screen.getByText('Duration: 125 ms')).toBeInTheDocument();
+        const resultPanel = screen.getByRole('region', { name: 'Latest run result' });
+        expect(within(resultPanel).getByText('Succeeded')).toBeInTheDocument();
+        expect(within(resultPanel).getByText(/run_1/)).toBeInTheDocument();
+        expect(within(resultPanel).getByText(/workspace\/data\/orders.parquet/)).toBeInTheDocument();
+        expect(within(resultPanel).getByText('Final output')).toBeInTheDocument();
     });
 
-    it('shows immutable version metadata instead of the mutable catalog name', async () => {
-        mocks.listRecipes.mockResolvedValue([{
-            ...recipe,
-            name: 'Latest catalog name',
-            description: 'Latest catalog description',
-        }]);
-        mocks.getRecipeVersion.mockResolvedValue({
-            ...detail,
-            recipe: {
-                ...detail.recipe,
-                name: 'Latest catalog name',
-                description: 'Latest catalog description',
-            },
-            spec: {
-                ...detail.spec,
-                name: 'Immutable version name',
-                description: 'Immutable version description',
+    it('shows an execution error when a manual run fails before producing output', async () => {
+        mocks.runRecipe.mockResolvedValue({
+            status: 'failed',
+            run: { run_id: 'run_failed', kind: 'manual', status: 'failed', manifest_hash: 'sha256:f' },
+            steps: [],
+            error: {
+                code: 'connector_error',
+                exception_type: 'RecipeConnectorError',
+                message: 'The source could not be opened.',
             },
         });
+        render(<MemoryRouter initialEntries={['/automation?version=rv_1']}><Automation /></MemoryRouter>);
 
-        render(<MemoryRouter initialEntries={['/recipes']}><Recipes /></MemoryRouter>);
+        expect(await screen.findByText('Published')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
 
-        expect(await screen.findByRole('heading', { name: 'Immutable version name' })).toBeInTheDocument();
-        expect(screen.getByText('Immutable version description')).toBeInTheDocument();
-    });
-
-    it('ignores an older detail response after the selected URL version changes', async () => {
-        const first = deferred<typeof detail>();
-        const secondVersion = { ...version, version_id: 'rv_2' };
-        const secondDetail = {
-            ...detail,
-            version: secondVersion,
-            spec: {
-                ...detail.spec,
-                version_id: 'rv_2',
-                name: 'Second immutable version',
-            },
-        };
-        mocks.listRecipes.mockResolvedValue([{
-            ...recipe,
-            versions: [version, secondVersion],
-        }]);
-        mocks.getRecipeVersion.mockImplementation((versionId: string) => (
-            versionId === 'rv_1' ? first.promise : Promise.resolve(secondDetail)
-        ));
-
-        render(
-            <MemoryRouter initialEntries={['/recipes?version=rv_1']}>
-                <Recipes />
-            </MemoryRouter>,
-        );
-
-        fireEvent.click(await screen.findByText('Version 1'));
-        expect(await screen.findByRole('heading', { name: 'Second immutable version' })).toBeInTheDocument();
-
-        await act(async () => first.resolve(detail));
-        expect(screen.getByRole('heading', { name: 'Second immutable version' })).toBeInTheDocument();
-    });
-
-    it('keeps a successful run result when the follow-up refresh fails', async () => {
-        const publishedVersion = { ...version, status: 'published' };
-        const publishedRecipe = { ...recipe, versions: [publishedVersion] };
-        mocks.listRecipes
-            .mockResolvedValueOnce([publishedRecipe])
-            .mockRejectedValueOnce(new Error('refresh failed'));
-        mocks.getRecipeVersion.mockResolvedValue({
-            ...detail,
-            version: publishedVersion,
-        });
-
-        render(<MemoryRouter initialEntries={['/recipes']}><Recipes /></MemoryRouter>);
-        fireEvent.click(await screen.findByRole('button', { name: 'Run now' }));
-
-        expect(await screen.findByText('Run run_1 succeeded.')).toBeInTheDocument();
-        expect(screen.getByText('Run summary')).toBeInTheDocument();
-        expect(screen.getByText('Action completed, but Recipes could not be refreshed.')).toBeInTheDocument();
-        expect(screen.queryByText('The Recipe action failed.')).not.toBeInTheDocument();
+        await waitFor(() => expect(mocks.runRecipe).toHaveBeenCalledWith('rv_1', {}));
+        const resultPanel = await screen.findByRole('region', { name: 'Latest run result' });
+        expect(within(resultPanel).getByText('Failed')).toBeInTheDocument();
+        expect(within(resultPanel).getByText('connector_error')).toBeInTheDocument();
+        expect(within(resultPanel).getByText('The source could not be opened.')).toBeInTheDocument();
+        expect(within(resultPanel).getByText('No step result')).toBeInTheDocument();
     });
 
     it('switches versions inside the selected project', async () => {

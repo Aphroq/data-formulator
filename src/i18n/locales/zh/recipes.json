@@ -78,6 +78,27 @@
     "versionOption": "版本 {{number}} · {{status}}",
     "emptyTitle": "还没有自动化项目",
     "emptyDescription": "请先在应用中创建图表，再使用“保存为配方”把确定性项目添加到这里。",
-    "openApp": "打开应用"
+    "openApp": "打开应用",
+    "runResult": {
+      "title": "最近运行结果",
+      "status": {
+        "succeeded": "成功",
+        "failed": "失败",
+        "needs_review": "需要检查"
+      },
+      "kind": {
+        "dry_run": "试运行",
+        "manual": "手动运行"
+      },
+      "runId": "运行 ID",
+      "summary": "{{count}} 个步骤 · {{duration}} 毫秒",
+      "steps": "步骤结果",
+      "noSteps": "本次运行在生成步骤结果前已停止。",
+      "finalOutput": "最终产物",
+      "duration": "{{duration}} 毫秒",
+      "outputPath": "保存位置",
+      "contentHash": "内容",
+      "schemaHash": "结构"
+    }
   }
 }

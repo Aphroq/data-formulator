@@ -78,6 +78,27 @@
     "versionOption": "Version {{number}} · {{status}}",
     "emptyTitle": "No Automation projects yet",
     "emptyDescription": "Create a chart in App, then use Save as Recipe to add a deterministic project here.",
-    "openApp": "Open App"
+    "openApp": "Open App",
+    "runResult": {
+      "title": "Latest run result",
+      "status": {
+        "succeeded": "Succeeded",
+        "failed": "Failed",
+        "needs_review": "Needs review"
+      },
+      "kind": {
+        "dry_run": "Dry run",
+        "manual": "Manual run"
+      },
+      "runId": "Run ID",
+      "summary": "{{count}} steps · {{duration}} ms",
+      "steps": "Step results",
+      "noSteps": "The run stopped before producing a step result.",
+      "finalOutput": "Final output",
+      "duration": "{{duration}} ms",
+      "outputPath": "Saved output",
+      "contentHash": "content",
+      "schemaHash": "schema"
+    }
   }
 }
