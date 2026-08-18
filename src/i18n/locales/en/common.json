@@ -44,6 +44,8 @@
     "errorOccurred": "An error has occurred, please <refreshAction>refresh the session</refreshAction>. If the problem still exists, click close session.",
     "about": "About",
     "app": "App",
+    "automation": "Automation",
+    "primaryNavigation": "Primary navigation",
     "recipes": "Recipes",
     "data": "Data",
     "moreOptions": "More options",

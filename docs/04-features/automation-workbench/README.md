@@ -8,7 +8,7 @@
 | Worktree | `D:\projects\dfm-wt-automation` |
 | 本机实例 | `automation`：后端 5570、Vite 5176、数据目录 `D:\projects\dfm-runtime\automation`（Worktree 创建后启用） |
 | 基线 | 在 Recipe Core 基础契约提交后从 `feat/recipe-core` 创建 |
-| 当前阶段 | M3-A：轻量 Automation 导航与项目管理 |
+| 当前阶段 | M3-A 已完成：轻量 Automation 导航与项目管理；下一步为持久化 Schedule/Run 契约 |
 
 ## 目标
 
@@ -99,6 +99,14 @@ Recipe Core 已经可以保存、校验、发布和手动运行 Recipe，但入�
 - 页面在常用桌面宽度可用；窄屏导航不遮挡内容并保持键盘/读屏可达。
 - 不新增调度、Worker、LLM 调用或复杂编排依赖。
 
+### M3-A 实施结果
+
+- 全局左栏已落地 `App`、`Automation`、`About`，窄屏收起文字并保留 Tooltip、可访问名称和选中态。
+- `/automation` 按 Recipe identity 聚合项目，项目内可切换不可变 RecipeVersion；现有 dry run、publish、run now、archive 和 typed parameter binding 原样复用。
+- `Save as Recipe` 改为进入 `/automation?version=...`；旧 `/recipes` 路径保留 query/hash 后重定向。
+- `AUTOMATION_ENABLED=false` 时导航入口隐藏且直接访问失败关闭；无活动 Workspace 时不展示跨 Workspace 数据。
+- 未加入节点画布、Scheduler、Worker、Runs Inbox、新数据库表或新的状态管理依赖。
+
 ## 实施顺序
 
 1. SQLite migration、事务和唯一约束。
@@ -117,6 +125,7 @@ Recipe Core 已经可以保存、校验、发布和手动运行 Recipe，但入�
 | 2026-08-18 | 准备 | 补充上游文档检索规则和无 Docker 开发约束 | 上游指南入口、文档链接和范围检查 | `docs: preserve upstream guidance and prohibit docker` |
 | 2026-08-18 | 准备 | 预留多 Worktree 本机实例和资源隔离约定 | 端口、数据目录、Worker/SQLite 边界和文档链接检查 | `docs: define multi-worktree runtime isolation` |
 | 2026-08-18 | M3-A 规划 | 确定左侧 Automation 入口、项目/版本信息架构、Recipe Core 复用边界和非范围 | Markdown 结构、外部参考链接、diff 范围检查 | `docs: plan lightweight automation workbench` |
+| 2026-08-19 | M3-A 实现 | 增加响应式全局左栏、Automation 项目/版本管理页、旧路由兼容、feature flag 和中英文文案 | 前端 49 files / 400 tests；后端 2220 passed；生产构建；桌面与 600px 窄屏浏览器检查 | `feat: add lightweight automation workbench` |
 
 ## 已确认决策
 
@@ -129,7 +138,7 @@ Recipe Core 已经可以保存、校验、发布和手动运行 Recipe，但入�
 
 ## 未决与风险
 
-- Worktree 只能在 Recipe Core 基础契约提交后创建。
+- 当前 Worktree 基于 Recipe Core 基础契约提交 `9d20f70f` 创建；后续 Schedule/Run 工作不得回写 Recipe Core 分支。
 - Web、Worker 和 SQLite 直接在本机运行，不提供 Docker 或 Compose 方案。
 - SQLite 数据库和 artifact store 必须由 Web/Worker 解析到相同绝对路径。
 - 进程崩溃、过期 lease 和运行中取消需要专门的恢复测试。

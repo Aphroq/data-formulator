@@ -65,5 +65,19 @@
       "transform": "Transform data",
       "chart": "Create chart"
     }
+  },
+  "automation": {
+    "title": "Automation",
+    "subtitle": "Manage deterministic projects created from your analysis artifacts.",
+    "unavailable": "Automation is not enabled on this server.",
+    "openWorkspace": "Open a workspace before managing its Automation projects.",
+    "projects": "Projects",
+    "versionsCount": "{{count}} versions",
+    "updated": "Updated {{date}}",
+    "versionPicker": "Version",
+    "versionOption": "Version {{number}} · {{status}}",
+    "emptyTitle": "No Automation projects yet",
+    "emptyDescription": "Create a chart in App, then use Save as Recipe to add a deterministic project here.",
+    "openApp": "Open App"
   }
 }

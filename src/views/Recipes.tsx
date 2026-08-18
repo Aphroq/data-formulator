@@ -10,21 +10,25 @@ import {
     Chip,
     CircularProgress,
     Divider,
+    FormControl,
+    InputLabel,
     List,
     ListItemButton,
     ListItemText,
     MenuItem,
+    NativeSelect,
     Paper,
     Stack,
     TextField,
     Typography,
 } from '@mui/material';
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
+import AutoModeOutlinedIcon from '@mui/icons-material/AutoModeOutlined';
 import PlayArrowOutlinedIcon from '@mui/icons-material/PlayArrowOutlined';
 import PublishOutlinedIcon from '@mui/icons-material/PublishOutlined';
 import ScienceOutlinedIcon from '@mui/icons-material/ScienceOutlined';
 import { useSelector } from 'react-redux';
-import { useSearchParams } from 'react-router-dom';
+import { Link as RouterLink, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { ApiRequestError } from '../app/apiClient';
@@ -93,7 +97,7 @@ function typedParameterValues(
 }
 
 
-export const Recipes: FC = () => {
+export const Automation: FC = () => {
     const { t } = useTranslation();
     const [searchParams, setSearchParams] = useSearchParams();
     const requestedVersionId = searchParams.get('version') ?? '';
@@ -102,6 +106,7 @@ export const Recipes: FC = () => {
         (state: DataFormulatorState) => state.serverConfig.AUTOMATION_ENABLED,
     );
     const [recipes, setRecipes] = useState<RecipeSummary[]>([]);
+    const [selectedRecipeId, setSelectedRecipeId] = useState<string>('');
     const [selectedVersionId, setSelectedVersionId] = useState<string>('');
     const [detail, setDetail] = useState<RecipeVersionDetail | null>(null);
     const [parameters, setParameters] = useState<Record<string, string>>({});
@@ -125,7 +130,7 @@ export const Recipes: FC = () => {
         if (clearDetail) setDetail(null);
         try {
             const next = await getRecipeVersion(versionId);
-            if (requestSequence.current !== sequence) return { applied: false };
+            setSelectedRecipeId(next.recipe.recipe_id);
             setDetail(next);
             setParameters(initialParameterValues(next.spec.parameters));
             return { applied: true };
@@ -182,6 +187,7 @@ export const Recipes: FC = () => {
         requestSequence.current += 1;
         setRecipes([]);
         setDetail(null);
+        setSelectedRecipeId('');
         setSelectedVersionId('');
         setParameters({});
         setBusy(false);
@@ -276,23 +282,22 @@ export const Recipes: FC = () => {
 
     const status = detail?.version.status;
     const parameterFields = useMemo(() => detail?.spec.parameters ?? [], [detail]);
-    const lastRunDuration = useMemo(
-        () => lastRun?.steps.reduce((total, step) => total + step.duration_ms, 0) ?? 0,
-        [lastRun],
+    const selectedRecipe = useMemo(
+        () => recipes.find(recipe => recipe.recipe_id === selectedRecipeId) ?? null,
+        [recipes, selectedRecipeId],
     );
-    const lastRunStep = lastRun?.steps.at(-1);
 
     if (!enabled) {
         return (
             <Box sx={{ p: 4 }}>
-                <Alert severity="info">{t('recipes.unavailable')}</Alert>
+                <Alert severity="info">{t('automation.unavailable')}</Alert>
             </Box>
         );
     }
     if (!activeWorkspace) {
         return (
             <Box sx={{ p: 4 }}>
-                <Alert severity="info">{t('recipes.openWorkspace')}</Alert>
+                <Alert severity="info">{t('automation.openWorkspace')}</Alert>
             </Box>
         );
     }
@@ -300,12 +305,19 @@ export const Recipes: FC = () => {
     return (
         <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', bgcolor: 'background.default', p: { xs: 2, md: 3 } }}>
             <Box sx={{ maxWidth: 1280, mx: 'auto' }}>
-                <Typography variant="h4" component="h1" sx={{ fontWeight: 500 }}>
-                    {t('recipes.title')}
-                </Typography>
-                <Typography color="text.secondary" sx={{ mt: 0.5, mb: 3 }}>
-                    {t('recipes.subtitle')}
-                </Typography>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'flex-start', sm: 'center' }} sx={{ mb: 3 }}>
+                    <Box sx={{ flex: 1 }}>
+                        <Typography variant="h4" component="h1" sx={{ fontWeight: 500 }}>
+                            {t('automation.title')}
+                        </Typography>
+                        <Typography color="text.secondary" sx={{ mt: 0.5 }}>
+                            {t('automation.subtitle')}
+                        </Typography>
+                    </Box>
+                    <Button component={RouterLink} to="/app" variant="outlined">
+                        {t('automation.openApp')}
+                    </Button>
+                </Stack>
                 {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
                 {notice && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setNotice('')}>{notice}</Alert>}
                 {warning && <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setWarning('')}>{warning}</Alert>}
@@ -332,47 +344,58 @@ export const Recipes: FC = () => {
                         </Stack>
                     </Alert>
                 )}
+                {loading && recipes.length === 0 ? (
+                    <Paper variant="outlined" sx={{ minHeight: 260, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <CircularProgress size={28} />
+                    </Paper>
+                ) : recipes.length === 0 ? (
+                    <Paper variant="outlined" sx={{ minHeight: 280, px: 3, py: 6, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
+                        <AutoModeOutlinedIcon color="disabled" sx={{ fontSize: 36, mb: 1.5 }} />
+                        <Typography variant="h6" fontWeight={600}>{t('automation.emptyTitle')}</Typography>
+                        <Typography color="text.secondary" sx={{ mt: 0.75, maxWidth: 520 }}>
+                            {t('automation.emptyDescription')}
+                        </Typography>
+                    </Paper>
+                ) : (
                 <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexDirection: { xs: 'column', md: 'row' } }}>
                     <Paper variant="outlined" sx={{ width: { xs: '100%', md: 340 }, flexShrink: 0, overflow: 'hidden' }}>
-                        <Box sx={{ px: 2, py: 1.5 }}>
-                            <Typography fontWeight={600}>{t('recipes.savedRecipes')}</Typography>
+                        <Box sx={{ px: 2, py: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <Typography fontWeight={600} sx={{ flex: 1 }}>{t('automation.projects')}</Typography>
+                            <Chip size="small" label={recipes.length} />
                         </Box>
                         <Divider />
-                        {loading && recipes.length === 0 ? (
-                            <Box sx={{ p: 4, display: 'flex', justifyContent: 'center' }}><CircularProgress size={24} /></Box>
-                        ) : recipes.length === 0 ? (
-                            <Typography color="text.secondary" sx={{ p: 2 }}>{t('recipes.empty')}</Typography>
-                        ) : (
-                            <List disablePadding>
-                                {recipes.flatMap(recipe => recipe.versions.map((version, index) => (
-                                    <ListItemButton
-                                        key={version.version_id}
-                                        selected={selectedVersionId === version.version_id}
-                                        onClick={() => {
-                                            if (requestedVersionId === version.version_id) return;
-                                            const next = new URLSearchParams(searchParams);
-                                            next.set('version', version.version_id);
-                                            setSearchParams(next);
-                                        }}
-                                        divider
-                                        alignItems="flex-start"
-                                    >
-                                        <ListItemText
-                                            slotProps={{ secondary: { component: 'div' } }}
-                                            primary={recipe.name}
-                                            secondary={
-                                                <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
-                                                    <Chip size="small" label={t(`recipes.status.${version.status}`)} color={statusColor(version.status)} />
-                                                    <Typography component="span" variant="caption" color="text.secondary">
-                                                        {t('recipes.versionNumber', { number: recipe.versions.length - index })}
-                                                    </Typography>
-                                                </Stack>
-                                            }
-                                        />
-                                    </ListItemButton>
-                                )))}
-                            </List>
-                        )}
+                        <List disablePadding aria-label={t('automation.projects')}>
+                                {recipes.map(recipe => {
+                                    const latestVersion = recipe.versions[0];
+                                    if (!latestVersion) return null;
+                                    return (
+                                        <ListItemButton
+                                            key={recipe.recipe_id}
+                                            selected={selectedRecipeId === recipe.recipe_id}
+                                            onClick={() => void loadDetail(latestVersion.version_id)}
+                                            divider
+                                            alignItems="flex-start"
+                                        >
+                                            <ListItemText
+                                                primary={recipe.name}
+                                                secondary={
+                                                    <Box component="span" sx={{ display: 'block', mt: 0.75 }}>
+                                                        <Stack component="span" direction="row" spacing={1} alignItems="center">
+                                                            <Chip size="small" label={t(`recipes.status.${latestVersion.status}`)} color={statusColor(latestVersion.status)} />
+                                                            <Typography component="span" variant="caption" color="text.secondary">
+                                                                {t('automation.versionsCount', { count: recipe.versions.length })}
+                                                            </Typography>
+                                                        </Stack>
+                                                        <Typography component="span" variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+                                                            {t('automation.updated', { date: new Date(recipe.updated_at).toLocaleDateString() })}
+                                                        </Typography>
+                                                    </Box>
+                                                }
+                                            />
+                                        </ListItemButton>
+                                    );
+                                })}
+                        </List>
                     </Paper>
 
                     <Paper variant="outlined" sx={{ flex: 1, minWidth: 0, width: '100%', p: { xs: 2, md: 3 } }}>
@@ -387,6 +410,26 @@ export const Recipes: FC = () => {
                                         <Typography variant="h5" component="h2" sx={{ fontWeight: 500, flex: 1 }}>
                                             {detail.spec.name}
                                         </Typography>
+                                        <FormControl variant="standard" size="small" sx={{ minWidth: 150 }}>
+                                            <InputLabel htmlFor="automation-version-picker">{t('automation.versionPicker')}</InputLabel>
+                                            <NativeSelect
+                                                value={selectedVersionId}
+                                                onChange={event => void loadDetail(event.target.value)}
+                                                inputProps={{
+                                                    id: 'automation-version-picker',
+                                                    'aria-label': t('automation.versionPicker'),
+                                                }}
+                                            >
+                                                {selectedRecipe?.versions.map((version, index) => (
+                                                    <option key={version.version_id} value={version.version_id}>
+                                                        {t('automation.versionOption', {
+                                                            number: selectedRecipe.versions.length - index,
+                                                            status: t(`recipes.status.${version.status}`),
+                                                        })}
+                                                    </option>
+                                                ))}
+                                            </NativeSelect>
+                                        </FormControl>
                                         <Chip label={t(`recipes.status.${detail.version.status}`)} color={statusColor(detail.version.status)} />
                                     </Stack>
                                     {detail.spec.description && (
@@ -488,7 +531,12 @@ export const Recipes: FC = () => {
                         )}
                     </Paper>
                 </Box>
+                )}
             </Box>
         </Box>
     );
 };
+
+
+// Keep the exported name for downstream imports while /recipes remains a legacy URL.
+export const Recipes = Automation;

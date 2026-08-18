@@ -1,6 +1,6 @@
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -35,10 +35,15 @@ vi.mock('react-i18next', () => ({
     initReactI18next: { type: '3rdParty', init: vi.fn() },
     useTranslation: () => ({
         t: (key: string, values?: Record<string, unknown>) => ({
-            'recipes.title': 'Recipes',
-            'recipes.subtitle': 'Deterministic workflows',
-            'recipes.savedRecipes': 'Saved Recipes',
+            'automation.title': 'Automation',
+            'automation.subtitle': 'Manage deterministic projects',
+            'automation.unavailable': 'Automation is unavailable',
+            'automation.projects': 'Projects',
+            'automation.versionsCount': `${values?.count} versions`,
+            'automation.updated': `Updated ${values?.date}`,
+            'automation.versionPicker': 'Version',
             'recipes.status.draft': 'Draft',
+            'recipes.status.published': 'Published',
             'recipes.versionNumber': `Version ${values?.number}`,
             'recipes.hash': 'Recipe hash',
             'recipes.parameters': 'Parameters',
@@ -64,11 +69,11 @@ vi.mock('react-i18next', () => ({
     }),
 }));
 
-import { Recipes } from '../../../../src/views/Recipes';
+import { Automation } from '../../../../src/views/Recipes';
 
 
 const version = {
-    version_id: 'rv_1',
+    version_id: 'rv_2',
     recipe_id: 'rcp_1',
     recipe_hash: `sha256:${'a'.repeat(64)}`,
     status: 'draft',
@@ -79,6 +84,13 @@ const version = {
     validation_run_id: null,
 };
 
+const publishedVersion = {
+    ...version,
+    version_id: 'rv_1',
+    status: 'published',
+    published_at: '2026-08-18T00:05:00Z',
+};
+
 const recipe = {
     recipe_id: 'rcp_1',
     name: 'Regional totals',
@@ -86,7 +98,7 @@ const recipe = {
     created_by: 'user:alice',
     created_at: '2026-08-18T00:00:00Z',
     updated_at: '2026-08-18T00:00:00Z',
-    versions: [version],
+    versions: [version, publishedVersion],
 };
 
 const detail = {
@@ -94,7 +106,7 @@ const detail = {
     version,
     spec: {
         recipe_id: 'rcp_1',
-        version_id: 'rv_1',
+        version_id: 'rv_2',
         name: 'Regional totals',
         description: recipe.description,
         parameters: [],
@@ -120,33 +132,20 @@ const detail = {
     workflow_markdown: '# Regional totals',
 };
 
-const runResult = {
-    status: 'succeeded',
-    run: { run_id: 'run_1', kind: 'manual', status: 'succeeded', manifest_hash: 'sha256:a' },
-    steps: [{
-        step_id: 'step_1',
-        kind: 'load',
-        content_hash: `sha256:${'b'.repeat(64)}`,
-        schema_hash: `sha256:${'c'.repeat(64)}`,
-        output_path: 'workspace/data/orders.parquet',
-        duration_ms: 125,
-    }],
-    error: null,
-};
-
-const deferred = <T,>() => {
-    let resolve!: (value: T) => void;
-    const promise = new Promise<T>(next => { resolve = next; });
-    return { promise, resolve };
+const publishedDetail = {
+    ...detail,
+    version: publishedVersion,
+    spec: { ...detail.spec, version_id: 'rv_1' },
 };
 
 
 beforeEach(() => {
     vi.clearAllMocks();
-    state.activeWorkspace = { id: 'ws-1', displayName: 'Regional analysis' };
     state.serverConfig.AUTOMATION_ENABLED = true;
     mocks.listRecipes.mockResolvedValue([recipe]);
-    mocks.getRecipeVersion.mockResolvedValue(detail);
+    mocks.getRecipeVersion.mockImplementation((versionId: string) => Promise.resolve(
+        versionId === 'rv_1' ? publishedDetail : detail,
+    ));
     mocks.dryRunRecipe.mockResolvedValue({
         result: {
             ...runResult,
@@ -158,18 +157,20 @@ beforeEach(() => {
 });
 
 
-describe('Recipes page', () => {
-    it('shows persisted inputs and steps and starts validation through the API', async () => {
-        render(<MemoryRouter initialEntries={['/recipes']}><Recipes /></MemoryRouter>);
+describe('Automation page', () => {
+    it('groups versions into one project and starts validation through the API', async () => {
+        render(<MemoryRouter initialEntries={['/automation']}><Automation /></MemoryRouter>);
 
         expect(await screen.findByRole('heading', { name: 'Regional totals' })).toBeInTheDocument();
+        expect(within(screen.getByRole('list', { name: 'Projects' })).getAllByRole('button')).toHaveLength(1);
+        expect(screen.getByText('2 versions')).toBeInTheDocument();
         expect(screen.getByText('warehouse')).toBeInTheDocument();
         expect(screen.getByText('Load data')).toBeInTheDocument();
 
         fireEvent.click(screen.getByRole('button', { name: 'Dry run' }));
 
         await waitFor(() => {
-            expect(mocks.dryRunRecipe).toHaveBeenCalledWith('rv_1', {});
+            expect(mocks.dryRunRecipe).toHaveBeenCalledWith('rv_2', {});
         });
         expect(await screen.findByText('Dry run succeeded')).toBeInTheDocument();
         expect(screen.getByText('Run summary')).toBeInTheDocument();
@@ -253,5 +254,26 @@ describe('Recipes page', () => {
         expect(screen.getByText('Run summary')).toBeInTheDocument();
         expect(screen.getByText('Action completed, but Recipes could not be refreshed.')).toBeInTheDocument();
         expect(screen.queryByText('The Recipe action failed.')).not.toBeInTheDocument();
+    });
+
+    it('switches versions inside the selected project', async () => {
+        render(<MemoryRouter initialEntries={['/automation']}><Automation /></MemoryRouter>);
+
+        await screen.findByRole('heading', { name: 'Regional totals' });
+        fireEvent.change(screen.getByLabelText('Version'), { target: { value: 'rv_1' } });
+
+        await waitFor(() => {
+            expect(mocks.getRecipeVersion).toHaveBeenCalledWith('rv_1');
+        });
+        expect(await screen.findByText('Published')).toBeInTheDocument();
+    });
+
+    it('fails closed without loading projects when Automation is disabled', () => {
+        state.serverConfig.AUTOMATION_ENABLED = false;
+
+        render(<MemoryRouter initialEntries={['/automation']}><Automation /></MemoryRouter>);
+
+        expect(screen.getByText('Automation is unavailable')).toBeInTheDocument();
+        expect(mocks.listRecipes).not.toHaveBeenCalled();
     });
 });

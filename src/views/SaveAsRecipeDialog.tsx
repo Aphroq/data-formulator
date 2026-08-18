@@ -74,7 +74,7 @@ export const SaveAsRecipeDialog: FC<{
                 description: description.trim(),
             });
             onClose();
-            navigate(`/recipes?version=${encodeURIComponent(saved.version.version_id)}`);
+            navigate(`/automation?version=${encodeURIComponent(saved.version.version_id)}`);
         } catch (reason) {
             setError(
                 reason instanceof ApiRequestError

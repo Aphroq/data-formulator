@@ -44,6 +44,8 @@
     "errorOccurred": "发生错误，请<refreshAction>刷新会话</refreshAction>。如果问题仍然存在，请点击关闭会话。",
     "about": "关于",
     "app": "应用",
+    "automation": "Automation",
+    "primaryNavigation": "主导航",
     "recipes": "配方",
     "data": "数据",
     "moreOptions": "更多选项",
