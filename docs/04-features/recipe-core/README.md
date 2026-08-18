@@ -108,6 +108,35 @@
 - `refreshable` 当前只表示 Artifact 中有稳定 `source_id` 和逻辑 credential reference；它不证明后台能够恢复凭据。M2-B 必须由 request-independent opener 验证连接并完成 dry run，才可进入 `validated` 或 `published`。
 - 使用数据库 loader 替身的纵向测试现已覆盖 load → sandbox transform → signed code → chart → ancestry → 两次稳定编译；Recipe 聚焦 49 passed，Agent/路由回归 714 passed，全量后端 2187 passed、13 skipped、1 xfailed、1 deselected；前端 391 passed，生产构建成功。
 
+## M2-B 持久化与确定性执行计划（进行中）
+
+### 事实来源边界
+
+- `DATA_FORMULATOR_HOME/automation/automation.db` 是 Recipe 目录和生命周期状态的事实来源。Recipe Core 先创建 `recipes` / `recipe_versions` 及顺序 migration；Automation Workbench 从该基础继续增加 `schedules` / `runs`，不建立第二个数据库或第二套 Recipe catalog。
+- Workspace 的 `artifacts/recipes/` 是不可变内容的事实来源，保存 canonical `recipe.json`、派生 `workflow.md` 和逐文件 SHA-256 manifest。SQLite 只保存 scope、状态、hash 和相对 artifact 路径，不复制可执行 JSON 或代码。
+- Workspace 的 `artifacts/recipe-runs/` 保存 dry run / manual run 的 `events.jsonl`、最终 `manifest.json` 和隔离执行 Workspace。正常 Run 不修改交互式 `data/` 表，也不向 lineage ledger 伪造新分析 Artifact。
+- 持久化顺序固定为“先发布 content-addressed 文件目录，再提交 SQLite 引用”。进程若在两步之间退出，只会留下可安全回收的孤立不可变目录；绝不允许 SQLite 指向尚未完整发布的目录。
+
+### Repository 与生命周期
+
+1. `save_draft` 复核 identity/workspace、Recipe hash 和 artifact manifest，幂等插入 draft RecipeVersion；同 version id 的不同 bytes 或跨 scope 访问全部拒绝。
+2. dry run 使用保存后的精确版本和绑定值执行；只有 succeeded、无 unresolved input、每步 schema/hash/signature 校验通过的证据才能把 `draft` 转为 `validated`。
+3. `publish` 只接受 validated 版本，状态转为 `published` 后规范和验证引用不可修改；后续内容变化必须产生新 `version_id`。`archived` 是 published 的单向终态。
+4. SQLite 连接统一启用 WAL、foreign keys、`busy_timeout` 和显式事务；所有读写查询同时带 identity、workspace 和 recipe/version id，不能只凭全局 id 授权。
+
+### Request-independent opener
+
+- Workspace opener 显式接收 `identity_id + workspace_id + backend config`；首版只允许 durable local，且要求目录已经存在，不执行 Web 路径的 lazy create。
+- Connector opener 显式接收 `identity_id + source_id`，复用现有 `DataConnector`、用户 connector spec、credential vault 和 ambient/no-auth 恢复路径；后台路径不读取 request header、session、SSO request token，也不伪造 Flask context。
+- 编译时的逻辑 credential reference 只有在 opener 实际恢复 loader 并完成连接/取数探针后才算 resolved；仅有 `source_id` 不能把版本提升为 validated。
+
+### 单一确定性 Executor
+
+- dry run 与 manual run 共享一个 `RecipeExecutor`，差别只在 run kind 和成功后的 lifecycle 动作；Executor 只接受已持久化 `RecipeSpec` 与 typed-bound execution，不接受聊天、Redux 或任意代码覆盖。
+- `load` 将保存的 `ConnectorQueryStep` 交给既有 `DataOperationExecutor` 和显式 loader resolver；`transform` 先校验 step hash 与 HMAC，再交给现有 Sandbox；`chart` 原样发布保存的规范，不重新调用 Agent。
+- 每步在隔离 Run Workspace 中物化，记录实际 parquet SHA-256、schema fingerprint、耗时与状态。refreshable 数据允许 content hash 相对编译基线变化，但 schema drift、签名/step hash 不一致、输出缺失或 unresolved input 必须失败关闭；需要重新分析的 schema drift 返回 `needs_review`。
+- 事件和错误不记录 credential、连接参数、数据行或原始外部异常文本；失败 manifest 只保存稳定 error code、异常类型和经清洗的用户消息。
+
 ## 开发记录
 
 | 日期 | 阶段 | 实质变更 | 验证 | 提交 |
