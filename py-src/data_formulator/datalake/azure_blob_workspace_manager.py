@@ -264,6 +264,7 @@ class AzureBlobWorkspaceManager(WorkspaceManager):
             identity_id,
             self._container,
             blob_prefix=self._ws_prefix(workspace_id),
+            workspace_id=self._safe_id(workspace_id),
         )
 
     def create_and_open_workspace(self, workspace_id: str, identity_id: str):

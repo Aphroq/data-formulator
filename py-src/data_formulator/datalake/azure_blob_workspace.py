@@ -55,7 +55,11 @@ from data_formulator.datalake.parquet_utils import (
     sanitize_dataframe_for_arrow,
     DEFAULT_COMPRESSION,
 )
-from data_formulator.datalake.workspace import Workspace, get_data_formulator_home
+from data_formulator.datalake.workspace import (
+    Workspace,
+    WorkspaceStorageCapabilities,
+    get_data_formulator_home,
+)
 from data_formulator.security.path_safety import ConfinedDir
 
 if TYPE_CHECKING:
@@ -109,6 +113,7 @@ class AzureBlobWorkspace(Workspace):
         datalake_root: str = "",
         *,
         blob_prefix: str | None = None,
+        workspace_id: str | None = None,
     ):
         """
         Args:
@@ -121,6 +126,7 @@ class AzureBlobWorkspace(Workspace):
             blob_prefix: Direct blob prefix for this workspace. When provided,
                 datalake_root and identity_id-based prefix are skipped.
                 Used by AzureBlobWorkspaceManager for multi-workspace support.
+            workspace_id: Explicit public workspace scope for provenance records.
         """
         if not identity_id:
             raise ValueError("identity_id cannot be empty")
@@ -141,6 +147,15 @@ class AzureBlobWorkspace(Workspace):
             root = datalake_root.strip("/")
             self._datalake_root = root
             self._prefix = f"{root}/{self._safe_id}/" if root else f"{self._safe_id}/"
+
+        inferred_workspace_id = self._prefix.rstrip("/").rsplit("/", 1)[-1]
+        self._workspace_id = workspace_id or inferred_workspace_id
+        self._storage_capabilities = WorkspaceStorageCapabilities(
+            storage_backend="azure_blob",
+            durable=True,
+            # Azure needs a native durable artifact store; local scratch is not one.
+            supports_durable_artifacts=False,
+        )
 
         # _path / _root are not meaningful for blob storage but some code
         # (e.g. sandbox) may reference them, so we set them to None rather

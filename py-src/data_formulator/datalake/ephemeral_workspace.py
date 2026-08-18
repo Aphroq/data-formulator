@@ -156,7 +156,12 @@ class EphemeralWorkspaceManager(WorkspaceManager):
     def __init__(self, identity_id: str):
         cleanup_ephemeral_workspaces()
         self._identity_dir = Workspace._sanitize_identity_id(identity_id)
-        super().__init__(get_ephemeral_workspaces_root(identity_id))
+        super().__init__(
+            get_ephemeral_workspaces_root(identity_id),
+            storage_backend="ephemeral",
+            durable=False,
+            supports_durable_artifacts=False,
+        )
 
     def workspace_was_evicted(self, workspace_id: str) -> bool:
         safe_id = self._safe_id(workspace_id)

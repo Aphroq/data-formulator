@@ -8,7 +8,7 @@
 | Worktree | `D:\projects\dfm-wt-recipe` |
 | 本机实例 | `recipe`：后端 5569、Vite 5175、数据目录 `D:\projects\dfm-runtime\recipe` |
 | 基线 | 共享文档提交，父提交为 Data Formulator `5477f0e` |
-| 当前阶段 | M0 源码与远端基线审计完成，准备从 Artifact Lineage 最小契约和失败测试开始 |
+| 当前阶段 | M0-A 已完成：Artifact 不可变模型、canonical hash、durable local ledger 与 Workspace capability 已落地；下一步接 load 记录点 |
 
 ## 目标
 
@@ -59,7 +59,7 @@
 - 全量后端：2130 passed、13 skipped、1 xfailed、1 deselected。deselect 项是 Windows 未启用符号链接权限时无法创建 symlink 的安全测试；Codex 终端另需 `PYTHONUTF8=1` 和非 `dumb` TERM，分别避免 GBK 测试夹具与 spinner 环境误报。
 - 全量前端：45 files、391 tests passed；Vite 生产构建成功。构建仅有既有 eval、动态/静态混合导入和大 chunk 警告。
 
-## M0 首个开发节点
+## M0 首个开发节点（已完成）
 
 首个提交只落最小后端契约，不注册路由或 UI：
 
@@ -69,6 +69,14 @@
 4. 聚焦验证通过后再接 `DataOperationExecutor`，避免一开始同时改 Agent、路由和前端。
 
 该节点完成标准：相同规范得到相同 hash；同一 origin 重试幂等；同 id 不同内容、跨 identity/workspace、缺失父节点、非持久化 Workspace 全部失败关闭。
+
+实施结果：
+
+- canonical 层直接使用标准库 `json` 与 `hashlib`，只接受具备明确 JSON wire form 的值，不引入额外序列化依赖。
+- `ArtifactNode` 使用 frozen dataclass、显式 `sha256:` digest、深层只读 execution payload，并在反序列化时重新计算 `artifact_id` 拒绝篡改。
+- ledger 复用现有跨平台 `WorkspaceLock`，沿用仓库已有的临时文件 + `os.replace` 原子写入方式；批量记录、并发记录、origin 冲突和父节点校验都在持锁后从磁盘重读，避免 lost update。
+- Workspace 现在显式暴露 identity、workspace id 与 storage capability；首版只允许 durable local backend 写 `artifacts/lineage/lineage.json`，ephemeral 与尚无正式 artifact API 的 Azure 均失败关闭。
+- M0-A 聚焦测试 30 passed；相关 Workspace 回归 77 passed；全量后端 2160 passed、13 skipped、1 xfailed、1 deselected。deselect 仍是 Windows 当前终端没有 symlink 创建权限的既有测试。
 
 ## 开发记录
 
@@ -80,6 +88,7 @@
 | 2026-08-18 | 准备 | 补充上游文档检索规则和无 Docker 开发约束 | 上游指南入口、文档链接和范围检查 | `docs: preserve upstream guidance and prohibit docker` |
 | 2026-08-18 | 准备 | 固定多 Worktree 本机实例和资源隔离约定 | 端口、数据目录、浏览器状态和文档链接检查 | `docs: define multi-worktree runtime isolation` |
 | 2026-08-18 | M0 审计 | 刷新 origin/upstream 引用，核对 load/transform/chart、Workspace、Sandbox、签名和 connector 的真实持久化边界，细化首个契约节点 | 聚焦后端 30 passed；全量后端 2130 passed；前端 391 passed；生产构建成功 | `docs: record recipe core M0 audit` |
+| 2026-08-18 | M0-A | 新增 canonical JSON、不可变 ArtifactNode、workspace-scoped durable ledger 与显式 Workspace storage capability；ephemeral/Azure 无正式 artifact store 时失败关闭 | Recipe 契约 30 passed；全量后端 2160 passed、13 skipped、1 xfailed、1 deselected | `feat: add durable artifact lineage core` |
 
 ## 已确认决策
 

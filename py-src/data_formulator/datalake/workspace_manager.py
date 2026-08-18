@@ -59,7 +59,14 @@ class WorkspaceManager:
             data/
     """
 
-    def __init__(self, workspaces_root: Path):
+    def __init__(
+        self,
+        workspaces_root: Path,
+        *,
+        storage_backend: str = "local",
+        durable: bool = True,
+        supports_durable_artifacts: Optional[bool] = None,
+    ):
         """
         Args:
             workspaces_root: Directory containing all workspaces for one user.
@@ -67,6 +74,9 @@ class WorkspaceManager:
         """
         self._root = workspaces_root
         self._root.mkdir(parents=True, exist_ok=True)
+        self._storage_backend = storage_backend
+        self._durable = durable
+        self._supports_durable_artifacts = supports_durable_artifacts
 
     @property
     def root(self) -> Path:
@@ -381,12 +391,26 @@ class WorkspaceManager:
         if not ws_dir.exists():
             raise ValueError(f"Workspace '{workspace_id}' does not exist")
 
-        return Workspace(identity_id, workspace_path=ws_dir)
+        return Workspace(
+            identity_id,
+            workspace_path=ws_dir,
+            workspace_id=safe,
+            storage_backend=self._storage_backend,
+            durable=self._durable,
+            supports_durable_artifacts=self._supports_durable_artifacts,
+        )
 
     def create_and_open_workspace(self, workspace_id: str, identity_id: str) -> Workspace:
         """Create a new workspace and return an open Workspace instance."""
         ws_dir = self.create_workspace(workspace_id)
-        return Workspace(identity_id, workspace_path=ws_dir)
+        return Workspace(
+            identity_id,
+            workspace_path=ws_dir,
+            workspace_id=self._safe_id(workspace_id),
+            storage_backend=self._storage_backend,
+            durable=self._durable,
+            supports_durable_artifacts=self._supports_durable_artifacts,
+        )
 
     def delete_workspace(self, workspace_id: str) -> bool:
         """

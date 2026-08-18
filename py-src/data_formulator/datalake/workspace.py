@@ -19,6 +19,7 @@ import tempfile
 import time
 import zipfile
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -120,6 +121,15 @@ def _sanitize_identity_id(identity_id: str) -> str:
 SCRATCH_MAX_BYTES = 1 * 1024 * 1024 * 1024  # 1 GiB
 
 
+@dataclass(frozen=True, slots=True)
+class WorkspaceStorageCapabilities:
+    """Storage facts that provenance consumers may safely rely on."""
+
+    storage_backend: str
+    durable: bool
+    supports_durable_artifacts: bool
+
+
 def _configured_scratch_max_bytes() -> int:
     """Total scratch cap from the server's CLI_ARGS, falling back to the default."""
     try:
@@ -187,7 +197,17 @@ class Workspace:
     All files are stored in a single flat directory per user.
     """
     
-    def __init__(self, identity_id: str, root_dir: Optional[str | Path] = None, *, workspace_path: Optional[str | Path] = None):
+    def __init__(
+        self,
+        identity_id: str,
+        root_dir: Optional[str | Path] = None,
+        *,
+        workspace_path: Optional[str | Path] = None,
+        workspace_id: Optional[str] = None,
+        storage_backend: str = "local",
+        durable: bool = True,
+        supports_durable_artifacts: Optional[bool] = None,
+    ):
         """
         Initialize a workspace for a user.
         
@@ -198,6 +218,11 @@ class Workspace:
             workspace_path: Direct path to the workspace directory. When provided,
                            root_dir and identity_id-based path resolution are skipped.
                            Used by WorkspaceManager for multi-workspace support.
+            workspace_id: Explicit public workspace scope. Defaults to the resolved
+                          workspace directory name for legacy callers.
+            storage_backend: Stable backend identifier exposed to persistence clients.
+            durable: Whether workspace contents survive normal backend lifecycle cleanup.
+            supports_durable_artifacts: Whether immutable provenance may be stored here.
         """
         if not identity_id:
             raise ValueError("identity_id cannot be empty")
@@ -226,6 +251,22 @@ class Workspace:
                 raise ValueError(
                     "Path traversal detected: workspace path escapes root directory"
                 )
+
+        resolved_workspace_id = workspace_id if workspace_id is not None else self._path.name
+        if not isinstance(resolved_workspace_id, str) or not resolved_workspace_id.strip():
+            raise ValueError("workspace_id cannot be empty")
+        if not isinstance(storage_backend, str) or not storage_backend.strip():
+            raise ValueError("storage_backend cannot be empty")
+        if supports_durable_artifacts is None:
+            supports_durable_artifacts = durable and storage_backend == "local"
+        if supports_durable_artifacts and not durable:
+            raise ValueError("Durable artifact storage requires a durable workspace")
+        self._workspace_id = resolved_workspace_id
+        self._storage_capabilities = WorkspaceStorageCapabilities(
+            storage_backend=storage_backend,
+            durable=durable,
+            supports_durable_artifacts=supports_durable_artifacts,
+        )
 
         # Ensure workspace directory exists
         self._path.mkdir(parents=True, exist_ok=True)
@@ -264,6 +305,21 @@ class Workspace:
     def user_home(self) -> Path:
         """Per-user home directory (parent of workspaces, catalog_cache, etc.)."""
         return get_user_home(self._identity_id)
+
+    @property
+    def identity_id(self) -> str:
+        """Explicit identity scope for durable workspace records."""
+        return self._identity_id
+
+    @property
+    def workspace_id(self) -> str:
+        """Explicit workspace scope for durable workspace records."""
+        return self._workspace_id
+
+    @property
+    def storage_capabilities(self) -> WorkspaceStorageCapabilities:
+        """Read-only persistence capabilities for this workspace backend."""
+        return self._storage_capabilities
 
     @property
     def confined_root(self) -> ConfinedDir:
