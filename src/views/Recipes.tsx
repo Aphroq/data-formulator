@@ -28,7 +28,7 @@ import PlayArrowOutlinedIcon from '@mui/icons-material/PlayArrowOutlined';
 import PublishOutlinedIcon from '@mui/icons-material/PublishOutlined';
 import ScienceOutlinedIcon from '@mui/icons-material/ScienceOutlined';
 import { useSelector } from 'react-redux';
-import { Link as RouterLink, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { ApiRequestError } from '../app/apiClient';
@@ -296,12 +296,9 @@ export const Automation: FC = () => {
         setError('');
         setNotice('');
         setLastRun(null);
-        setWarning('');
-        if (activeWorkspace && enabled) void refresh(requestedVersionId || undefined);
-        return () => {
-            requestSequence.current += 1;
-        };
-    }, [activeWorkspace?.id, enabled, refresh, requestedVersionId]);
+        if (activeWorkspace && enabled) void refresh(searchParams.get('version') || undefined);
+        // Reload only when the active Workspace or feature availability changes.
+    }, [activeWorkspace?.id, enabled]);
 
     const parameterValues = () => {
         if (!detail) return {};
@@ -400,19 +397,14 @@ export const Automation: FC = () => {
     return (
         <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', bgcolor: 'background.default', p: { xs: 2, md: 3 } }}>
             <Box sx={{ maxWidth: 1280, mx: 'auto' }}>
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'flex-start', sm: 'center' }} sx={{ mb: 3 }}>
-                    <Box sx={{ flex: 1 }}>
-                        <Typography variant="h4" component="h1" sx={{ fontWeight: 500 }}>
-                            {t('automation.title')}
-                        </Typography>
-                        <Typography color="text.secondary" sx={{ mt: 0.5 }}>
-                            {t('automation.subtitle')}
-                        </Typography>
-                    </Box>
-                    <Button component={RouterLink} to="/app" variant="outlined">
-                        {t('automation.openApp')}
-                    </Button>
-                </Stack>
+                <Box sx={{ mb: 3 }}>
+                    <Typography variant="h4" component="h1" sx={{ fontWeight: 500 }}>
+                        {t('automation.title')}
+                    </Typography>
+                    <Typography color="text.secondary" sx={{ mt: 0.5 }}>
+                        {t('automation.subtitle')}
+                    </Typography>
+                </Box>
                 {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
                 {notice && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setNotice('')}>{notice}</Alert>}
                 {loading && recipes.length === 0 ? (

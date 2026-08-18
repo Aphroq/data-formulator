@@ -37,6 +37,7 @@ vi.mock('react-i18next', () => ({
         t: (key: string, values?: Record<string, unknown>) => ({
             'automation.title': 'Automation',
             'automation.subtitle': 'Manage deterministic projects',
+            'automation.openApp': 'Open App',
             'automation.unavailable': 'Automation is unavailable',
             'automation.projects': 'Projects',
             'automation.versionsCount': `${values?.count} versions`,
@@ -185,6 +186,7 @@ describe('Automation page', () => {
         expect(screen.getByText('2 versions')).toBeInTheDocument();
         expect(screen.getByText('warehouse')).toBeInTheDocument();
         expect(screen.getByText('Load data')).toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: 'Open App' })).not.toBeInTheDocument();
 
         fireEvent.click(screen.getByRole('button', { name: 'Dry run' }));
 

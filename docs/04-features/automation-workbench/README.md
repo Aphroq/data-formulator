@@ -54,6 +54,7 @@ Recipe Core 已经可以保存、校验、发布和手动运行 Recipe，但入�
 
 - 工作区左栏：沿用现有添加数据、会话、数据连接器、知识这一层，只新增 `Automation`；原有 `About / App` 顶部导航保持不变。
 - Automation 页面继续显示同一条工作区左栏；从会话、连接器或知识入口返回 App 时，打开对应的原有面板。
+- Automation 页头不再提供重复的“打开应用”按钮；返回分析区统一使用同一条工作区侧栏。
 - `/automation`：项目列表 + 当前项目详情，保留 `/recipes` 重定向以兼容已有链接。
 - 项目列表：每个 Recipe 只显示一次，展示名称、最新版本状态、版本数和更新时间。
 - 项目详情：项目说明、版本选择、状态、hash、参数、输入、步骤、与当前状态匹配的主操作，以及当前会话最近一次运行结果。
@@ -133,6 +134,7 @@ Recipe Core 已经可以保存、校验、发布和手动运行 Recipe，但入�
 | 2026-08-19 | M3-A 实现 | 增加响应式全局左栏、Automation 项目/版本管理页、旧路由兼容、feature flag 和中英文文案 | 前端 49 files / 400 tests；后端 2220 passed；生产构建；桌面与 600px 窄屏浏览器检查 | `feat: add lightweight automation workbench` |
 | 2026-08-19 | M3-A 反馈完善 | 增加当前会话最近运行结果面板，展示状态、Run ID、步骤、耗时、输出位置、最终产物与错误，不扩展持久化 Runs Inbox | Automation 聚焦测试、前端全量测试、生产构建 | `feat: show latest automation run result` |
 | 2026-08-18 | M3-A 导航优化 | 移除新增的 `App / Automation` 外层左栏，将 Automation 接入原有工作区 rail，并恢复原有 `About / App` 顶部导航；会话、知识和 Workflow Replay 概念不变 | 前端 49 files / 402 tests；后端 2220 passed、13 skipped、1 deselected、1 xfailed；生产构建；真实页面导航、返回原面板、加载数据入口与控制台检查 | `fix: integrate automation into workspace navigation` |
+| 2026-08-18 | M3-A UI 收口 | 删除 Automation 页头残留的“打开应用”按钮，并移除空状态中对 App 层级的表述 | Automation 聚焦测试、生产构建、真实页面检查 | `fix: remove redundant automation app action` |
 
 ## 已确认决策
 

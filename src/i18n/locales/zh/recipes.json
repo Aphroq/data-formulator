@@ -77,8 +77,7 @@
     "versionPicker": "版本",
     "versionOption": "版本 {{number}} · {{status}}",
     "emptyTitle": "还没有自动化项目",
-    "emptyDescription": "请先在应用中创建图表，再使用“保存为配方”把确定性项目添加到这里。",
-    "openApp": "打开应用",
+    "emptyDescription": "请先从分析结果使用“保存为配方”，把确定性项目添加到这里。",
     "runResult": {
       "title": "最近运行结果",
       "status": {

@@ -77,8 +77,7 @@
     "versionPicker": "Version",
     "versionOption": "Version {{number}} · {{status}}",
     "emptyTitle": "No Automation projects yet",
-    "emptyDescription": "Create a chart in App, then use Save as Recipe to add a deterministic project here.",
-    "openApp": "Open App",
+    "emptyDescription": "Use Save as Recipe on an analysis result to add a deterministic project here.",
     "runResult": {
       "title": "Latest run result",
       "status": {
