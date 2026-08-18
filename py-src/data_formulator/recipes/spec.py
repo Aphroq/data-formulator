@@ -25,6 +25,7 @@ from data_formulator.recipes.models import ArtifactType, HashDigest
 _RECIPE_ID_PATTERN = re.compile(r"^rcp_[0-9a-f]{64}$")
 _STEP_ID_PATTERN = re.compile(r"^step_[0-9a-f]{64}$")
 _ARTIFACT_ID_PATTERN = re.compile(r"^art_[0-9a-f]{64}$")
+_MAX_SAFE_INTEGER = 2**53 - 1
 _PARAMETER_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
@@ -202,9 +203,12 @@ class RecipeParameter:
         if self.value_type is ParameterType.STRING:
             valid = type(value) is str
         elif self.value_type is ParameterType.INTEGER:
-            valid = type(value) is int
+            valid = type(value) is int and abs(value) <= _MAX_SAFE_INTEGER
         elif self.value_type is ParameterType.NUMBER:
-            valid = type(value) in (int, float) and math.isfinite(value)
+            if type(value) is int:
+                valid = abs(value) <= _MAX_SAFE_INTEGER
+            elif type(value) is float:
+                valid = math.isfinite(value)
         elif self.value_type is ParameterType.BOOLEAN:
             valid = type(value) is bool
         elif self.value_type is ParameterType.DATE:

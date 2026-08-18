@@ -9,8 +9,14 @@ execution.
 """
 
 import pytest
+from flask import Flask
 
-from data_formulator.security.code_signing import sign_code, verify_code, sign_result
+from data_formulator.security.code_signing import (
+    CodeSigningConfigurationError,
+    sign_code,
+    sign_result,
+    verify_code,
+)
 
 pytestmark = [pytest.mark.backend]
 
@@ -64,6 +70,40 @@ class TestSignVerifyRoundTrip:
         assert isinstance(sig, str)
         assert len(sig) == 64  # SHA-256 hex
         int(sig, 16)  # should not raise
+
+
+class TestStableSecretResolution:
+
+    def test_flask_secret_verifies_without_request_context(self, monkeypatch):
+        monkeypatch.delenv("DF_CODE_SIGNING_SECRET", raising=False)
+        monkeypatch.setenv("FLASK_SECRET_KEY", "stable-production-secret")
+        app = Flask(__name__)
+        app.secret_key = "stable-production-secret"
+        code = "output_df = source.copy()"
+
+        with app.app_context():
+            signature = sign_code(code)
+
+        assert verify_code(code, signature)
+
+    def test_background_signing_fails_without_stable_secret(self, monkeypatch):
+        monkeypatch.delenv("DF_CODE_SIGNING_SECRET", raising=False)
+        monkeypatch.delenv("FLASK_SECRET_KEY", raising=False)
+
+        with pytest.raises(CodeSigningConfigurationError, match="stable"):
+            sign_code("output_df = source.copy()")
+
+    def test_production_web_signing_fails_without_stable_secret(self, monkeypatch):
+        monkeypatch.delenv("DF_CODE_SIGNING_SECRET", raising=False)
+        monkeypatch.delenv("FLASK_SECRET_KEY", raising=False)
+        app = Flask(__name__)
+        app.secret_key = "process-local-random-secret"
+
+        with app.app_context(), pytest.raises(
+            CodeSigningConfigurationError,
+            match="stable",
+        ):
+            sign_code("output_df = source.copy()")
 
 
 # ===================================================================

@@ -23,6 +23,11 @@
     "publishSucceeded": "Recipe version published.",
     "runSucceeded": "Run {{runId}} succeeded.",
     "archiveSucceeded": "Recipe version archived.",
+    "refreshAfterActionFailed": "The action completed, but Recipes could not be refreshed. The result below is still valid.",
+    "runSummary": "Run summary",
+    "runId": "Run ID: {{runId}}",
+    "runDuration": "Duration: {{duration}} ms",
+    "lastStep": "Last step: {{step}}",
     "needsReview": "The run detected schema drift and needs review before it can continue.",
     "runFailed": "Recipe execution failed.",
     "loadFailed": "Recipes could not be loaded.",
@@ -43,6 +48,11 @@
       "validated": "Validated",
       "published": "Published",
       "archived": "Archived"
+    },
+    "runStatus": {
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "needs_review": "Needs review"
     },
     "inputMode": {
       "refreshable": "Refreshable",

@@ -95,6 +95,32 @@ def test_local_workspace_opener_uses_explicit_scope_without_lazy_create(
     assert manager.workspace_exists("missing") is False
     with pytest.raises(WorkspaceOpenError, match="workspace_id"):
         opener.open(identity_id, "../ws-1")
+    with pytest.raises(WorkspaceOpenError, match="workspace_id"):
+        opener.open(identity_id, "")
+    with pytest.raises(WorkspaceOpenError, match="workspace_id"):
+        opener.open(identity_id, str((tmp_path / "absolute").resolve()))
+
+
+def test_local_workspace_opener_rejects_symlink_escape(tmp_path) -> None:
+    data_home = tmp_path / "home"
+    identity_id = "user:alice"
+    workspaces_root = (
+        data_home
+        / "users"
+        / sanitize_identity_dirname(identity_id)
+        / "workspaces"
+    )
+    workspaces_root.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = workspaces_root / "ws-link"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlinks are unavailable: {exc}")
+
+    with pytest.raises(WorkspaceOpenError, match="does not exist"):
+        LocalWorkspaceOpener(data_home).open(identity_id, "ws-link")
 
 
 def test_workspace_opener_fails_closed_for_non_local_backend(tmp_path) -> None:

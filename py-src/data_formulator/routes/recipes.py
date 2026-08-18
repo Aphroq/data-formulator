@@ -5,11 +5,14 @@
 
 from __future__ import annotations
 
+import math
+import re
 from collections.abc import Mapping
 from functools import wraps
 from typing import Any, Callable, TypeVar
 
 from flask import Blueprint, current_app, request
+from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from data_formulator.auth.identity import get_identity_id
 from data_formulator.error_handler import json_ok
@@ -35,6 +38,8 @@ from data_formulator.workspace_factory import get_workspace
 recipes_bp = Blueprint("recipes", __name__, url_prefix="/api/recipes")
 
 _View = TypeVar("_View", bound=Callable[..., Any])
+_ARTIFACT_ID_PATTERN = re.compile(r"^art_[0-9a-f]{64}$")
+_MAX_SAFE_INTEGER = 2**53 - 1
 
 
 def _recipe_errors(view: _View) -> _View:
@@ -95,12 +100,48 @@ def _context():
 
 
 def _json_object(*, optional: bool = False) -> dict[str, Any]:
-    data = request.get_json(silent=True)
-    if data is None and optional:
-        return {}
+    raw = request.get_data(cache=True)
+    if not raw:
+        if optional:
+            return {}
+        raise AppError(ErrorCode.INVALID_REQUEST, "A JSON object is required.")
+    if not request.is_json:
+        raise AppError(ErrorCode.INVALID_REQUEST, "A JSON object is required.")
+    try:
+        data = request.get_json(silent=False)
+    except (BadRequest, UnsupportedMediaType) as exc:
+        raise AppError(
+            ErrorCode.INVALID_REQUEST,
+            "Request body contains malformed JSON.",
+        ) from exc
     if not isinstance(data, dict):
         raise AppError(ErrorCode.INVALID_REQUEST, "A JSON object is required.")
+    _validate_json_numbers(data)
     return data
+
+
+def _validate_json_numbers(value: Any) -> None:
+    """Reject JSON numbers that cannot round-trip through the browser safely."""
+    if type(value) is int:
+        if abs(value) > _MAX_SAFE_INTEGER:
+            raise AppError(
+                ErrorCode.INVALID_REQUEST,
+                "JSON integer exceeds the supported safe range.",
+            )
+        return
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise AppError(
+                ErrorCode.INVALID_REQUEST,
+                "JSON number must be finite.",
+            )
+        return
+    if isinstance(value, Mapping):
+        for item in value.values():
+            _validate_json_numbers(item)
+    elif isinstance(value, list):
+        for item in value:
+            _validate_json_numbers(item)
 
 
 def _parameter_values(data: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -184,7 +225,11 @@ def compile_recipe():
         not isinstance(targets, list)
         or not targets
         or len(targets) > 20
-        or any(not isinstance(item, str) or not item for item in targets)
+        or any(
+            not isinstance(item, str)
+            or not _ARTIFACT_ID_PATTERN.fullmatch(item)
+            for item in targets
+        )
     ):
         raise AppError(
             ErrorCode.INVALID_REQUEST,

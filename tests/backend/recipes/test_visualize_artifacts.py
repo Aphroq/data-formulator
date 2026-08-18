@@ -71,6 +71,25 @@ def _write_derived_table(workspace: Workspace) -> None:
     )
 
 
+def _record_table_chart(workspace: Workspace, *, chart_id: str = "chart-abc"):
+    code = "result_df = orders.copy()"
+    return record_visualize_artifacts(
+        workspace,
+        chart_id=chart_id,
+        input_table_names=("orders",),
+        output_table_name="derived",
+        code=code,
+        code_signature=sign_code(code),
+        output_variable="result_df",
+        chart_spec={"chart_type": "Table", "encodings": {}},
+        field_metadata={},
+        field_display_names={},
+        display_instruction="Inspect orders",
+        title="Orders",
+        subtitle="",
+    )
+
+
 def test_visualize_records_transform_and_chart_atomically(tmp_path) -> None:
     workspace = Workspace("user:alice", root_dir=tmp_path, workspace_id="ws-1")
     parent = _seed_load_artifact(workspace)
@@ -177,6 +196,47 @@ def test_visualize_refuses_missing_parent_but_keeps_output_table(tmp_path) -> No
 
     assert workspace.get_table_metadata("derived") is not None
     assert ArtifactLedger.for_workspace(workspace).list_nodes() == ()
+
+
+@pytest.mark.parametrize(
+    "changed_parent",
+    [
+        pa.table({"region": ["west", "east"], "amount": [100, 200]}),
+        pa.table({"region": ["west", "east"], "amount": ["100", "200"]}),
+    ],
+    ids=("content", "schema"),
+)
+def test_visualize_rejects_changed_linked_parent_before_recording(
+    tmp_path,
+    changed_parent: pa.Table,
+) -> None:
+    workspace = Workspace("user:alice", root_dir=tmp_path, workspace_id="ws-1")
+    parent = _seed_load_artifact(workspace)
+    _write_derived_table(workspace)
+    pq.write_table(changed_parent, workspace.get_parquet_path("orders"))
+
+    with pytest.raises(MissingParentArtifactError, match="current table"):
+        _record_table_chart(workspace)
+
+    assert ArtifactLedger.for_workspace(workspace).list_nodes() == (parent,)
+
+
+def test_visualize_rejects_changed_parent_found_by_ledger_fallback(tmp_path) -> None:
+    workspace = Workspace("user:alice", root_dir=tmp_path, workspace_id="ws-1")
+    parent = _seed_load_artifact(workspace)
+    metadata = workspace.get_table_metadata("orders")
+    metadata.import_options = {}
+    workspace.add_table_metadata(metadata)
+    _write_derived_table(workspace)
+    pq.write_table(
+        pa.table({"region": ["west", "east"], "amount": [30, 40]}),
+        workspace.get_parquet_path("orders"),
+    )
+
+    with pytest.raises(MissingParentArtifactError, match="current table"):
+        _record_table_chart(workspace)
+
+    assert ArtifactLedger.for_workspace(workspace).list_nodes() == (parent,)
 
 
 def test_visualize_does_not_record_transform_when_chart_payload_is_invalid(

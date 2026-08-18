@@ -370,6 +370,43 @@ def test_typed_binding_updates_structural_slots_without_template_substitution(
         )
 
 
+@pytest.mark.parametrize(
+    ("value_type", "value"),
+    [
+        (ParameterType.INTEGER, 2**53),
+        (ParameterType.NUMBER, 2**53),
+        (ParameterType.NUMBER, 2**10000),
+        (ParameterType.NUMBER, float("inf")),
+    ],
+)
+def test_recipe_parameter_rejects_unsafe_numeric_values(
+    value_type: ParameterType,
+    value,
+) -> None:
+    parameter = RecipeParameter(
+        id="numeric_value",
+        name="Numeric value",
+        value_type=value_type,
+    )
+
+    with pytest.raises(TypeError, match="numeric_value"):
+        parameter.validate_value(value)
+
+
+def test_recipe_parameter_accepts_safe_integer_boundary() -> None:
+    value = 2**53 - 1
+    RecipeParameter(
+        id="integer_value",
+        name="Integer value",
+        value_type=ParameterType.INTEGER,
+    ).validate_value(value)
+    RecipeParameter(
+        id="number_value",
+        name="Number value",
+        value_type=ParameterType.NUMBER,
+    ).validate_value(value)
+
+
 def test_compiler_rejects_binding_to_missing_filter_slot(graph: _Graph) -> None:
     base = RecipeCompiler.for_workspace(graph.workspace).compile(
         target_artifact_ids=(graph.target_artifact_id,),

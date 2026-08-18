@@ -164,3 +164,79 @@ def test_compile_recipe_rejects_invalid_requests(recipe_api, payload) -> None:
 
     assert response["status"] == "error"
     assert response["error"]["code"] == "INVALID_REQUEST"
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "artifact",
+        "art_" + "g" * 64,
+        "art_" + "a" * 63,
+        "art_" + "a" * 65,
+    ],
+)
+def test_compile_recipe_requires_exact_artifact_id(recipe_api, target) -> None:
+    _app, client, _repository = recipe_api
+
+    response = client.post(
+        "/api/recipes/compile",
+        json={"target_artifact_ids": [target], "name": "Recipe"},
+    ).get_json()
+
+    assert response["status"] == "error"
+    assert response["error"]["code"] == "INVALID_REQUEST"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/recipes/compile",
+        "/api/recipes/versions/rv_" + "a" * 64 + "/dry-run",
+        "/api/recipes/versions/rv_" + "a" * 64 + "/run",
+    ],
+)
+def test_recipe_api_rejects_malformed_json_before_action(
+    recipe_api,
+    monkeypatch,
+    path,
+) -> None:
+    _app, client, _repository = recipe_api
+    monkeypatch.setattr(
+        recipe_routes.RecipeService,
+        "dry_run",
+        lambda *_args, **_kwargs: pytest.fail("malformed JSON started a dry run"),
+    )
+    monkeypatch.setattr(
+        recipe_routes.RecipeService,
+        "run_manual",
+        lambda *_args, **_kwargs: pytest.fail("malformed JSON started a manual run"),
+    )
+
+    response = client.post(
+        path,
+        data='{"parameters":',
+        content_type="application/json",
+    ).get_json()
+
+    assert response["status"] == "error"
+    assert response["error"]["code"] == "INVALID_REQUEST"
+
+
+def test_recipe_api_rejects_unsafe_integer_before_action(
+    recipe_api,
+    monkeypatch,
+) -> None:
+    _app, client, _repository = recipe_api
+    monkeypatch.setattr(
+        recipe_routes.RecipeService,
+        "run_manual",
+        lambda *_args, **_kwargs: pytest.fail("unsafe JSON number started a run"),
+    )
+
+    response = client.post(
+        "/api/recipes/versions/rv_" + "a" * 64 + "/run",
+        json={"parameters": {"limit": 2**63}},
+    ).get_json()
+
+    assert response["status"] == "error"
+    assert response["error"]["code"] == "INVALID_REQUEST"

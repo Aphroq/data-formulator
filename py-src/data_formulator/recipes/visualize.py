@@ -54,6 +54,27 @@ def _artifact_output_table_id(node: ArtifactNode) -> str | None:
     return table_id if isinstance(table_id, str) else None
 
 
+def _verify_parent_materialization(workspace, metadata, node: ArtifactNode) -> ArtifactNode:
+    """Require the current table bytes/schema to match its durable parent node."""
+    try:
+        content_hash, schema_fingerprint = parquet_artifact_hashes(
+            workspace,
+            metadata,
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        raise MissingParentArtifactError(
+            f"Declared input table {metadata.name!r} cannot verify its current table"
+        ) from exc
+    if (
+        content_hash != node.content_hash
+        or schema_fingerprint != node.schema_fingerprint
+    ):
+        raise MissingParentArtifactError(
+            f"Declared input table {metadata.name!r} does not match its current table artifact"
+        )
+    return node
+
+
 def _resolve_parent(
     ledger: ArtifactLedger,
     workspace,
@@ -74,7 +95,7 @@ def _resolve_parent(
             raise MissingParentArtifactError(
                 f"Declared input table {table_name!r} has a mismatched artifact link"
             )
-        return linked
+        return _verify_parent_materialization(workspace, metadata, linked)
 
     matches = [
         node
@@ -86,7 +107,7 @@ def _resolve_parent(
         raise MissingParentArtifactError(
             f"Declared input table {table_name!r} has no unambiguous parent artifact"
         )
-    return matches[0]
+    return _verify_parent_materialization(workspace, metadata, matches[0])
 
 
 def record_visualize_artifacts(

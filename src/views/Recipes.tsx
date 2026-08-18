@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import React, { FC, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Alert,
     Box,
@@ -75,7 +75,7 @@ function typedParameterValues(
         }
         if (parameter.type === 'integer') {
             const parsed = Number(raw);
-            if (!Number.isInteger(parsed)) throw new TypeError(parameter.name);
+            if (!Number.isSafeInteger(parsed)) throw new TypeError(parameter.name);
             result[parameter.id] = parsed;
         } else if (parameter.type === 'number') {
             const parsed = Number(raw);
@@ -95,7 +95,8 @@ function typedParameterValues(
 
 export const Recipes: FC = () => {
     const { t } = useTranslation();
-    const [searchParams] = useSearchParams();
+    const [searchParams, setSearchParams] = useSearchParams();
+    const requestedVersionId = searchParams.get('version') ?? '';
     const activeWorkspace = useSelector((state: DataFormulatorState) => state.activeWorkspace);
     const enabled = useSelector(
         (state: DataFormulatorState) => state.serverConfig.AUTOMATION_ENABLED,
@@ -108,61 +109,91 @@ export const Recipes: FC = () => {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
     const [notice, setNotice] = useState('');
+    const [warning, setWarning] = useState('');
     const [lastRun, setLastRun] = useState<RecipeExecutionResult | null>(null);
+    const requestSequence = useRef(0);
+    const translation = useRef(t);
+    translation.current = t;
 
-    const loadDetail = useCallback(async (versionId: string) => {
+    const loadDetail = useCallback(async (
+        versionId: string,
+        sequence: number,
+        clearDetail: boolean,
+    ): Promise<{ applied: boolean; error?: string }> => {
+        if (requestSequence.current !== sequence) return { applied: false };
         setSelectedVersionId(versionId);
-        setDetail(null);
-        setError('');
+        if (clearDetail) setDetail(null);
         try {
             const next = await getRecipeVersion(versionId);
+            if (requestSequence.current !== sequence) return { applied: false };
             setDetail(next);
             setParameters(initialParameterValues(next.spec.parameters));
+            return { applied: true };
         } catch (reason) {
-            setError(
-                reason instanceof ApiRequestError
+            if (requestSequence.current !== sequence) return { applied: false };
+            return {
+                applied: true,
+                error: reason instanceof ApiRequestError
                     ? reason.apiError.message
-                    : t('recipes.loadFailed'),
-            );
+                    : translation.current('recipes.loadFailed'),
+            };
         }
-    }, [t]);
+    }, []);
 
-    const refresh = useCallback(async (preferredVersionId?: string) => {
-        if (!activeWorkspace || !enabled) return;
+    const refresh = useCallback(async (
+        preferredVersionId?: string,
+        options: { surfaceError?: boolean; preserveDetail?: boolean } = {},
+    ): Promise<{ applied: boolean; error?: string }> => {
+        if (!activeWorkspace || !enabled) return { applied: false };
+        const sequence = ++requestSequence.current;
+        const surfaceError = options.surfaceError ?? true;
         setLoading(true);
-        setError('');
+        if (surfaceError) setError('');
         try {
             const next = await listRecipes();
+            if (requestSequence.current !== sequence) return { applied: false };
             setRecipes(next);
             const available = next.flatMap(recipe => recipe.versions.map(version => version.version_id));
-            const requested = preferredVersionId || searchParams.get('version') || selectedVersionId;
-            const target = requested && available.includes(requested) ? requested : available[0];
+            const target = preferredVersionId && available.includes(preferredVersionId)
+                ? preferredVersionId
+                : available[0];
             if (target) {
-                await loadDetail(target);
+                const outcome = await loadDetail(target, sequence, !options.preserveDetail);
+                if (outcome.error && surfaceError) setError(outcome.error);
+                return outcome;
             } else {
                 setSelectedVersionId('');
                 setDetail(null);
+                return { applied: true };
             }
         } catch (reason) {
-            setError(
-                reason instanceof ApiRequestError
-                    ? reason.apiError.message
-                    : t('recipes.loadFailed'),
-            );
+            if (requestSequence.current !== sequence) return { applied: false };
+            const message = reason instanceof ApiRequestError
+                ? reason.apiError.message
+                : translation.current('recipes.loadFailed');
+            if (surfaceError) setError(message);
+            return { applied: true, error: message };
         } finally {
-            setLoading(false);
+            if (requestSequence.current === sequence) setLoading(false);
         }
-    }, [activeWorkspace?.id, enabled, loadDetail, searchParams, selectedVersionId, t]);
+    }, [activeWorkspace?.id, enabled, loadDetail]);
 
     useEffect(() => {
+        requestSequence.current += 1;
         setRecipes([]);
         setDetail(null);
         setSelectedVersionId('');
+        setParameters({});
+        setBusy(false);
+        setError('');
+        setNotice('');
         setLastRun(null);
-        if (activeWorkspace && enabled) void refresh(searchParams.get('version') || undefined);
-        // Reload only when the active Workspace or feature availability changes.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [activeWorkspace?.id, enabled]);
+        setWarning('');
+        if (activeWorkspace && enabled) void refresh(requestedVersionId || undefined);
+        return () => {
+            requestSequence.current += 1;
+        };
+    }, [activeWorkspace?.id, enabled, refresh, requestedVersionId]);
 
     const parameterValues = () => {
         if (!detail) return {};
@@ -177,27 +208,32 @@ export const Recipes: FC = () => {
     const perform = async (action: 'dry-run' | 'publish' | 'run' | 'archive') => {
         if (!detail || busy) return;
         if (action === 'archive' && !window.confirm(t('recipes.archiveConfirm'))) return;
+        const actionSequence = requestSequence.current;
+        const versionId = detail.version.version_id;
         setBusy(true);
         setError('');
         setNotice('');
+        setWarning('');
         setLastRun(null);
         try {
             let completedNotice = '';
             let completedError = '';
             let completedRun: RecipeExecutionResult | null = null;
+            let completedVersion: RecipeVersionDetail['version'] | null = null;
             if (action === 'dry-run') {
-                const response = await dryRunRecipe(detail.version.version_id, parameterValues());
+                const response = await dryRunRecipe(versionId, parameterValues());
                 completedRun = response.result;
+                completedVersion = response.version;
                 if (response.result.status !== 'succeeded') {
                     completedError = response.result.error?.message || t('recipes.runFailed');
                 } else {
                     completedNotice = t('recipes.dryRunSucceeded');
                 }
             } else if (action === 'publish') {
-                await publishRecipe(detail.version.version_id);
+                completedVersion = await publishRecipe(versionId);
                 completedNotice = t('recipes.publishSucceeded');
             } else if (action === 'run') {
-                const result = await runRecipe(detail.version.version_id, parameterValues());
+                const result = await runRecipe(versionId, parameterValues());
                 completedRun = result;
                 if (result.status !== 'succeeded') {
                     completedError = result.error?.message || t('recipes.runFailed');
@@ -205,14 +241,27 @@ export const Recipes: FC = () => {
                     completedNotice = t('recipes.runSucceeded', { runId: result.run?.run_id });
                 }
             } else {
-                await archiveRecipe(detail.version.version_id);
+                completedVersion = await archiveRecipe(versionId);
                 completedNotice = t('recipes.archiveSucceeded');
             }
-            await refresh(detail.version.version_id);
+            if (requestSequence.current !== actionSequence) return;
+            if (completedVersion) {
+                setDetail(current => current?.version.version_id === versionId
+                    ? { ...current, version: completedVersion }
+                    : current);
+            }
             setLastRun(completedRun);
             setError(completedError);
             setNotice(completedNotice);
+            const refreshOutcome = await refresh(versionId, {
+                surfaceError: false,
+                preserveDetail: true,
+            });
+            if (refreshOutcome.applied && refreshOutcome.error) {
+                setWarning(t('recipes.refreshAfterActionFailed'));
+            }
         } catch (reason) {
+            if (requestSequence.current !== actionSequence) return;
             setError(
                 reason instanceof ApiRequestError
                     ? reason.apiError.message
@@ -227,6 +276,11 @@ export const Recipes: FC = () => {
 
     const status = detail?.version.status;
     const parameterFields = useMemo(() => detail?.spec.parameters ?? [], [detail]);
+    const lastRunDuration = useMemo(
+        () => lastRun?.steps.reduce((total, step) => total + step.duration_ms, 0) ?? 0,
+        [lastRun],
+    );
+    const lastRunStep = lastRun?.steps.at(-1);
 
     if (!enabled) {
         return (
@@ -254,8 +308,29 @@ export const Recipes: FC = () => {
                 </Typography>
                 {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
                 {notice && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setNotice('')}>{notice}</Alert>}
-                {lastRun?.status === 'needs_review' && (
-                    <Alert severity="warning" sx={{ mb: 2 }}>{t('recipes.needsReview')}</Alert>
+                {warning && <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setWarning('')}>{warning}</Alert>}
+                {lastRun && (
+                    <Alert
+                        severity={lastRun.status === 'succeeded' ? 'success' : lastRun.status === 'failed' ? 'error' : 'warning'}
+                        sx={{ mb: 2 }}
+                    >
+                        <Stack spacing={0.75}>
+                            <Typography fontWeight={600}>{t('recipes.runSummary')}</Typography>
+                            <Stack direction="row" spacing={2} useFlexGap flexWrap="wrap">
+                                <Typography variant="body2">{t(`recipes.runStatus.${lastRun.status}`)}</Typography>
+                                {lastRun.run && (
+                                    <Typography variant="body2">{t('recipes.runId', { runId: lastRun.run.run_id })}</Typography>
+                                )}
+                                <Typography variant="body2">{t('recipes.runDuration', { duration: lastRunDuration })}</Typography>
+                                {lastRunStep && (
+                                    <Typography variant="body2">{t('recipes.lastStep', { step: lastRunStep.step_id })}</Typography>
+                                )}
+                            </Stack>
+                            {lastRun.status === 'needs_review' && (
+                                <Typography variant="body2">{t('recipes.needsReview')}</Typography>
+                            )}
+                        </Stack>
+                    </Alert>
                 )}
                 <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexDirection: { xs: 'column', md: 'row' } }}>
                     <Paper variant="outlined" sx={{ width: { xs: '100%', md: 340 }, flexShrink: 0, overflow: 'hidden' }}>
@@ -273,14 +348,20 @@ export const Recipes: FC = () => {
                                     <ListItemButton
                                         key={version.version_id}
                                         selected={selectedVersionId === version.version_id}
-                                        onClick={() => void loadDetail(version.version_id)}
+                                        onClick={() => {
+                                            if (requestedVersionId === version.version_id) return;
+                                            const next = new URLSearchParams(searchParams);
+                                            next.set('version', version.version_id);
+                                            setSearchParams(next);
+                                        }}
                                         divider
                                         alignItems="flex-start"
                                     >
                                         <ListItemText
+                                            slotProps={{ secondary: { component: 'div' } }}
                                             primary={recipe.name}
                                             secondary={
-                                                <Stack component="span" direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
+                                                <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
                                                     <Chip size="small" label={t(`recipes.status.${version.status}`)} color={statusColor(version.status)} />
                                                     <Typography component="span" variant="caption" color="text.secondary">
                                                         {t('recipes.versionNumber', { number: recipe.versions.length - index })}
@@ -304,12 +385,12 @@ export const Recipes: FC = () => {
                                 <Box>
                                     <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'flex-start', sm: 'center' }}>
                                         <Typography variant="h5" component="h2" sx={{ fontWeight: 500, flex: 1 }}>
-                                            {detail.recipe.name}
+                                            {detail.spec.name}
                                         </Typography>
                                         <Chip label={t(`recipes.status.${detail.version.status}`)} color={statusColor(detail.version.status)} />
                                     </Stack>
-                                    {detail.recipe.description && (
-                                        <Typography color="text.secondary" sx={{ mt: 1 }}>{detail.recipe.description}</Typography>
+                                    {detail.spec.description && (
+                                        <Typography color="text.secondary" sx={{ mt: 1 }}>{detail.spec.description}</Typography>
                                     )}
                                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, fontFamily: 'monospace' }}>
                                         {t('recipes.hash')}: {shortHash(detail.version.recipe_hash)}

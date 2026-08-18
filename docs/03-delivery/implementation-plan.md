@@ -58,11 +58,18 @@ M0 不启动 Docker。数据库和 TrustGraph 合同验证使用已有可访问�
 
 ### M2：Recipe Core
 
-- Artifact ledger 和四个记录点。
+- Artifact ledger 和 load/transform/chart 三个后端记录点；report 等有后端持久化保存点后再增加只读包装 Artifact。
 - canonical hash、Recipe 模型、Compiler 和 repository。
 - durable artifact store。
 - dry run、publish、manual run。
 - Save as Recipe 与 Recipes 页面。
+
+M2 合并前只做一轮最小收口：
+
+1. Web/Worker 使用同一稳定代码签名密钥，父 Artifact 在记录新血缘前复核当前 content/schema。
+2. Recipe/Run 路径统一复用 `ConfinedDir`，API 严格拒绝 malformed JSON、非法 artifact id 和越界数值。
+3. Recipes 页面避免跨 Workspace/版本的旧请求覆盖，区分“动作已成功、刷新失败”，并显示本次 Run 的最小摘要。
+4. v1 不增加 report 执行步骤、参数编辑器、Schedule、Runs Inbox、队列或新状态库。
 
 ### M3：Automation Workbench
 
@@ -140,8 +147,11 @@ yarn build
 - TrustGraph 合同、认证隔离、sources 规范化、超时和提示注入防护。
 - Copilot OAuth 生命周期和工具调用能力探测。
 - Artifact 记录、缺失血缘拒绝和稳定拓扑编译。
+- 父表内容/schema 被改写时不得继续记录 transform/chart，Web 签名必须能被无请求 Executor 验证。
 - typed parameter binding 的非法输入和注入尝试。
 - Recipe hash、代码篡改、dry run 和发布状态机。
+- malformed JSON、非法 artifact id、极端数值、路径与 symlink 越界拒绝。
+- Workspace/版本快速切换、动作成功后刷新失败和即时 Run 摘要的前端回归。
 - SQLite migration、唯一入队、lease、重试、取消和恢复。
 - Worker 与 Web 的 Workspace/数据库路径一致性。
 - Feature flag 关闭时的 API 和 UI 行为。
@@ -150,6 +160,6 @@ yarn build
 
 - M0：四条探针都有可重复测试和明确结论。
 - M1：上下文来源可追踪，Copilot 不影响其他模型。
-- M2：真实 artifact 能稳定编译、dry run、发布和手动运行。
+- M2：真实 artifact 能稳定编译、dry run、发布和手动运行；Web/Worker 签名一致，父 Artifact 篡改和路径越界失败关闭，现有页面不会把成功动作误报为失败。
 - M3：页面关闭后 Schedule 仍能创建并执行 Run。
 - M4：所有基础命令通过，重启和 schema drift 场景通过。

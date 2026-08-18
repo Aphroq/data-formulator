@@ -25,6 +25,7 @@ from data_formulator.recipes.canonical import canonical_json_bytes
 from data_formulator.recipes.lineage import DurableArtifactStorageRequired
 from data_formulator.recipes.models import HashDigest
 from data_formulator.recipes.spec import RecipeSpec, RecipeStepKind
+from data_formulator.security.path_safety import ConfinedDir
 
 
 _RUN_ID_PATTERN = re.compile(r"^run_[0-9a-f]{32}$")
@@ -120,12 +121,15 @@ class RecipeRunWriter:
         self.spec = spec
         self.bound = bound
         self.kind = RecipeRunKind(kind)
-        self._run_dir = run_dir.resolve()
+        self._run_dir = run_dir
+        self._run_jail = ConfinedDir(run_dir, mkdir=False)
         self._finalized = False
-        (self._run_dir / "outputs").mkdir()
+        outputs = self._run_jail.resolve("outputs")
+        outputs.mkdir()
+        self._output_jail = ConfinedDir(outputs, mkdir=False)
         self.workspace = Workspace(
             spec.identity_id,
-            workspace_path=self._run_dir / "workspace",
+            workspace_path=self._run_jail.resolve("workspace"),
             workspace_id=spec.workspace_id,
             storage_backend="recipe_run",
             durable=True,
@@ -143,21 +147,17 @@ class RecipeRunWriter:
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         _write_file(
-            self._run_dir / self.DESCRIPTOR_FILENAME,
+            self._run_jail.resolve(self.DESCRIPTOR_FILENAME),
             canonical_json_bytes(descriptor),
         )
-        _write_file(self._run_dir / self.EVENTS_FILENAME, b"")
+        _write_file(self._run_jail.resolve(self.EVENTS_FILENAME), b"")
 
     @property
     def root(self) -> Path:
         return self._run_dir
 
     def output_path(self, filename: str) -> Path:
-        path = (self._run_dir / "outputs" / filename).resolve()
-        if not path.is_relative_to((self._run_dir / "outputs").resolve()):
-            raise ValueError("Recipe run output path escapes its directory")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return path
+        return self._output_jail.resolve(filename, mkdir_parents=True)
 
     def append_event(
         self,
@@ -179,7 +179,7 @@ class RecipeRunWriter:
         if details:
             event["details"] = dict(details)
         encoded = canonical_json_bytes(event) + b"\n"
-        with (self._run_dir / self.EVENTS_FILENAME).open("ab") as file:
+        with self._run_jail.resolve(self.EVENTS_FILENAME).open("ab") as file:
             file.write(encoded)
             file.flush()
             os.fsync(file.fileno())
@@ -208,7 +208,7 @@ class RecipeRunWriter:
         }
         manifest_bytes = canonical_json_bytes(manifest)
         _write_atomic(
-            self._run_dir / self.MANIFEST_FILENAME,
+            self._run_jail.resolve(self.MANIFEST_FILENAME),
             manifest_bytes,
         )
         manifest_hash = HashDigest.sha256(manifest_bytes)
@@ -223,7 +223,7 @@ class RecipeRunWriter:
         )
 
     def _event_count(self) -> int:
-        path = self._run_dir / self.EVENTS_FILENAME
+        path = self._run_jail.resolve(self.EVENTS_FILENAME)
         with path.open("rb") as file:
             return sum(1 for line in file if line.strip())
 
@@ -244,11 +244,17 @@ class RecipeRunArtifactStore:
         identity_id: str,
         workspace_id: str,
     ) -> None:
-        self._workspace_root = Path(workspace_root).resolve()
-        self._root = Path(root).resolve()
-        if not self._root.is_relative_to(self._workspace_root):
-            raise ValueError("Recipe run root must be inside its Workspace")
-        self._root.mkdir(parents=True, exist_ok=True)
+        self._workspace_jail = ConfinedDir(workspace_root, mkdir=False)
+        try:
+            root_relative = os.path.relpath(
+                Path(root).resolve(),
+                self._workspace_jail.root,
+            )
+            self._root = self._workspace_jail.resolve(root_relative)
+        except (OSError, ValueError) as exc:
+            raise ValueError("Recipe run root must be inside its Workspace") from exc
+        self._root_relative = Path(root_relative).as_posix()
+        self._root_jail = ConfinedDir(self._root)
         self._identity_id = identity_id
         self._workspace_id = workspace_id
 
@@ -260,7 +266,7 @@ class RecipeRunArtifactStore:
                 f"Workspace backend {capabilities.storage_backend!r} does not provide "
                 "durable Recipe run storage"
             )
-        workspace_root = workspace.confined_root.root.resolve()
+        workspace_root = workspace.confined_root.root
         return cls(
             workspace.confined_root.resolve("artifacts/recipe-runs"),
             workspace_root=workspace_root,
@@ -303,7 +309,7 @@ class RecipeRunArtifactStore:
                 run_dir=run_dir,
             )
         except Exception:
-            if run_dir.exists() and run_dir.is_relative_to(self._root):
+            if run_dir.exists():
                 shutil.rmtree(run_dir, ignore_errors=True)
             raise
 
@@ -312,7 +318,7 @@ class RecipeRunArtifactStore:
             raise TypeError("RecipeRunArtifactStore.load requires a run reference")
         run_dir = self._run_dir(reference.run_id)
         try:
-            expected_path = run_dir.relative_to(self._workspace_root).as_posix()
+            expected_path = f"{self._root_relative}/{reference.run_id}"
             if reference.artifact_path != expected_path:
                 raise ValueError("Recipe run artifact path does not match its id")
             if reference.identity_id != self._identity_id:
@@ -360,18 +366,13 @@ class RecipeRunArtifactStore:
             kind=kind,
             status=status,
             binding_hash=binding_hash,
-            artifact_path=self._run_dir(run_id).relative_to(
-                self._workspace_root
-            ).as_posix(),
+            artifact_path=f"{self._root_relative}/{run_id}",
             manifest_hash=manifest_hash,
         )
 
     def _run_dir(self, run_id: str) -> Path:
         self._validate_run_id(run_id)
-        path = (self._root / run_id).resolve()
-        if not path.is_relative_to(self._root):
-            raise ValueError("Recipe run path escapes artifact root")
-        return path
+        return self._root_jail.resolve(run_id)
 
     @staticmethod
     def _validate_run_id(run_id: str) -> None:
@@ -521,10 +522,7 @@ class RecipeRunArtifactStore:
         unresolved = run_dir / relative
         if unresolved.is_symlink():
             raise ValueError(f"Recipe run file is unsafe: {relative}")
-        path = unresolved.resolve()
-        if (
-            not path.is_relative_to(run_dir.resolve())
-            or not path.is_file()
-        ):
+        path = ConfinedDir(run_dir, mkdir=False).resolve(relative)
+        if not path.is_file():
             raise ValueError(f"Recipe run file is unsafe: {relative}")
         return path.read_bytes()

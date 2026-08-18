@@ -1,6 +1,6 @@
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
     archiveRecipe: vi.fn(),
 }));
 
-const state = {
+const state: any = {
     activeWorkspace: { id: 'ws-1', displayName: 'Regional analysis' },
     serverConfig: { AUTOMATION_ENABLED: true },
 };
@@ -49,6 +49,17 @@ vi.mock('react-i18next', () => ({
             'recipes.stepKind.load': 'Load data',
             'recipes.dryRun': 'Dry run',
             'recipes.dryRunSucceeded': 'Dry run succeeded',
+            'recipes.runNow': 'Run now',
+            'recipes.runSucceeded': `Run ${values?.runId} succeeded.`,
+            'recipes.runSummary': 'Run summary',
+            'recipes.runId': `Run ID: ${values?.runId}`,
+            'recipes.runDuration': `Duration: ${values?.duration} ms`,
+            'recipes.lastStep': `Last step: ${values?.step}`,
+            'recipes.runStatus.succeeded': 'Succeeded',
+            'recipes.runStatus.failed': 'Failed',
+            'recipes.runStatus.needs_review': 'Needs review',
+            'recipes.refreshAfterActionFailed': 'Action completed, but Recipes could not be refreshed.',
+            'recipes.actionFailed': 'The Recipe action failed.',
         }[key] ?? key),
     }),
 }));
@@ -109,20 +120,41 @@ const detail = {
     workflow_markdown: '# Regional totals',
 };
 
+const runResult = {
+    status: 'succeeded',
+    run: { run_id: 'run_1', kind: 'manual', status: 'succeeded', manifest_hash: 'sha256:a' },
+    steps: [{
+        step_id: 'step_1',
+        kind: 'load',
+        content_hash: `sha256:${'b'.repeat(64)}`,
+        schema_hash: `sha256:${'c'.repeat(64)}`,
+        output_path: 'workspace/data/orders.parquet',
+        duration_ms: 125,
+    }],
+    error: null,
+};
+
+const deferred = <T,>() => {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>(next => { resolve = next; });
+    return { promise, resolve };
+};
+
 
 beforeEach(() => {
     vi.clearAllMocks();
+    state.activeWorkspace = { id: 'ws-1', displayName: 'Regional analysis' };
+    state.serverConfig.AUTOMATION_ENABLED = true;
     mocks.listRecipes.mockResolvedValue([recipe]);
     mocks.getRecipeVersion.mockResolvedValue(detail);
     mocks.dryRunRecipe.mockResolvedValue({
         result: {
-            status: 'succeeded',
-            run: { run_id: 'run_1', kind: 'dry_run', status: 'succeeded', manifest_hash: 'sha256:a' },
-            steps: [],
-            error: null,
+            ...runResult,
+            run: { ...runResult.run, kind: 'dry_run' },
         },
         version: { ...version, status: 'validated' },
     });
+    mocks.runRecipe.mockResolvedValue(runResult);
 });
 
 
@@ -140,5 +172,86 @@ describe('Recipes page', () => {
             expect(mocks.dryRunRecipe).toHaveBeenCalledWith('rv_1', {});
         });
         expect(await screen.findByText('Dry run succeeded')).toBeInTheDocument();
+        expect(screen.getByText('Run summary')).toBeInTheDocument();
+        expect(screen.getByText('Duration: 125 ms')).toBeInTheDocument();
+    });
+
+    it('shows immutable version metadata instead of the mutable catalog name', async () => {
+        mocks.listRecipes.mockResolvedValue([{
+            ...recipe,
+            name: 'Latest catalog name',
+            description: 'Latest catalog description',
+        }]);
+        mocks.getRecipeVersion.mockResolvedValue({
+            ...detail,
+            recipe: {
+                ...detail.recipe,
+                name: 'Latest catalog name',
+                description: 'Latest catalog description',
+            },
+            spec: {
+                ...detail.spec,
+                name: 'Immutable version name',
+                description: 'Immutable version description',
+            },
+        });
+
+        render(<MemoryRouter initialEntries={['/recipes']}><Recipes /></MemoryRouter>);
+
+        expect(await screen.findByRole('heading', { name: 'Immutable version name' })).toBeInTheDocument();
+        expect(screen.getByText('Immutable version description')).toBeInTheDocument();
+    });
+
+    it('ignores an older detail response after the selected URL version changes', async () => {
+        const first = deferred<typeof detail>();
+        const secondVersion = { ...version, version_id: 'rv_2' };
+        const secondDetail = {
+            ...detail,
+            version: secondVersion,
+            spec: {
+                ...detail.spec,
+                version_id: 'rv_2',
+                name: 'Second immutable version',
+            },
+        };
+        mocks.listRecipes.mockResolvedValue([{
+            ...recipe,
+            versions: [version, secondVersion],
+        }]);
+        mocks.getRecipeVersion.mockImplementation((versionId: string) => (
+            versionId === 'rv_1' ? first.promise : Promise.resolve(secondDetail)
+        ));
+
+        render(
+            <MemoryRouter initialEntries={['/recipes?version=rv_1']}>
+                <Recipes />
+            </MemoryRouter>,
+        );
+
+        fireEvent.click(await screen.findByText('Version 1'));
+        expect(await screen.findByRole('heading', { name: 'Second immutable version' })).toBeInTheDocument();
+
+        await act(async () => first.resolve(detail));
+        expect(screen.getByRole('heading', { name: 'Second immutable version' })).toBeInTheDocument();
+    });
+
+    it('keeps a successful run result when the follow-up refresh fails', async () => {
+        const publishedVersion = { ...version, status: 'published' };
+        const publishedRecipe = { ...recipe, versions: [publishedVersion] };
+        mocks.listRecipes
+            .mockResolvedValueOnce([publishedRecipe])
+            .mockRejectedValueOnce(new Error('refresh failed'));
+        mocks.getRecipeVersion.mockResolvedValue({
+            ...detail,
+            version: publishedVersion,
+        });
+
+        render(<MemoryRouter initialEntries={['/recipes']}><Recipes /></MemoryRouter>);
+        fireEvent.click(await screen.findByRole('button', { name: 'Run now' }));
+
+        expect(await screen.findByText('Run run_1 succeeded.')).toBeInTheDocument();
+        expect(screen.getByText('Run summary')).toBeInTheDocument();
+        expect(screen.getByText('Action completed, but Recipes could not be refreshed.')).toBeInTheDocument();
+        expect(screen.queryByText('The Recipe action failed.')).not.toBeInTheDocument();
     });
 });

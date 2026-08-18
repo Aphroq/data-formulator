@@ -115,9 +115,11 @@ M0 在当前锁定的 LiteLLM `1.91.3` 上验证真实登录、普通对话、�
 - `load`：DataOperation 成功发布表后，引用完整选定 plan，不使用前端摘要。
 - `transform`：Sandbox 成功且输出表写入后，记录代码、输出变量、父表和 hash。
 - `chart`：图表成功生成时，记录规范化 chart spec、table artifact 和 hash。
-- `report`：报告保存时记录 chart artifact；报告可以是输出包装，但不是执行步骤。
+- `report`：v1 暂不记录。现有报告只保存在前端会话状态，没有可复用的后端持久化保存点；后续若补齐，只允许作为引用 chart artifact 的只读输出包装，不能成为 Recipe 执行步骤。
 
-现有 HMAC `codeSignature` 用于验证代码未被篡改。Recipe 另外保存稳定 SHA-256，用于版本和可重复性比较。
+现有 HMAC `codeSignature` 用于验证代码未被篡改。Recipe 另外保存稳定 SHA-256，用于版本和可重复性比较。Web 与无请求 Worker 必须从同一个 `DF_CODE_SIGNING_SECRET` 或 `FLASK_SECRET_KEY` 解析签名密钥；生产或后台模式缺少稳定密钥时，签名/验证失败关闭，不能回退到开发密钥或进程内随机 Flask secret。
+
+Artifact 在成为 transform/chart 父节点前，必须重新读取当前物化表并比对完整 content hash 与 schema fingerprint。metadata 中的 `artifact_id` 只是定位加速器，不能替代完整性校验。
 
 ### 为什么不能直接使用前端刷新链
 
@@ -174,6 +176,8 @@ Compiler 只接受一个或多个目标 artifact id：
 | `unresolved` | 允许保存草稿，禁止通过 dry run、发布和调度 |
 
 参数只能绑定到预定义的连接器字段、过滤值和日期范围等 typed slot。
+
+v1 的正常产品入口只编译固定 Recipe，不提供参数定义表单。`parameters` 与 `bindings` 继续保留为机器规范和 Executor 的安全边界，供受控编译路径扩展；Automation 不得自行创建、猜测或修改参数定义。
 
 ### 生命周期
 
@@ -232,6 +236,8 @@ queued | running | succeeded | failed | needs_review | cancelled
 
 Recipe spec、代码、Workflow Markdown、Run events 和 manifest 必须进入 durable artifact store，不能写入 `confined_scratch`。
 
+Recipe 和 Run 的所有持久化路径都通过现有 `ConfinedDir` 解析；不在各模块重复实现 `resolve()`、父目录判断或 symlink 防护。
+
 第一版默认只启用同主机持久化 local Workspace：
 
 - Ephemeral Workspace 拒绝发布和调度。
@@ -252,8 +258,10 @@ Recipe spec、代码、Workflow Markdown、Run events 和 manifest 必须进入 
 三个新增 UI 入口：
 
 1. Data Thread 中统一的 Artifact action：`Save as Recipe`。
-2. Recipes 页面：版本、输入、步骤、dry run、发布和 Schedule 设置。
-3. Runs Inbox：状态、Needs Review、错误、日志和输出链接。
+2. Recipes 页面：版本、输入、步骤、dry run、发布、手动运行和本次运行摘要。
+3. Automation 页面：Schedule 设置与 Runs Inbox，包括状态、Needs Review、错误、日志和输出链接。
+
+Recipes 与 Automation 在最终集成时作为现有导航层的同级入口，不新增“应用 → 自动化”包装层，也不改变原有项目/Workspace 概念。Recipe Core 不实现 Schedule 或持久化 Run 历史页面。
 
 现有 Workflow Replay 保持原入口和名称。Save as Recipe 与 Replay 不共用一个动作。
 

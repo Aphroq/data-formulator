@@ -14,12 +14,10 @@ executed by the sandbox.
 
 Secret lifecycle
 ~~~~~~~~~~~~~~~~
-- **Dev mode** (``--dev``): uses a fixed, deterministic key so that
-  signatures survive reloader restarts and hot-reloads during
-  development.  This is *not* secure for production.
-- **Production**: derives the key from Flask's ``app.secret_key``.
-  For multi-worker deploys (gunicorn) set the ``SECRET_KEY`` env-var
-  so all workers share the same Flask secret.
+- **Stable application key**: derives from ``FLASK_SECRET_KEY`` so Web and
+  request-independent workers resolve the same signing material.
+- **Dev mode** (``--dev``): uses a fixed, deterministic key only while a
+  Flask development app context is active.  This is not secure for production.
 - **Explicit override**: set ``DF_CODE_SIGNING_SECRET`` env-var — this
   takes priority over everything (useful for multi-instance deploys
   behind a load balancer).
@@ -27,21 +25,39 @@ Secret lifecycle
 
 import hashlib
 import hmac
-import logging
 import os
-
-logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Server-side secret
 # ---------------------------------------------------------------------------
 
-# Explicit env-var takes highest priority (for multi-instance deploys).
-_EXPLICIT_SECRET: str | None = os.environ.get("DF_CODE_SIGNING_SECRET") or None
-
 # Fixed key used in dev mode so reloader restarts don't invalidate
 # existing signatures.  NOT suitable for production.
 _DEV_SECRET = b"data-formulator-dev-signing-key"
+
+
+class CodeSigningConfigurationError(RuntimeError):
+    """No stable code-signing key is available outside explicit dev mode."""
+
+
+def _derive_flask_secret(secret: object) -> bytes:
+    """Derive a purpose-specific HMAC key from Flask's shared secret."""
+    return hmac.new(
+        b"df-code-signing",
+        str(secret).encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+
+
+def _stable_configured_secret() -> bytes | None:
+    """Resolve process-independent signing material from environment config."""
+    explicit = os.environ.get("DF_CODE_SIGNING_SECRET")
+    if explicit:
+        return explicit.encode("utf-8")
+    flask_secret = os.environ.get("FLASK_SECRET_KEY")
+    if flask_secret:
+        return _derive_flask_secret(flask_secret)
+    return None
 
 
 def _is_dev_mode() -> bool:
@@ -57,40 +73,22 @@ def _get_secret() -> bytes:
     """Return the signing secret.
 
     Priority:
-    1. ``DF_CODE_SIGNING_SECRET`` env-var  (set once, works everywhere)
+    1. Stable env config (``DF_CODE_SIGNING_SECRET`` / ``FLASK_SECRET_KEY``)
     2. Dev mode → fixed deterministic key (survives reloader restarts)
-    3. Production → derived from Flask ``app.secret_key``
-    4. Fallback for tests / non-Flask callers
+    3. Every other caller without stable config fails closed
     """
-    if _EXPLICIT_SECRET:
-        return _EXPLICIT_SECRET.encode("utf-8")
+    configured = _stable_configured_secret()
+    if configured is not None:
+        return configured
 
     # In dev mode use a fixed key so the reloader doesn't break sigs.
     if _is_dev_mode():
         return _DEV_SECRET
 
-    # Production: derive from Flask's secret_key.
-    try:
-        from flask import current_app
-        flask_secret = current_app.secret_key
-        if flask_secret:
-            # Derive a separate key so changing Flask's secret_key for
-            # session purposes doesn't accidentally share material.
-            return hmac.new(
-                b"df-code-signing",
-                str(flask_secret).encode("utf-8"),
-                hashlib.sha256,
-            ).digest()
-    except (ImportError, RuntimeError):
-        # No Flask app context (e.g. unit tests, CLI scripts).
-        pass
-
-    # Last resort — should only happen in tests.
-    logger.warning(
-        "code_signing: no DF_CODE_SIGNING_SECRET and no Flask app context; "
-        "using fallback secret (signatures won't survive restarts)"
+    raise CodeSigningConfigurationError(
+        "A stable code-signing secret is required outside explicit dev mode; set "
+        "DF_CODE_SIGNING_SECRET or FLASK_SECRET_KEY."
     )
-    return _DEV_SECRET
 
 
 # ---------------------------------------------------------------------------

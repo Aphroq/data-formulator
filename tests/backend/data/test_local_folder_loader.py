@@ -65,7 +65,10 @@ class TestConfinedDir:
         jail_dir = tmp_path / "jail"
         jail_dir.mkdir()
         link = jail_dir / "escape"
-        link.symlink_to(outside)
+        try:
+            link.symlink_to(outside, target_is_directory=True)
+        except OSError as exc:
+            pytest.skip(f"Directory symlinks are unavailable: {exc}")
 
         jail = ConfinedDir(jail_dir, mkdir=False)
         with pytest.raises(ValueError, match="escapes confined"):

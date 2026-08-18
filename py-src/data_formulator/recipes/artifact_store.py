@@ -21,6 +21,7 @@ from data_formulator.recipes.compiler import CompiledRecipe
 from data_formulator.recipes.lineage import DurableArtifactStorageRequired
 from data_formulator.recipes.models import HashDigest
 from data_formulator.recipes.spec import RecipeSpec
+from data_formulator.security.path_safety import ConfinedDir
 
 
 _RECIPE_ID_PATTERN = re.compile(r"^rcp_[0-9a-f]{64}$")
@@ -77,11 +78,19 @@ class RecipeArtifactStore:
         identity_id: str,
         workspace_id: str,
     ) -> None:
-        self._workspace_root = Path(workspace_root).resolve()
-        self._root = Path(root).resolve()
-        if not self._root.is_relative_to(self._workspace_root):
-            raise ValueError("Recipe artifact root must be inside its Workspace")
-        self._root.mkdir(parents=True, exist_ok=True)
+        self._workspace_jail = ConfinedDir(workspace_root, mkdir=False)
+        try:
+            root_relative = os.path.relpath(
+                Path(root).resolve(),
+                self._workspace_jail.root,
+            )
+            self._root = self._workspace_jail.resolve(root_relative)
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                "Recipe artifact root must be inside its Workspace"
+            ) from exc
+        self._root_relative = Path(root_relative).as_posix()
+        self._root_jail = ConfinedDir(self._root)
         self._identity_id = identity_id
         self._workspace_id = workspace_id
 
@@ -93,7 +102,7 @@ class RecipeArtifactStore:
                 f"Workspace backend {capabilities.storage_backend!r} does not provide "
                 "durable Recipe artifact storage"
             )
-        workspace_root = workspace.confined_root.root.resolve()
+        workspace_root = workspace.confined_root.root
         root = workspace.confined_root.resolve("artifacts/recipes")
         return cls(
             root,
@@ -141,14 +150,18 @@ class RecipeArtifactStore:
 
             versions_root = version_dir.parent
             versions_root.mkdir(parents=True, exist_ok=True)
-            temporary = Path(tempfile.mkdtemp(prefix=".recipe_", dir=versions_root))
+            versions_jail = ConfinedDir(versions_root, mkdir=False)
+            temporary_name = Path(
+                tempfile.mkdtemp(prefix=".recipe_", dir=versions_root)
+            ).name
+            temporary = versions_jail.resolve(temporary_name)
             try:
                 _write_file(temporary / self.RECIPE_FILENAME, spec_bytes)
                 _write_file(temporary / self.WORKFLOW_FILENAME, workflow_bytes)
                 _write_file(temporary / self.MANIFEST_FILENAME, manifest_bytes)
                 os.replace(temporary, version_dir)
             except Exception:
-                if temporary.exists() and temporary.is_relative_to(versions_root):
+                if temporary.exists():
                     shutil.rmtree(temporary, ignore_errors=True)
                 raise
         return desired_reference
@@ -205,20 +218,18 @@ class RecipeArtifactStore:
             raise ValueError("recipe_id is invalid")
         if not isinstance(version_id, str) or not _VERSION_ID_PATTERN.fullmatch(version_id):
             raise ValueError("version_id is invalid")
-        path = (self._root / recipe_id / "versions" / version_id).resolve()
-        if not path.is_relative_to(self._root):
-            raise ValueError("RecipeVersion path escapes artifact root")
-        return path
+        return self._root_jail.resolve(
+            f"{recipe_id}/versions/{version_id}"
+        )
 
     def _reference(
         self,
         spec: RecipeSpec,
         manifest_hash: HashDigest,
     ) -> RecipeArtifactReference:
-        artifact_path = self._version_dir(
-            spec.recipe_id,
-            spec.version_id,
-        ).relative_to(self._workspace_root).as_posix()
+        artifact_path = (
+            f"{self._root_relative}/{spec.recipe_id}/versions/{spec.version_id}"
+        )
         return RecipeArtifactReference(
             recipe_id=spec.recipe_id,
             version_id=spec.version_id,
@@ -313,7 +324,10 @@ class RecipeArtifactStore:
 
     @staticmethod
     def _safe_read(version_dir: Path, filename: str) -> bytes:
-        path = version_dir / filename
-        if path.is_symlink() or not path.resolve().is_relative_to(version_dir.resolve()):
+        unresolved = version_dir / filename
+        if unresolved.is_symlink():
+            raise ValueError(f"Recipe artifact file is unsafe: {filename}")
+        path = ConfinedDir(version_dir, mkdir=False).resolve(filename)
+        if not path.is_file():
             raise ValueError(f"Recipe artifact file is unsafe: {filename}")
         return path.read_bytes()

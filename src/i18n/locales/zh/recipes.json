@@ -23,6 +23,11 @@
     "publishSucceeded": "配方版本已发布。",
     "runSucceeded": "运行 {{runId}} 已成功完成。",
     "archiveSucceeded": "配方版本已归档。",
+    "refreshAfterActionFailed": "操作已经完成，但配方列表刷新失败；下方运行结果仍然有效。",
+    "runSummary": "本次运行",
+    "runId": "运行 ID：{{runId}}",
+    "runDuration": "耗时：{{duration}} 毫秒",
+    "lastStep": "最后步骤：{{step}}",
     "needsReview": "运行检测到 schema 漂移，需要人工检查后才能继续。",
     "runFailed": "配方执行失败。",
     "loadFailed": "无法加载配方。",
@@ -43,6 +48,11 @@
       "validated": "已验证",
       "published": "已发布",
       "archived": "已归档"
+    },
+    "runStatus": {
+      "succeeded": "成功",
+      "failed": "失败",
+      "needs_review": "待检查"
     },
     "inputMode": {
       "refreshable": "可刷新",

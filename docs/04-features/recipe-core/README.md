@@ -8,7 +8,7 @@
 | Worktree | `D:\projects\dfm-wt-recipe` |
 | 本机实例 | `recipe`：后端 5569、Vite 5175、数据目录 `D:\projects\dfm-runtime\recipe` |
 | 基线 | 共享文档提交，父提交为 Data Formulator `5477f0e` |
-| 当前阶段 | M2-C 已完成：Recipe Core 已具备受 feature flag 保护的 API、Save as Recipe 与 Recipes 生命周期页面 |
+| 当前阶段 | M2-D 合并前最小收口已实现并提交；Recipe Core 功能范围和分支级验证已关闭，待合并审查 |
 
 ## 目标
 
@@ -16,7 +16,7 @@
 
 ## 范围
 
-- ArtifactNode 模型、ledger 和 load/transform/chart/report 记录点。
+- ArtifactNode 模型、ledger 和 load/transform/chart 记录点。
 - canonical JSON、SHA-256、RecipeSpec v1 和稳定 Compiler。
 - typed parameter binding 与输入可刷新性。
 - durable artifact store。
@@ -25,6 +25,8 @@
 - Save as Recipe 与 Recipes 页面。
 
 不包含 Scheduler、lease Worker 和 Runs Inbox。
+
+v1 也不增加 report 记录点或通用参数编辑器：现有报告缺少后端持久化保存点，正常 Save as Recipe 先生成固定 Recipe。底层保留 `ArtifactType.REPORT` 与 typed binding 契约，但未实现的能力不得在 UI 或完成状态中冒充可用。
 
 ## 实施顺序
 
@@ -35,6 +37,7 @@
 5. M2-A：实现 RecipeSpec v1、typed binding、Compiler、稳定拓扑排序和失败关闭规则。
 6. M2-B：补 durable recipe artifact store、request-independent workspace/connector opener、dry run、发布和 manual run。
 7. M2-C：最后注册最小 API、Save as Recipe 和 Recipes 页面，避免过早修改 `app.py`、`App.tsx` 和 Redux 冲突热点。
+8. M2-D：只关闭签名/血缘/路径完整性、请求边界和现有 Recipes 页面可靠性，不引入 Automation Workbench 范围。
 
 单元契约不等待共享启动脚本；并行交互验证前，先从 `main` 集成 `DF_INSTANCE_ID` Cookie 命名和固定实例启动入口。
 
@@ -55,9 +58,9 @@
 
 - Recipe Worktree 已建立独立 `.venv` 与 `node_modules`；Yarn 下载缓存使用 `D:\projects\dfm-runtime\recipe\yarn-cache`，避免 Windows 全局缓存锁争用。
 - 系统 Node `20.15.1` 低于 Vite 7.3.3 的最低要求；验证使用工作区运行时 Node `24.19.0`。后续固定启动入口必须显式选择兼容 Node，不能靠当前系统 PATH。
-- 聚焦 Recipe 契约：82 passed；M2-C route/repository 聚焦回归 17 passed。
-- 全量后端：2220 passed、13 skipped、1 xfailed、1 deselected。deselect 项是 Windows 未启用符号链接权限时无法创建 symlink 的安全测试；Codex 终端另需 `PYTHONUTF8=1` 和非 `dumb` TERM，分别避免 GBK 测试夹具与 spinner 环境误报。
-- 全量前端：48 files、396 tests passed；Vite 生产构建成功。构建仅有既有 eval、动态/静态混合导入和大 chunk 警告。
+- 已提交基线：Recipe 82 passed；全量后端 2220 passed、13 skipped、1 xfailed、1 deselected；前端 48 files、396 tests passed；Vite 生产构建成功。
+- 2026-08-18 M2-D 聚焦验证：Recipe、签名和 Agent 血缘后端 116 passed、2 skipped；Recipes 页面 4 passed；Recipes ESLint 通过。最终全量后端 2239 passed、16 skipped、1 xfailed；前端全量 48 files / 399 tests passed，生产构建成功。后端按 `PYTHONUTF8=1` 和兼容终端环境执行；本机无 Windows 符号链接权限的测试准备按同类用例显式 skip，不把权限不足误报为产品失败。
+- 系统 Node `20.15.1` 仍低于 Vite 7.3.3 的最低要求，验证继续使用工作区运行时 Node `24.19.0`；不在 Recipe Core 内另造工具链管理器。
 
 ## M0 首个开发节点（已完成）
 
@@ -92,7 +95,7 @@
 
 - `visualize.input_tables` 现在是工具 schema 必填字段；CoreSkill 与 Analyst runtime 都校验列表非空、唯一且表真实存在，失败时不进入 sandbox。
 - sandbox 成功写出 derived parquet 后，CoreSkill 先对最终（可能已自动补 output variable 的）代码做 HMAC 签名，再调用 lineage recorder。
-- recorder 从每个声明输入的 workspace metadata/ledger 解析并复核父 Artifact；对 derived 表实际 parquet 和持久化 Arrow schema 生成 transform hash，再以完整 chart spec 生成 chart hash。
+- recorder 从每个声明输入的 workspace metadata/ledger 解析父 Artifact，并在接受 metadata link 或 ledger fallback 前重算父表 parquet content hash 与 Arrow schema fingerprint；对 derived 表实际 parquet 和持久化 Arrow schema 生成 transform hash，再以完整 chart spec 生成 chart hash。
 - transform 与 chart 先全部构造、校验签名，再通过 `record_many` 一次持锁原子提交；chart 的唯一父节点是本次 transform，transform 的父节点顺序与声明输入一致。
 - 成功结果事件与 same-run chart registry 都携带 `transform_artifact_id` / `chart_artifact_id`。缺失父 Artifact、非 durable backend 或持久化失败时仍返回交互图表，但标记 `lineage.status=unavailable`，因此不能进入 Compiler/Publish。
 - derived table metadata 保存通用 `artifact_id` 和 visualize binding；metadata 链接失败时 ledger 仍是事实来源，后续父解析可按唯一 output table 回查。
@@ -105,6 +108,7 @@
 - Compiler 复用既有 `ConnectorQueryStep` 解析 load 快照；重新读取实际 parquet 与 Arrow schema，校验 transform HMAC、声明父表和 chart 父表/content hash，缺失、篡改、schema 变化或 v1 不支持的 Artifact 类型全部失败关闭。
 - 相同目标集生成字节级一致的 Recipe JSON、`recipe_hash`、`version_id` 和 Workflow Markdown；Markdown 只由机器规范派生，不参与执行。
 - 首批参数 slot 只开放 load filter value 与正整数 limit。绑定先按 `string`、`integer`、`number`、`boolean`、`date`、`datetime` 校验，再修改已验证的 JSON 结构；不做 Python/SQL 字符串替换。新增 slot 必须显式扩展 enum 和结构校验。
+- 当前产品编译入口不接收参数定义，因此 Save as Recipe 生成固定 Recipe；M2-D 不增加参数编辑 UI。底层 slot/binding 继续保留并接受契约测试，供后续受控入口复用。
 - `refreshable` 当前只表示 Artifact 中有稳定 `source_id` 和逻辑 credential reference；它不证明后台能够恢复凭据。M2-B 必须由 request-independent opener 验证连接并完成 dry run，才可进入 `validated` 或 `published`。
 - 使用数据库 loader 替身的纵向测试现已覆盖 load → sandbox transform → signed code → chart → ancestry → 两次稳定编译；Recipe 聚焦 49 passed，Agent/路由回归 714 passed，全量后端 2187 passed、13 skipped、1 xfailed、1 deselected；前端 391 passed，生产构建成功。
 
@@ -160,7 +164,7 @@ M2-B3 实施结果：
 - `RecipeService` 是 lifecycle-aware 入口：dry run 始终从 repository 重开保存版本，成功后固定 validation 证据；manual run 只接受 published 版本。两条路径共享同一 Executor，不调用 Agent、LLM、TrustGraph 或 Workflow Replay。
 - Windows 下 Sandbox worker 会暂时把 Run Workspace 作为当前目录，因此运行目录不做完成时整体 rename；实现采用“锁内创建唯一目录 + 最终 manifest 同目录原子替换”的提交协议，避免依赖平台不支持的目录重命名语义。
 
-## M2-C 最小 API 与 UI 计划（已完成）
+## M2-C 最小 API 与 UI 计划（已实现）
 
 ### 接入边界与复用策略
 
@@ -184,6 +188,47 @@ M2-C 实施结果：
 - 新 Recipes 页面展示版本状态、input mode、schema hash、步骤、typed parameters 与合法生命周期动作；前端 API 客户端对 version id 做 URL 编码，并始终把运行参数作为结构化 JSON object 发送。
 - 新增中英文完整键集合、API/Artifact/UI 单元测试；Recipe 82 passed，全量后端 2220 passed、13 skipped、1 xfailed、1 deselected，前端 48 files / 396 tests passed，生产构建成功。
 
+## M2-D 合并前最小收口（已完成）
+
+### 目标和非目标
+
+目标只有三类：关闭会破坏 Recipe 确定性的完整性缺口、收紧现有 API 边界、让现有 Recipes 页面不会串状态或误报运行结果。全部复用现有标准库、`ConfinedDir`、hash/schema helper、MUI、React Router 和 `apiRequest`。
+
+本阶段不新增依赖、数据库表、路由层级、Redux slice、队列、DAG、report 执行步骤、参数编辑器、Schedule 或 Runs Inbox，也不修改原有项目/Workspace 和 Workflow Replay 概念。
+
+### 实施切片
+
+1. **完整性收口**
+   - Web 与 request-independent Executor 从同一稳定配置源解析 HMAC 密钥；后台/生产缺少稳定密钥时失败关闭，并增加跨 Flask context 回归。
+   - `_resolve_parent` 在接受 metadata link 或唯一 ledger fallback 前，复用既有 parquet SHA-256 与 Arrow schema helper 复核当前父表；不匹配时不写 transform/chart lineage。
+   - `RecipeArtifactStore`、`RecipeRunArtifactStore` 与 opener 的持久化路径统一交给 `ConfinedDir`；覆盖正常路径、`../`、绝对路径、空值和 symlink escape，不增加另一套 path helper。
+2. **API 与类型边界**
+   - 可选空请求体与 malformed JSON 分开处理；后者始终返回 `INVALID_REQUEST`，不能按默认参数执行。
+   - compile 边界验证精确 artifact id wire format；number/integer 分开做有限值和安全范围校验，极端整数返回稳定错误而不是 traceback。
+3. **现有页面可靠性**
+   - 以请求序号或取消信号忽略旧 Workspace/版本响应；URL `version` 变化触发同一加载路径。
+   - manual run/dry run 的动作结果先固定，再单独刷新目录；刷新失败只显示同步警告，不能把已成功 Run 误报为失败或诱导重复运行。
+   - 版本详情显示 immutable `spec.name/description`；用现有 Alert/Stack 增加本次 Run 的状态、run id、耗时和完成/失败步骤，不建设历史列表。
+4. **验证和记录**
+   - 先补上述失败测试，再做实现；聚焦测试通过后运行 `uv run pytest`、`yarn test`、`yarn build`。
+   - 只更新本 Feature 工程记录。后端 Windows 编码/终端前置按既有约定配置，环境问题与 Recipe 回归分别记录。
+
+### 完成标准
+
+- 同一份 Web 签名代码可由无请求 Executor 验证；缺少稳定生产密钥时失败关闭。
+- 父表内容或 schema、Recipe/Run 文件或路径发生篡改时，不产生新的可用 lineage/Recipe/Run。
+- 非法 JSON、artifact id 和极端数值只返回稳定 4xx 错误，不开始执行。
+- 快速切换 Workspace/版本不会显示旧详情；动作成功后的刷新失败不会触发重复运行误导；用户能看见本次运行摘要。
+- report、参数编辑和 Automation 能力保持明确延期，文档、API 和 UI 不作超前承诺。
+
+M2-D 实施结果：
+
+- 代码签名按 `DF_CODE_SIGNING_SECRET`、`FLASK_SECRET_KEY`、显式开发模式的顺序解析；Web 使用稳定配置生成的签名可在无 Flask context 下验证，生产或后台缺少稳定配置时抛出配置错误，不再使用进程内随机密钥或无上下文测试 fallback。
+- visualize 父节点在 metadata link 和 ledger fallback 两条路径上都重新计算当前 parquet content hash 与 schema fingerprint；任一不一致都在创建 transform/chart 节点前失败。Recipe/Run store 与 Workspace opener 的路径解析统一收口到 `ConfinedDir`，并覆盖空值、绝对路径、`..` 和可用环境下的 symlink escape。
+- API 将空的可选 body 与 malformed JSON 分开；compile 只接受精确 `art_<64 hex>`，递归拒绝非有限数和超出 JavaScript 安全整数范围的整数值。Recipe typed binding 同步使用相同整数边界，极端值稳定返回校验错误。
+- Recipes 页面以请求序号丢弃过期列表/详情响应，URL 版本变化走同一加载路径；生命周期动作先固定返回结果和版本状态，再独立刷新目录。刷新失败只显示同步警告，immutable 标题取自 `spec`，manual/dry run 使用既有组件显示即时状态、run id、总耗时和最后步骤。
+- 未新增依赖、数据库 migration、Redux 状态、路由层级或 Automation 概念；report、参数编辑、Schedule、Worker、Runs Inbox 仍按既定分支延期。
+
 ## 开发记录
 
 | 日期 | 阶段 | 实质变更 | 验证 | 提交 |
@@ -202,11 +247,15 @@ M2-C 实施结果：
 | 2026-08-18 | M2-B2 | 拆分无 Flask 的 connector registry 初始化；新增显式 scope Workspace/Connector opener，只认可重启后可恢复的 no-auth、vault 或 ambient 连接 | 聚焦 139 passed；全量后端 2201 passed、13 skipped、1 xfailed、1 deselected | `feat: add request-independent recipe openers` |
 | 2026-08-18 | M2-B3 | 新增可校验 Run artifact、隔离确定性 Executor、dry-run validation 证据、SQLite v2 生命周期状态机和 lifecycle-aware manual run | Recipe 76 passed；相关回归 190 passed、8 skipped；全量后端 2214 passed、13 skipped、1 xfailed、1 deselected | `feat: execute and publish deterministic recipes` |
 | 2026-08-18 | M2-C | 注册 default-off Recipe API；新增 Save as Recipe、artifact 编辑失效契约、Recipes 版本/输入/步骤与生命周期页面 | Recipe 82 passed；全量后端 2220 passed、13 skipped、1 xfailed、1 deselected；前端 48 files、396 tests；生产构建成功 | `feat: expose recipe lifecycle in the app` |
+| 2026-08-18 | M2-D 规划 | 复核 Recipe 分支的完整性、API/UI 和分支边界；将 report/参数编辑明确延期，形成不增加依赖、表或状态系统的最小收口计划 | Recipe 聚焦后端 93 passed；聚焦前端 5 passed；前端全量与生产构建通过；全量后端环境差异已记录 | `fix: harden recipe core before integration` |
+| 2026-08-18 | M2-D | 统一稳定签名密钥与父表新鲜度校验；用 `ConfinedDir` 收口 Recipe/Run/opener 路径；严格处理 JSON、artifact id 和安全数值边界；修复 Recipes 旧响应覆盖、动作结果误报并补即时 Run 摘要 | Recipe/签名/Agent 聚焦后端 116 passed、2 skipped；全量后端 2239 passed、16 skipped、1 xfailed；Recipes UI 4 passed；前端全量 48 files / 399 tests；生产构建和 Recipes ESLint 通过 | `fix: harden recipe core before integration` |
 
 ## 已确认决策
 
 - Compiler 只接受持久化 artifact id，不读取聊天文本或 Redux 临时状态。
 - Recipe 执行步骤只有 `load`、`transform`、`chart`。
+- v1 只为 load/transform/chart 建立后端血缘；report 保留为现有会话产物，不是 Recipe target 或执行步骤。
+- 正常 Save as Recipe 先生成固定 Recipe；Automation 不定义或猜测参数，typed binding 仅作为底层安全契约保留。
 - Workflow Markdown 供人阅读，不反向驱动执行。
 - HMAC 验证完整性，SHA-256 负责稳定版本比较。
 - 无血缘、输入 unresolved 或 dry run 失败时不得发布。
@@ -218,6 +267,8 @@ M2-C 实施结果：
 - Azure Blob 首发支持取决于正式 artifact store 接口；不能使用 scratch。
 - 数据库纵向切片使用已有环境或测试替身，不建立 Docker 测试依赖。
 - Worker 调度、lease 与 Run catalog 属于 Automation Workbench；Recipe Core 已提供无 request opener 和确定性 service，但尚未接 Worker 生命周期。
+- 生产 Web 和后续 Worker 必须显式共享 `DF_CODE_SIGNING_SECRET` 或 `FLASK_SECRET_KEY`；缺少稳定配置会按设计拒绝签名/验证，部署入口仍需在 Automation Workbench 集成时传递同一环境配置。
+- Recipes 目前只显示本次请求返回的 Run 摘要；持久历史、筛选和处置仍归 Automation Workbench 的 Runs Inbox。
 - Run 目录以最终 manifest 作为完成标记；进程崩溃留下的无 manifest 目录安全地不可读取，但自动回收策略留给 Automation Workbench 的维护任务。
 - 当前 sandbox 的文件访问边界仍是整个 workspace；M0-C 将声明输入作为可验证的 provenance/Compiler 契约，但不声称已动态追踪 Python 的每次文件读取。若发布威胁模型要求抵御恶意已签名代码，需增加只挂载声明文件的 sandbox view。
 - credential reference 仍是逻辑引用；只有 request-independent opener 能实际恢复连接且完整 dry run 成功时才会 validated/published。真实外部端点仍需在用户已有环境中补验，不建立 Docker 依赖。
@@ -230,4 +281,9 @@ M2-C 实施结果：
 - [x] dry run 成功后才能发布。
 - [x] Published RecipeVersion 不可修改。
 - [x] 正常 manual run 不调用 LLM/TrustGraph。
-- [x] `uv run pytest`、`yarn test`、`yarn build` 通过。
+- [x] Web 与无请求 Executor 使用同一稳定签名密钥，缺失生产密钥时失败关闭。
+- [x] 父 Artifact content/schema 在记录 transform/chart 前复核，篡改时不写 lineage。
+- [x] Recipe/Run/opener 路径统一使用 `ConfinedDir` 并覆盖 symlink escape。
+- [x] malformed JSON、非法 artifact id 和极端数值返回稳定 4xx。
+- [x] Recipes 页面无旧响应覆盖、成功动作误报，并显示本次 Run 摘要。
+- [x] M2-D 完成后重新执行 `uv run pytest`、`yarn test`、`yarn build`。

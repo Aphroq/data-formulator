@@ -22,6 +22,13 @@ def _reset_to_pristine() -> None:
     os.environ.clear()
     os.environ.update(_PRISTINE_ENV)
     os.environ.update(pytest_vars)
+    # Request-independent signing must never depend on an implicit development
+    # fallback. Tests use one explicit, process-stable key unless a case
+    # deliberately removes or replaces it.
+    os.environ.setdefault(
+        "DF_CODE_SIGNING_SECRET",
+        "data-formulator-test-signing-key",
+    )
 
 
 @pytest.fixture(autouse=True)

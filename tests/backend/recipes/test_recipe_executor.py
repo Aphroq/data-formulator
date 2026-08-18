@@ -9,6 +9,7 @@ import pyarrow as pa
 import pytest
 
 from data_formulator.recipes.compiler import CompiledRecipe
+from data_formulator.recipes.binding import bind_recipe_parameters
 from data_formulator.recipes.executor import RecipeExecutor
 from data_formulator.recipes.run_store import (
     RecipeRunArtifactStore,
@@ -246,6 +247,34 @@ def test_run_store_detects_output_tampering(
         RecipeRunArtifactStore.for_workspace(recipe_workspace).load(
             result.reference
         )
+
+
+def test_run_writer_confines_output_paths(
+    tmp_path,
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+) -> None:
+    writer = RecipeRunArtifactStore.for_workspace(recipe_workspace).begin(
+        executable_recipe.spec,
+        bind_recipe_parameters(executable_recipe.spec, {}),
+        RecipeRunKind.DRY_RUN,
+        run_id="run_" + "a" * 32,
+    )
+
+    assert writer.output_path("chart.json").parent.name == "outputs"
+    for unsafe in ("", "../escape.json", str((tmp_path / "escape.json").resolve())):
+        with pytest.raises(ValueError):
+            writer.output_path(unsafe)
+
+    outside = tmp_path / "outside-output"
+    outside.mkdir()
+    link = writer.root / "outputs" / "link"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlinks are unavailable: {exc}")
+    with pytest.raises(ValueError, match="escapes confined directory"):
+        writer.output_path("link/escape.json")
 
 
 def test_run_artifacts_do_not_persist_bound_values_or_connector_errors(

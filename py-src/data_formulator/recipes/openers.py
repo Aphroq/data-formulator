@@ -9,6 +9,7 @@ from pathlib import Path
 
 from data_formulator.datalake.workspace import sanitize_identity_dirname
 from data_formulator.datalake.workspace_manager import WorkspaceManager
+from data_formulator.security.path_safety import ConfinedDir
 
 
 class WorkspaceOpenError(ValueError):
@@ -32,7 +33,8 @@ class LocalWorkspaceOpener:
             raise WorkspaceOpenError(
                 "Recipe execution currently supports only durable local Workspaces"
             )
-        self._data_home = Path(data_home).resolve()
+        self._data_home_jail = ConfinedDir(data_home, mkdir=False)
+        self._data_home = self._data_home_jail.root
 
     @classmethod
     def from_environment(cls) -> "LocalWorkspaceOpener":
@@ -57,15 +59,20 @@ class LocalWorkspaceOpener:
         ):
             raise WorkspaceOpenError("workspace_id is invalid")
 
-        workspaces_root = (
-            self._data_home / "users" / safe_identity / "workspaces"
-        )
-        workspace_path = workspaces_root / workspace_id
-        if (
-            not workspace_path.is_dir()
-            or workspace_path.is_symlink()
-            or not workspace_path.resolve().is_relative_to(workspaces_root.resolve())
-        ):
+        try:
+            workspaces_root = self._data_home_jail.resolve(
+                f"users/{safe_identity}/workspaces"
+            )
+            unresolved = workspaces_root / workspace_id
+            if unresolved.is_symlink():
+                raise ValueError("Workspace symlinks are not allowed")
+            workspace_path = ConfinedDir(
+                workspaces_root,
+                mkdir=False,
+            ).resolve(workspace_id)
+        except ValueError as exc:
+            raise WorkspaceOpenError("Workspace does not exist") from exc
+        if not workspace_path.is_dir():
             raise WorkspaceOpenError("Workspace does not exist")
 
         manager = WorkspaceManager(workspaces_root)

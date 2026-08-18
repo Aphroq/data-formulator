@@ -30,7 +30,7 @@ Workflow Replay 保留为灵活的“分析方法复用”；Recipe 是严格的
 
 - 在现有 AnalystAgent 中按需查询 TrustGraph，只读获取业务上下文和来源。
 - 可选使用 GitHub Copilot 模型，并验证 OAuth device、刷新、流式和工具调用。
-- 为加载、转换、图表和报告建立后端权威 Artifact Lineage。
+- 为加载、转换和图表建立后端权威 Artifact Lineage。
 - 从选定产物编译、dry run、发布和手动运行 Recipe。
 - 为已发布 RecipeVersion 创建每日或 Cron 调度。
 - 在 Runs Inbox 中查看成功、失败、Needs Review、日志和 manifest。
@@ -57,6 +57,8 @@ Workflow Replay 保留为灵活的“分析方法复用”；Recipe 是严格的
 - 不做多节点 Worker、网络共享盘 SQLite 或高可用调度。
 - 项目开发、测试和运行不使用 Docker、Docker Compose 或容器化依赖。
 - 不新增 Excel/Parquet/JSON 表格导出、报告投递和 Webhook。
+- v1 不把仅存在于前端会话状态的报告直接编译为 Recipe；报告继续作为现有会话产物，等具备后端持久化保存点后再补只读包装 Artifact。
+- v1 不提供通用 Recipe 参数编辑器；正常产品入口先创建固定 Recipe，底层只保留 typed slot 契约，不开放任意 Python/SQL 替换。
 - v1 不把 Recipe/Run 数据塞进现有 Workspace ZIP；自动化制品迁移另行设计。
 
 ## 完成标准
