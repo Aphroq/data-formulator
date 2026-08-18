@@ -922,7 +922,69 @@ class AnalystAgent:
             "table_ref": table_name,
             "code": transform_result.get("code", ""),
             "chart_data": {"name": table_name, "rows": rows[:50]},
+            "transform_artifact_id": transform_result.get("transform_artifact_id"),
+            "chart_artifact_id": transform_result.get("chart_artifact_id"),
         })
+
+    def record_visualize_artifacts(
+        self,
+        *,
+        transform_result: dict[str, Any],
+        input_tables: list[str],
+        chart_spec: dict[str, Any],
+        field_metadata: dict[str, Any],
+        field_display_names: dict[str, Any],
+        display_instruction: str,
+        title: str,
+        subtitle: str,
+        output_variable: str,
+    ) -> dict[str, Any]:
+        """Commit signed transform + chart provenance, preserving UI output on failure."""
+        from data_formulator.recipes.lineage import (
+            ArtifactLineageError,
+            DurableArtifactStorageRequired,
+        )
+        from data_formulator.recipes.visualize import (
+            MissingParentArtifactError,
+            record_visualize_artifacts,
+        )
+
+        try:
+            content = transform_result.get("content") or {}
+            virtual = content.get("virtual") or {}
+            artifacts = record_visualize_artifacts(
+                self.workspace,
+                chart_id=str(transform_result.get("chart_id", "")),
+                input_table_names=input_tables,
+                output_table_name=str(virtual.get("table_name", "")),
+                code=str(transform_result.get("code", "")),
+                code_signature=str(transform_result.get("code_signature", "")),
+                output_variable=output_variable,
+                chart_spec=chart_spec,
+                field_metadata=field_metadata,
+                field_display_names=field_display_names,
+                display_instruction=display_instruction,
+                title=title,
+                subtitle=subtitle,
+            )
+            return {
+                "status": "ok",
+                "transform_artifact_id": artifacts.transform.artifact_id,
+                "chart_artifact_id": artifacts.chart.artifact_id,
+            }
+        except DurableArtifactStorageRequired:
+            return {"status": "unavailable", "reason": "unsupported_backend"}
+        except MissingParentArtifactError:
+            logger.info(
+                "Visualize result has no durable lineage because an input artifact is missing"
+            )
+            return {"status": "unavailable", "reason": "missing_parent_artifact"}
+        except ArtifactLineageError:
+            logger.warning("Visualize lineage validation failed", exc_info=True)
+            return {"status": "unavailable", "reason": "invalid_lineage"}
+        except Exception:
+            logger.warning("Visualize lineage persistence failed", exc_info=True)
+            return {"status": "unavailable", "reason": "lineage_record_failed"}
 
     def run_explore_code(
         self, code: str, input_tables: list[dict[str, Any]],
@@ -1004,6 +1066,7 @@ class AnalystAgent:
         self,
         code: str,
         output_variable: str,
+        input_tables: list[str],
         chart_spec: dict,
         field_metadata: dict,
         field_display_names: dict,
@@ -1014,6 +1077,23 @@ class AnalystAgent:
     ) -> dict[str, Any]:
         """Run visualize code in sandbox and assemble chart."""
         from data_formulator.sandbox import create_sandbox
+
+        if (
+            not isinstance(input_tables, list)
+            or not input_tables
+            or any(
+                not isinstance(name, str)
+                or not name.strip()
+                or self.workspace.get_table_metadata(name) is None
+                for name in input_tables
+            )
+            or len(set(input_tables)) != len(input_tables)
+        ):
+            return {
+                "status": "error",
+                "error_message": "Invalid or missing declared input tables.",
+                "error_code": "agent.invalidInputTables",
+            }
 
         try:
             from flask import current_app
@@ -1093,7 +1173,20 @@ class AnalystAgent:
                 }
 
             output_table_name = self.workspace.get_fresh_name(f"d-{output_variable}")
-            self.workspace.write_parquet(full_df, output_table_name)
+            chart_id = f"chart-{uuid.uuid4().hex[:12]}"
+            self.workspace.write_parquet(
+                full_df,
+                output_table_name,
+                source_info={
+                    "loader_type": "AnalystTransform",
+                    "import_options": {
+                        "visualize": {
+                            "chart_id": chart_id,
+                            "input_tables": list(input_tables),
+                        },
+                    },
+                },
+            )
 
             if row_count > max_display_rows:
                 query_output = full_df.head(max_display_rows)
@@ -1119,7 +1212,7 @@ class AnalystAgent:
                 # id the agent can embed in a same-run report (``chart://<id>``)
                 # and pass to ``inspect_chart``. NOT derived from the table name
                 # (one table may back many charts).
-                "chart_id": f"chart-{uuid.uuid4().hex[:12]}",
+                "chart_id": chart_id,
                 "code": code,
                 "content": {
                     "rows": df_to_safe_records(query_output),

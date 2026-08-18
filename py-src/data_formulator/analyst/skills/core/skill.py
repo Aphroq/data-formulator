@@ -123,11 +123,27 @@ class CoreSkill:
         subtitle = action.get("subtitle", "")
         step_index = int((ctx.payload or {}).get("completed_step_count", 0)) + 1
 
+        try:
+            input_tables = self._validate_visualize_input_tables(
+                action.get("input_tables"),
+                ctx.workspace,
+            )
+        except ValueError as exc:
+            error_msg = str(exc)
+            yield {
+                "type": "error",
+                "message": error_msg,
+                "display_instruction": display_instruction,
+            }
+            return (
+                f"[OBSERVATION – Step {step_index} FAILED]\n\nError: {error_msg}"
+            )
+
         yield {
             "type": "action",
             "action": "visualize",
             "display_instruction": display_instruction,
-            "input_tables": action.get("input_tables", []),
+            "input_tables": input_tables,
         }
 
         viz_result = ctx.runtime.run_visualize_code(
@@ -139,6 +155,7 @@ class CoreSkill:
             display_instruction=display_instruction,
             title=title,
             subtitle=subtitle,
+            input_tables=input_tables,
             messages=ctx.trajectory,
         )
 
@@ -158,6 +175,33 @@ class CoreSkill:
         transform_result = viz_result["transform_result"]
         sign_result(transform_result)
         transformed_data = transform_result["content"]
+
+        try:
+            lineage = ctx.runtime.record_visualize_artifacts(
+                transform_result=transform_result,
+                input_tables=input_tables,
+                chart_spec=chart_spec,
+                field_metadata=field_metadata,
+                field_display_names=field_display_names,
+                display_instruction=display_instruction,
+                title=title,
+                subtitle=subtitle,
+                output_variable=output_variable,
+            )
+            if not isinstance(lineage, dict):
+                raise TypeError("visualize lineage result must be an object")
+        except Exception:
+            logger.warning("Could not attach visualize lineage", exc_info=True)
+            lineage = {
+                "status": "unavailable",
+                "reason": "lineage_record_failed",
+            }
+        transform_result["lineage"] = lineage
+        if lineage.get("status") == "ok":
+            transform_result["transform_artifact_id"] = lineage[
+                "transform_artifact_id"
+            ]
+            transform_result["chart_artifact_id"] = lineage["chart_artifact_id"]
 
         # Register the chart so a same-run report (and inspect_chart) can
         # reference it by its forwarded, run-stable id.
@@ -181,6 +225,24 @@ class CoreSkill:
             workspace=ctx.workspace,
         )
         return observation
+
+    @staticmethod
+    def _validate_visualize_input_tables(raw: Any, workspace: Any) -> list[str]:
+        if not isinstance(raw, list) or not raw:
+            raise ValueError("visualize requires at least one declared input table")
+        if any(not isinstance(name, str) or not name.strip() for name in raw):
+            raise ValueError("visualize input table names must be non-empty strings")
+        if len(set(raw)) != len(raw):
+            raise ValueError("visualize input table names must be unique")
+        missing = [
+            name for name in raw
+            if workspace.get_table_metadata(name) is None
+        ]
+        if missing:
+            raise ValueError(
+                f"visualize input table(s) not found: {', '.join(missing)}"
+            )
+        return list(raw)
 
     # ------------------------------------------------------------------
     # interact — put question(s) to the user and pause (terminal)

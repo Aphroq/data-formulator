@@ -133,6 +133,7 @@ def test_executor_materializes_bounded_table_with_provenance(tmp_path: Path) -> 
         },
     }
     provenance = metadata.import_options["data_operation"]
+    assert metadata.import_options["artifact_id"] == artifact.artifact_id
     assert provenance["step"] == _step().to_dict()
     assert provenance["artifact_id"] == artifact.artifact_id
 

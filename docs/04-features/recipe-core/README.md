@@ -8,7 +8,7 @@
 | Worktree | `D:\projects\dfm-wt-recipe` |
 | 本机实例 | `recipe`：后端 5569、Vite 5175、数据目录 `D:\projects\dfm-runtime\recipe` |
 | 基线 | 共享文档提交，父提交为 Data Formulator `5477f0e` |
-| 当前阶段 | M0-B 已完成：DataOperation load 已写入 durable lineage；下一步接后端 transform/chart 记录点 |
+| 当前阶段 | M0-C 已完成：后端 transform/chart 原子血缘已接入；下一步做向上遍历与稳定 Compiler 探针 |
 
 ## 目标
 
@@ -88,6 +88,16 @@
 - ephemeral 与尚无正式 artifact API 的 backend 继续允许交互式 load，但不创建 durable Artifact，因此后续 Compiler/Publish 会按缺失血缘失败关闭。
 - M0-B 聚焦链路 63 passed；全量后端 2165 passed、13 skipped、1 xfailed、1 deselected。
 
+## M0-C Transform / Chart 记录点（已完成）
+
+- `visualize.input_tables` 现在是工具 schema 必填字段；CoreSkill 与 Analyst runtime 都校验列表非空、唯一且表真实存在，失败时不进入 sandbox。
+- sandbox 成功写出 derived parquet 后，CoreSkill 先对最终（可能已自动补 output variable 的）代码做 HMAC 签名，再调用 lineage recorder。
+- recorder 从每个声明输入的 workspace metadata/ledger 解析并复核父 Artifact；对 derived 表实际 parquet 和持久化 Arrow schema 生成 transform hash，再以完整 chart spec 生成 chart hash。
+- transform 与 chart 先全部构造、校验签名，再通过 `record_many` 一次持锁原子提交；chart 的唯一父节点是本次 transform，transform 的父节点顺序与声明输入一致。
+- 成功结果事件与 same-run chart registry 都携带 `transform_artifact_id` / `chart_artifact_id`。缺失父 Artifact、非 durable backend 或持久化失败时仍返回交互图表，但标记 `lineage.status=unavailable`，因此不能进入 Compiler/Publish。
+- derived table metadata 保存通用 `artifact_id` 和 visualize binding；metadata 链接失败时 ledger 仍是事实来源，后续父解析可按唯一 output table 回查。
+- 使用 loader 替身的真实纵向切片已覆盖 load → sandbox transform → signed code → chart 三节点及父链；M0-C 聚焦 Recipe/Agent 测试 53 passed，agent/route 相关回归 781 passed，全量后端 2176 passed、13 skipped、1 xfailed、1 deselected。
+
 ## 开发记录
 
 | 日期 | 阶段 | 实质变更 | 验证 | 提交 |
@@ -100,6 +110,7 @@
 | 2026-08-18 | M0 审计 | 刷新 origin/upstream 引用，核对 load/transform/chart、Workspace、Sandbox、签名和 connector 的真实持久化边界，细化首个契约节点 | 聚焦后端 30 passed；全量后端 2130 passed；前端 391 passed；生产构建成功 | `docs: record recipe core M0 audit` |
 | 2026-08-18 | M0-A | 新增 canonical JSON、不可变 ArtifactNode、workspace-scoped durable ledger 与显式 Workspace storage capability；ephemeral/Azure 无正式 artifact store 时失败关闭 | Recipe 契约 30 passed；全量后端 2160 passed、13 skipped、1 xfailed、1 deselected | `feat: add durable artifact lineage core` |
 | 2026-08-18 | M0-B | DataOperation 成功写表后记录 load Artifact；完整复制 step，对实际 parquet 和 Arrow schema 生成独立 SHA-256，并支持写表后 lineage 补偿重试 | 聚焦链路 63 passed；全量后端 2165 passed、13 skipped、1 xfailed、1 deselected | `feat: record loaded tables as artifacts` |
+| 2026-08-18 | M0-C | 将 visualize 声明输入升级为后端契约；签名后原子记录 transform/chart，回传 artifact ids，缺父时保留交互结果但禁用血缘 | 聚焦 53 passed；agent/route 781 passed；全量后端 2176 passed、13 skipped、1 xfailed、1 deselected | `feat: record visualize artifact lineage` |
 
 ## 已确认决策
 
@@ -111,13 +122,13 @@
 
 ## 未决与风险
 
-- Chart spec 的后端持久化记录点需通过真实纵向切片确认。
 - 手工创建或编辑后的 Chart 目前只有 Redux/session_state，不能直接作为机器 Recipe 输入。
 - 现有 Workspace `content_hash` 是抽样 MD5；Artifact 完整性与 schema fingerprint 必须使用独立、明确版本的算法。
 - Azure Blob 首发支持取决于正式 artifact store 接口；不能使用 scratch。
 - 数据库纵向切片使用已有环境或测试替身，不建立 Docker 测试依赖。
 - Worker 所需 workspace opener 应从 Flask 请求依赖中解耦，但本分支只提供基础能力。
 - Recipe Core 的文件型 artifact store 与 Automation 的 SQLite 元数据边界须在 publish repository 落地前固定，避免出现两套 Recipe 事实来源。
+- 当前 sandbox 的文件访问边界仍是整个 workspace；M0-C 将声明输入作为可验证的 provenance/Compiler 契约，但不声称已动态追踪 Python 的每次文件读取。若发布威胁模型要求抵御恶意已签名代码，需增加只挂载声明文件的 sandbox view。
 
 ## 合并前检查
 

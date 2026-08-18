@@ -84,7 +84,7 @@
             "description": "Map of field name -> human-readable display name for chart axes and table headers."
           }
         },
-        "required": ["title", "code", "output_variable", "chart"]
+        "required": ["title", "input_tables", "code", "output_variable", "chart"]
       }
     }
   },

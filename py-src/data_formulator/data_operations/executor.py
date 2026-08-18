@@ -3,11 +3,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import timezone
-from pathlib import Path
 from typing import Callable
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 
 from data_formulator.datalake.parquet_utils import sanitize_table_name
 from data_formulator.datalake.workspace_metadata import TableMetadata
@@ -20,7 +18,8 @@ from data_formulator.recipes.lineage import (
     ArtifactConflictError,
     ArtifactLedger,
 )
-from data_formulator.recipes.models import ArtifactNode, ArtifactType, HashDigest
+from data_formulator.recipes.models import ArtifactNode, ArtifactType
+from data_formulator.recipes.table_artifacts import parquet_artifact_hashes
 
 from .models import (
     ConnectorQueryStep,
@@ -231,10 +230,10 @@ class DataOperationExecutor:
             if stored_step is not None and stored_step != serialized_step:
                 raise ValueError("Published table step snapshot does not match selected plan")
 
-            file_path = self._workspace.get_file_path(table_metadata.filename)
-            if not isinstance(file_path, Path):
-                raise TypeError("Durable local artifact hashing requires a filesystem path")
-            schema = pq.read_schema(file_path)
+            content_hash, schema_fingerprint = parquet_artifact_hashes(
+                self._workspace,
+                table_metadata,
+            )
             artifact = ArtifactNode(
                 artifact_type=ArtifactType.LOAD,
                 identity_id=self._workspace.identity_id,
@@ -245,8 +244,8 @@ class DataOperationExecutor:
                     step_index,
                 ),
                 parent_ids=(),
-                content_hash=HashDigest.sha256_file(file_path),
-                schema_fingerprint=HashDigest.sha256(schema.serialize().to_pybytes()),
+                content_hash=content_hash,
+                schema_fingerprint=schema_fingerprint,
                 execution={
                     "kind": step.kind,
                     "operation_id": operation_id,
@@ -274,6 +273,7 @@ class DataOperationExecutor:
 
             if stored_step != serialized_step or stored_artifact_id != recorded.artifact_id:
                 updated_options = dict(table_metadata.import_options)
+                updated_options["artifact_id"] = recorded.artifact_id
                 updated_provenance = dict(provenance)
                 updated_provenance["step"] = serialized_step
                 updated_provenance["artifact_id"] = recorded.artifact_id

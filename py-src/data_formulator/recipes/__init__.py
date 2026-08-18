@@ -11,6 +11,11 @@ from data_formulator.recipes.lineage import (
     DurableArtifactStorageRequired,
 )
 from data_formulator.recipes.models import ArtifactNode, ArtifactType, HashDigest
+from data_formulator.recipes.visualize import (
+    MissingParentArtifactError,
+    VisualizeArtifacts,
+    record_visualize_artifacts,
+)
 
 __all__ = [
     "ArtifactConflictError",
@@ -21,4 +26,7 @@ __all__ = [
     "ArtifactType",
     "DurableArtifactStorageRequired",
     "HashDigest",
+    "MissingParentArtifactError",
+    "VisualizeArtifacts",
+    "record_visualize_artifacts",
 ]
