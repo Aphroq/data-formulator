@@ -8,7 +8,7 @@
 | Worktree | `D:\projects\dfm-wt-recipe` |
 | 本机实例 | `recipe`：后端 5569、Vite 5175、数据目录 `D:\projects\dfm-runtime\recipe` |
 | 基线 | 共享文档提交，父提交为 Data Formulator `5477f0e` |
-| 当前阶段 | M2-B1 已完成：不可变 Recipe artifact store 与 SQLite draft repository 已落地；下一步做独立 opener、dry run、发布和 manual run |
+| 当前阶段 | M2-B2 已完成：durable local Workspace 与可恢复 Connector 已支持无 request 显式打开；下一步做 dry run、发布和 manual run |
 
 ## 目标
 
@@ -56,7 +56,7 @@
 - Recipe Worktree 已建立独立 `.venv` 与 `node_modules`；Yarn 下载缓存使用 `D:\projects\dfm-runtime\recipe\yarn-cache`，避免 Windows 全局缓存锁争用。
 - 系统 Node `20.15.1` 低于 Vite 7.3.3 的最低要求；验证使用工作区运行时 Node `24.19.0`。后续固定启动入口必须显式选择兼容 Node，不能靠当前系统 PATH。
 - 聚焦 Recipe 契约：49 passed；包含 sandbox 的纵向切片与 Recipe 契约合计 51 passed。
-- 全量后端：2187 passed、13 skipped、1 xfailed、1 deselected。deselect 项是 Windows 未启用符号链接权限时无法创建 symlink 的安全测试；Codex 终端另需 `PYTHONUTF8=1` 和非 `dumb` TERM，分别避免 GBK 测试夹具与 spinner 环境误报。
+- 全量后端：2201 passed、13 skipped、1 xfailed、1 deselected。deselect 项是 Windows 未启用符号链接权限时无法创建 symlink 的安全测试；Codex 终端另需 `PYTHONUTF8=1` 和非 `dumb` TERM，分别避免 GBK 测试夹具与 spinner 环境误报。
 - 全量前端：45 files、391 tests passed；Vite 生产构建成功。构建仅有既有 eval、动态/静态混合导入和大 chunk 警告。
 
 ## M0 首个开发节点（已完成）
@@ -137,6 +137,13 @@ M2-B1 实施结果：
 - Connector opener 显式接收 `identity_id + source_id`，复用现有 `DataConnector`、用户 connector spec、credential vault 和 ambient/no-auth 恢复路径；后台路径不读取 request header、session、SSO request token，也不伪造 Flask context。
 - 编译时的逻辑 credential reference 只有在 opener 实际恢复 loader 并完成连接/取数探针后才算 resolved；仅有 `source_id` 不能把版本提升为 validated。
 
+M2-B2 实施结果：
+
+- `LocalWorkspaceOpener` 固定 `data_home + identity_id + workspace_id`，只打开已存在且未通过 symlink 越界的 durable local Workspace；无 Web 路径的 lazy create，也不读取 `X-Workspace-Id`。
+- Data Connector 初始化已拆成不注册 Flask blueprint 的 `initialize_data_connectors()` 和 Web `register_data_connectors()`；独立进程可从相同 admin 环境/YAML、用户 connector JSON 和 loader registry 恢复配置。
+- `resolve_loader_for_identity()` 只解析显式 identity 可见的 admin/user connector。后台 opener 强制从 no-auth、vault 或 ambient 配置重新构造 loader，不把 Web 进程中的 session-only 内存缓存当成可恢复凭据，也不访问 request identity、TokenStore/SSO request token。
+- 后台凭据探针失败只返回不可恢复，不主动删除 vault 中可能暂时失效的凭据；原 Web 自动重连仍保留既有的重试后清理语义。Connector + DataOperation + Recipe 聚焦回归 139 passed；全量后端 2201 passed、13 skipped、1 xfailed、1 deselected。
+
 ### 单一确定性 Executor
 
 - dry run 与 manual run 共享一个 `RecipeExecutor`，差别只在 run kind 和成功后的 lifecycle 动作；Executor 只接受已持久化 `RecipeSpec` 与 typed-bound execution，不接受聊天、Redux 或任意代码覆盖。
@@ -159,6 +166,7 @@ M2-B1 实施结果：
 | 2026-08-18 | M0-C | 将 visualize 声明输入升级为后端契约；签名后原子记录 transform/chart，回传 artifact ids，缺父时保留交互结果但禁用血缘 | 聚焦 53 passed；agent/route 781 passed；全量后端 2176 passed、13 skipped、1 xfailed、1 deselected | `feat: record visualize artifact lineage` |
 | 2026-08-18 | M0-D / M2-A | 新增稳定祖先拓扑遍历、RecipeSpec v1、结构化 typed binding 和确定性 Compiler；对实际表、schema、签名和父表逐项失败关闭，并生成派生 Workflow Markdown | Recipe 49 passed；纵向切片 + Recipe 51 passed；agent/route 714 passed；全量后端 2187 passed、13 skipped、1 xfailed、1 deselected；前端 391 passed；生产构建成功 | `feat: compile artifact lineage into recipes` |
 | 2026-08-18 | M2-B1 | 原子发布不可变 Recipe JSON/Workflow/manifest；以共享 automation SQLite 保存 scope、draft 生命周期和 artifact 引用，支持幂等恢复并拒绝篡改或跨 scope 访问 | Recipe + Workspace + vault 聚焦回归 120 passed | `feat: persist immutable recipe drafts` |
+| 2026-08-18 | M2-B2 | 拆分无 Flask 的 connector registry 初始化；新增显式 scope Workspace/Connector opener，只认可重启后可恢复的 no-auth、vault 或 ambient 连接 | 聚焦 139 passed；全量后端 2201 passed、13 skipped、1 xfailed、1 deselected | `feat: add request-independent recipe openers` |
 
 ## 已确认决策
 

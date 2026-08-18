@@ -604,6 +604,21 @@ class DataConnector:
             # No vault creds — try SSO token exchange as last resort
             return self._try_sso_auto_connect(identity)
 
+        return self._try_vault_reconnect(
+            identity,
+            stored_params,
+            clear_on_failure=True,
+        )
+
+    def _try_vault_reconnect(
+        self,
+        identity: str,
+        stored_params: dict[str, Any],
+        *,
+        clear_on_failure: bool,
+    ) -> ExternalDataLoader | None:
+        """Restore one identity from vault params without reading request state."""
+
         for attempt in range(_RECONNECT_MAX_ATTEMPTS):
             if attempt:
                 time.sleep(_RECONNECT_BACKOFF_BASE * (2 ** (attempt - 1)))
@@ -621,13 +636,22 @@ class DataConnector:
                             self._source_id, identity[:16],
                             attempt + 1, _RECONNECT_MAX_ATTEMPTS)
             except Exception as exc:
-                logger.warning("Auto-reconnect failed for '%s'/%s (attempt %d/%d): %s",
-                               self._source_id, identity[:16],
-                               attempt + 1, _RECONNECT_MAX_ATTEMPTS, exc)
+                logger.warning(
+                    "Auto-reconnect failed for '%s'/%s (attempt %d/%d): %s",
+                    self._source_id,
+                    identity[:16],
+                    attempt + 1,
+                    _RECONNECT_MAX_ATTEMPTS,
+                    type(exc).__name__,
+                )
 
-        logger.info("Auto-reconnect exhausted for '%s'/%s, clearing stale credentials",
-                    self._source_id, identity[:16])
-        self._vault_delete(identity)
+        if clear_on_failure:
+            logger.info(
+                "Auto-reconnect exhausted for '%s'/%s, clearing stale credentials",
+                self._source_id,
+                identity[:16],
+            )
+            self._vault_delete(identity)
         return None
 
     def _try_ambient_reconnect(self, identity: str) -> ExternalDataLoader | None:
@@ -787,6 +811,36 @@ class DataConnector:
             return loader
         raise ValueError("Not connected. Please connect first.")
 
+    def _require_loader_for_identity(self, identity: str) -> ExternalDataLoader:
+        """Resolve a loader without consulting Flask request or session identity."""
+        if not isinstance(identity, str) or not identity.strip():
+            raise ValueError("Explicit connector identity is required")
+        # Do not accept an in-memory loader as proof that a background worker
+        # can recover the connection after restart. Reconstruct it from an
+        # explicit durable or ambient credential path every time.
+        if _loader_auth_mode(self._loader_class) == "none":
+            loader = self._loader_class()
+            self._loaders[identity] = loader
+            return loader
+
+        stored_params = self._vault_retrieve(identity)
+        if stored_params is not None:
+            loader = self._try_vault_reconnect(
+                identity,
+                stored_params,
+                clear_on_failure=False,
+            )
+            if loader is not None:
+                return loader
+
+        # Ambient reconnect is request-independent for connection/credentials
+        # modes. Token and delegated modes return before consulting request-
+        # bound TokenStore or SSO token paths.
+        loader = self._try_ambient_reconnect(identity)
+        if loader is not None:
+            return loader
+        raise ValueError("Not connected. Please connect first.")
+
 
 # ---------------------------------------------------------------------------
 # Shared action routes — connector_id in JSON body
@@ -814,6 +868,26 @@ def resolve_live_loader(source_id: str) -> "ExternalDataLoader":
     """
     _, connector = _resolve_connector_with_key({"connector_id": source_id})
     return connector._require_loader()
+
+
+def resolve_loader_for_identity(
+    identity_id: str,
+    source_id: str,
+) -> "ExternalDataLoader":
+    """Resolve a loader for an explicit identity without Flask request state."""
+    if not isinstance(identity_id, str) or not identity_id.strip():
+        raise ValueError("Explicit connector identity is required")
+    if not isinstance(source_id, str) or not source_id.strip():
+        raise ValueError("Explicit connector source_id is required")
+
+    load_connectors(identity_id)
+    if source_id in _ADMIN_CONNECTOR_IDS and source_id in DATA_CONNECTORS:
+        connector = DATA_CONNECTORS[source_id]
+    else:
+        connector = DATA_CONNECTORS.get(_user_connector_key(identity_id, source_id))
+    if connector is None:
+        raise ValueError("Connector is not available for the requested identity")
+    return connector._require_loader_for_identity(identity_id)
 
 
 def resolve_catalog_refresh_target(
@@ -2649,28 +2723,18 @@ def load_connectors(identity: str | None = None) -> None:
 # Registration
 # ---------------------------------------------------------------------------
 
-def register_data_connectors(app: Flask) -> None:
-    """Register the global connectors blueprint + admin-provisioned connectors.
-
-    Called from ``app.py`` during startup.
-
-    - Registers ``connectors_bp`` with all shared routes.
-    - Loads admin connectors from ``DATA_FORMULATOR_HOME/connectors.yaml``
-      and ``DF_SOURCES__*`` env vars.
-    - User connectors are loaded lazily on first request (need identity).
-    """
+def initialize_data_connectors(*, disable_data_connectors: bool = False) -> None:
+    """Load configured connector objects without registering Flask routes."""
     from data_formulator.data_loader import DATA_LOADERS, DISABLED_LOADERS
 
-    # 1. Register the global management blueprint
-    app.register_blueprint(connectors_bp)
-
-    # 2. Load admin connectors from YAML/env (skipped when external connectors
-    #    are disabled — but the blueprint and built-in sample_datasets
-    #    connector below remain available so users can still load demo data).
-    disabled = bool(app.config.get('CLI_ARGS', {}).get('disable_data_connectors'))
-    admin_specs = [] if disabled else _load_admin_specs()
+    admin_specs = [] if disable_data_connectors else _load_admin_specs()
 
     for spec in admin_specs:
+        if (
+            spec.source_id in _ADMIN_CONNECTOR_IDS
+            and spec.source_id in DATA_CONNECTORS
+        ):
+            continue
         loader_class = DATA_LOADERS.get(spec.loader_type)
         if not loader_class:
             if spec.loader_type in DISABLED_LOADERS:
@@ -2717,3 +2781,13 @@ def register_data_connectors(app: Flask) -> None:
         )
         _ADMIN_CONNECTOR_IDS.add("sample_datasets")
         logger.info("Registered built-in 'sample_datasets' connector")
+
+
+def register_data_connectors(app: Flask) -> None:
+    """Register Flask routes and initialize configured connector objects."""
+    app.register_blueprint(connectors_bp)
+    initialize_data_connectors(
+        disable_data_connectors=bool(
+            app.config.get('CLI_ARGS', {}).get('disable_data_connectors')
+        )
+    )
