@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import heapq
 import json
 import os
 import tempfile
@@ -74,6 +75,14 @@ class ArtifactLedger:
     def storage_path(self) -> Path:
         return self._storage_path
 
+    @property
+    def identity_id(self) -> str:
+        return self._identity_id
+
+    @property
+    def workspace_id(self) -> str:
+        return self._workspace_id
+
     def list_nodes(self) -> tuple[ArtifactNode, ...]:
         return self._read_unlocked()
 
@@ -88,6 +97,66 @@ class ArtifactLedger:
             (node for node in self._read_unlocked() if node.origin_id == origin_id),
             None,
         )
+
+    def ancestry(self, target_artifact_ids: Iterable[str]) -> tuple[ArtifactNode, ...]:
+        """Return all target ancestors in deterministic topological order."""
+        targets = tuple(sorted(set(target_artifact_ids)))
+        if not targets:
+            raise ArtifactLineageError("At least one target artifact is required")
+
+        nodes = self._read_unlocked()
+        by_id = {node.artifact_id: node for node in nodes}
+        missing_targets = [
+            artifact_id for artifact_id in targets if artifact_id not in by_id
+        ]
+        if missing_targets:
+            raise ArtifactLineageError(
+                f"Artifact lineage target(s) not found: {missing_targets}"
+            )
+
+        reachable: set[str] = set()
+        pending = list(targets)
+        while pending:
+            artifact_id = pending.pop()
+            if artifact_id in reachable:
+                continue
+            node = by_id.get(artifact_id)
+            if node is None:
+                raise ArtifactLineageError(
+                    f"Artifact lineage parent not found: {artifact_id}"
+                )
+            reachable.add(artifact_id)
+            pending.extend(node.parent_ids)
+
+        indegree = {
+            artifact_id: sum(
+                parent_id in reachable
+                for parent_id in by_id[artifact_id].parent_ids
+            )
+            for artifact_id in reachable
+        }
+        children: dict[str, list[str]] = {artifact_id: [] for artifact_id in reachable}
+        for artifact_id in reachable:
+            for parent_id in by_id[artifact_id].parent_ids:
+                if parent_id in reachable:
+                    children[parent_id].append(artifact_id)
+        for child_ids in children.values():
+            child_ids.sort()
+
+        ready = [artifact_id for artifact_id, degree in indegree.items() if degree == 0]
+        heapq.heapify(ready)
+        ordered: list[ArtifactNode] = []
+        while ready:
+            artifact_id = heapq.heappop(ready)
+            ordered.append(by_id[artifact_id])
+            for child_id in children[artifact_id]:
+                indegree[child_id] -= 1
+                if indegree[child_id] == 0:
+                    heapq.heappush(ready, child_id)
+
+        if len(ordered) != len(reachable):
+            raise ArtifactLineageError("Artifact lineage contains a dependency cycle")
+        return tuple(ordered)
 
     def record(self, node: ArtifactNode) -> ArtifactNode:
         return self.record_many((node,))[0]

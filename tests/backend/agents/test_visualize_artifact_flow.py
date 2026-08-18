@@ -15,8 +15,10 @@ from data_formulator.data_operations import (
     DataOperationStatus,
 )
 from data_formulator.datalake.workspace import Workspace
+from data_formulator.recipes.compiler import RecipeCompiler
 from data_formulator.recipes.lineage import ArtifactLedger
 from data_formulator.recipes.models import ArtifactType
+from data_formulator.recipes.spec import RecipeStepKind
 from data_formulator.security.code_signing import sign_result
 
 
@@ -126,6 +128,23 @@ def test_load_transform_chart_vertical_lineage(tmp_path, monkeypatch) -> None:
     metadata = workspace.get_table_metadata(output_table)
     assert metadata.import_options["visualize"]["input_tables"] == ["orders"]
     assert metadata.import_options["artifact_id"] == nodes[1].artifact_id
+
+    compiler = RecipeCompiler.for_workspace(workspace)
+    first = compiler.compile(
+        target_artifact_ids=(nodes[2].artifact_id,),
+        name="Regional totals",
+    )
+    second = compiler.compile(
+        target_artifact_ids=(nodes[2].artifact_id,),
+        name="Regional totals",
+    )
+    assert [step.kind for step in first.spec.steps] == [
+        RecipeStepKind.LOAD,
+        RecipeStepKind.TRANSFORM,
+        RecipeStepKind.CHART,
+    ]
+    assert first.spec.canonical_bytes() == second.spec.canonical_bytes()
+    assert first.workflow_markdown == second.workflow_markdown
 
 
 def test_missing_parent_keeps_visualize_result_but_marks_lineage_unavailable(

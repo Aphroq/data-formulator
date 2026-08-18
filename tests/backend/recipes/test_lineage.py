@@ -171,6 +171,42 @@ def test_concurrent_records_do_not_lose_artifacts(durable_workspace) -> None:
     }
 
 
+def test_ancestry_is_stable_and_independent_of_target_order(durable_workspace) -> None:
+    ledger = ArtifactLedger.for_workspace(durable_workspace)
+    first = _artifact(origin_id="load/first", content=b"first")
+    second = _artifact(origin_id="load/second", content=b"second")
+    combined = _artifact(
+        origin_id="transform/combined",
+        artifact_type=ArtifactType.TRANSFORM,
+        parent_ids=(first.artifact_id, second.artifact_id),
+        content=b"combined",
+    )
+    chart = _artifact(
+        origin_id="chart/combined",
+        artifact_type=ArtifactType.CHART,
+        parent_ids=(combined.artifact_id,),
+        content=b"chart",
+    )
+    ledger.record_many((second, first, combined, chart))
+
+    expected_roots = tuple(sorted((first.artifact_id, second.artifact_id)))
+    ancestry = ledger.ancestry((chart.artifact_id, second.artifact_id))
+
+    assert tuple(node.artifact_id for node in ancestry[:2]) == expected_roots
+    assert tuple(node.artifact_id for node in ancestry[2:]) == (
+        combined.artifact_id,
+        chart.artifact_id,
+    )
+    assert ledger.ancestry((second.artifact_id, chart.artifact_id)) == ancestry
+
+
+def test_ancestry_rejects_unknown_target(durable_workspace) -> None:
+    ledger = ArtifactLedger.for_workspace(durable_workspace)
+
+    with pytest.raises(ArtifactLineageError, match="target"):
+        ledger.ancestry(("art_" + "7" * 64,))
+
+
 def test_ledger_fails_closed_when_persisted_identity_is_corrupted(durable_workspace) -> None:
     ledger = ArtifactLedger.for_workspace(durable_workspace)
     artifact = ledger.record(_artifact(origin_id="load/orders"))

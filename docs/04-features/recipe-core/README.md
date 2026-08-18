@@ -8,7 +8,7 @@
 | Worktree | `D:\projects\dfm-wt-recipe` |
 | 本机实例 | `recipe`：后端 5569、Vite 5175、数据目录 `D:\projects\dfm-runtime\recipe` |
 | 基线 | 共享文档提交，父提交为 Data Formulator `5477f0e` |
-| 当前阶段 | M0-C 已完成：后端 transform/chart 原子血缘已接入；下一步做向上遍历与稳定 Compiler 探针 |
+| 当前阶段 | M0-D / M2-A 已完成：真实三步血缘可稳定编译为 RecipeSpec v1；下一步做 durable repository、独立 opener、dry run、发布和 manual run |
 
 ## 目标
 
@@ -55,8 +55,8 @@
 
 - Recipe Worktree 已建立独立 `.venv` 与 `node_modules`；Yarn 下载缓存使用 `D:\projects\dfm-runtime\recipe\yarn-cache`，避免 Windows 全局缓存锁争用。
 - 系统 Node `20.15.1` 低于 Vite 7.3.3 的最低要求；验证使用工作区运行时 Node `24.19.0`。后续固定启动入口必须显式选择兼容 Node，不能靠当前系统 PATH。
-- 聚焦后端契约：30 passed。
-- 全量后端：2130 passed、13 skipped、1 xfailed、1 deselected。deselect 项是 Windows 未启用符号链接权限时无法创建 symlink 的安全测试；Codex 终端另需 `PYTHONUTF8=1` 和非 `dumb` TERM，分别避免 GBK 测试夹具与 spinner 环境误报。
+- 聚焦 Recipe 契约：49 passed；包含 sandbox 的纵向切片与 Recipe 契约合计 51 passed。
+- 全量后端：2187 passed、13 skipped、1 xfailed、1 deselected。deselect 项是 Windows 未启用符号链接权限时无法创建 symlink 的安全测试；Codex 终端另需 `PYTHONUTF8=1` 和非 `dumb` TERM，分别避免 GBK 测试夹具与 spinner 环境误报。
 - 全量前端：45 files、391 tests passed；Vite 生产构建成功。构建仅有既有 eval、动态/静态混合导入和大 chunk 警告。
 
 ## M0 首个开发节点（已完成）
@@ -98,6 +98,16 @@
 - derived table metadata 保存通用 `artifact_id` 和 visualize binding；metadata 链接失败时 ledger 仍是事实来源，后续父解析可按唯一 output table 回查。
 - 使用 loader 替身的真实纵向切片已覆盖 load → sandbox transform → signed code → chart 三节点及父链；M0-C 聚焦 Recipe/Agent 测试 53 passed，agent/route 相关回归 781 passed，全量后端 2176 passed、13 skipped、1 xfailed、1 deselected。
 
+## M0-D / M2-A 稳定 Compiler（已完成）
+
+- ledger 新增从一个或多个目标 Artifact 向上收集祖先的稳定 Kahn 拓扑遍历；可达根和同层节点以 Artifact id 排序，因此不受目标顺序或 ledger JSON 中节点顺序影响。
+- `RecipeSpec` v1 使用 frozen dataclass 和既有 canonical JSON/SHA-256 原语，包含 scope、目标、显式依赖、load 输入模式、credential reference、typed parameters/bindings、每步执行快照与 hash/schema、最终输出和 compiler version；反序列化会重算 step/recipe hash 并拒绝未知字段或类型强制转换。
+- Compiler 复用既有 `ConnectorQueryStep` 解析 load 快照；重新读取实际 parquet 与 Arrow schema，校验 transform HMAC、声明父表和 chart 父表/content hash，缺失、篡改、schema 变化或 v1 不支持的 Artifact 类型全部失败关闭。
+- 相同目标集生成字节级一致的 Recipe JSON、`recipe_hash`、`version_id` 和 Workflow Markdown；Markdown 只由机器规范派生，不参与执行。
+- 首批参数 slot 只开放 load filter value 与正整数 limit。绑定先按 `string`、`integer`、`number`、`boolean`、`date`、`datetime` 校验，再修改已验证的 JSON 结构；不做 Python/SQL 字符串替换。新增 slot 必须显式扩展 enum 和结构校验。
+- `refreshable` 当前只表示 Artifact 中有稳定 `source_id` 和逻辑 credential reference；它不证明后台能够恢复凭据。M2-B 必须由 request-independent opener 验证连接并完成 dry run，才可进入 `validated` 或 `published`。
+- 使用数据库 loader 替身的纵向测试现已覆盖 load → sandbox transform → signed code → chart → ancestry → 两次稳定编译；Recipe 聚焦 49 passed，Agent/路由回归 714 passed，全量后端 2187 passed、13 skipped、1 xfailed、1 deselected；前端 391 passed，生产构建成功。
+
 ## 开发记录
 
 | 日期 | 阶段 | 实质变更 | 验证 | 提交 |
@@ -111,6 +121,7 @@
 | 2026-08-18 | M0-A | 新增 canonical JSON、不可变 ArtifactNode、workspace-scoped durable ledger 与显式 Workspace storage capability；ephemeral/Azure 无正式 artifact store 时失败关闭 | Recipe 契约 30 passed；全量后端 2160 passed、13 skipped、1 xfailed、1 deselected | `feat: add durable artifact lineage core` |
 | 2026-08-18 | M0-B | DataOperation 成功写表后记录 load Artifact；完整复制 step，对实际 parquet 和 Arrow schema 生成独立 SHA-256，并支持写表后 lineage 补偿重试 | 聚焦链路 63 passed；全量后端 2165 passed、13 skipped、1 xfailed、1 deselected | `feat: record loaded tables as artifacts` |
 | 2026-08-18 | M0-C | 将 visualize 声明输入升级为后端契约；签名后原子记录 transform/chart，回传 artifact ids，缺父时保留交互结果但禁用血缘 | 聚焦 53 passed；agent/route 781 passed；全量后端 2176 passed、13 skipped、1 xfailed、1 deselected | `feat: record visualize artifact lineage` |
+| 2026-08-18 | M0-D / M2-A | 新增稳定祖先拓扑遍历、RecipeSpec v1、结构化 typed binding 和确定性 Compiler；对实际表、schema、签名和父表逐项失败关闭，并生成派生 Workflow Markdown | Recipe 49 passed；纵向切片 + Recipe 51 passed；agent/route 714 passed；全量后端 2187 passed、13 skipped、1 xfailed、1 deselected；前端 391 passed；生产构建成功 | `feat: compile artifact lineage into recipes` |
 
 ## 已确认决策
 
@@ -129,12 +140,13 @@
 - Worker 所需 workspace opener 应从 Flask 请求依赖中解耦，但本分支只提供基础能力。
 - Recipe Core 的文件型 artifact store 与 Automation 的 SQLite 元数据边界须在 publish repository 落地前固定，避免出现两套 Recipe 事实来源。
 - 当前 sandbox 的文件访问边界仍是整个 workspace；M0-C 将声明输入作为可验证的 provenance/Compiler 契约，但不声称已动态追踪 Python 的每次文件读取。若发布威胁模型要求抵御恶意已签名代码，需增加只挂载声明文件的 sandbox view。
+- M2-A 的 credential reference 仍是逻辑引用；在 M2-B 的显式 identity/workspace opener 和凭据恢复探针完成前，不得据此宣称 Recipe 可发布或后台运行。
 
 ## 合并前检查
 
-- [ ] 相同 artifact 集合产生相同 Recipe hash。
-- [ ] 缺失或篡改血缘会失败关闭。
-- [ ] typed binding 拒绝字符串注入。
+- [x] 相同 artifact 集合产生相同 Recipe hash。
+- [x] 缺失或篡改血缘会失败关闭。
+- [x] typed binding 拒绝字符串注入。
 - [ ] dry run 成功后才能发布。
 - [ ] Published RecipeVersion 不可修改。
 - [ ] 正常 manual run 不调用 LLM/TrustGraph。
