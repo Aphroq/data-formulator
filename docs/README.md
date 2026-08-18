@@ -16,6 +16,7 @@ docs/
     system-design.md
   03-delivery/
     implementation-plan.md
+    local-multi-worktree.md
     status.md
   04-features/
     analysis-integrations/
@@ -33,8 +34,9 @@ docs/
 2. [现有能力与增量判断](./01-product/current-capabilities.md)：Data Formulator 已有什么、参考材料哪些可采纳、真正缺什么。
 3. [系统设计](./02-architecture/system-design.md)：TrustGraph、Copilot、Artifact Lineage、Recipe 和 Automation 如何落地。
 4. [实施计划](./03-delivery/implementation-plan.md)：里程碑、分支、纵向切片和验收。
-5. [当前状态](./03-delivery/status.md)：现在做到哪里、下一步是什么。
-6. Feature 开发时只维护对应工程记录：
+5. [本机多 Worktree 开发约定](./03-delivery/local-multi-worktree.md)：固定端口、数据目录、浏览器状态和进程隔离。
+6. [当前状态](./03-delivery/status.md)：现在做到哪里、下一步是什么。
+7. Feature 开发时只维护对应工程记录：
    - [Analysis Integrations](./04-features/analysis-integrations/README.md)
    - [Recipe Core](./04-features/recipe-core/README.md)
    - [Automation Workbench](./04-features/automation-workbench/README.md)
@@ -60,6 +62,7 @@ docs/
 | 上游现状和复用边界 | `01-product/current-capabilities.md` |
 | 技术契约和状态机 | `02-architecture/system-design.md` |
 | 分支、顺序和验收 | `03-delivery/implementation-plan.md` |
+| 同机多分支运行资源分配 | `03-delivery/local-multi-worktree.md` |
 | 当前进度 | `03-delivery/status.md` |
 | Feature 内的实现、验证和交接 | `04-features/<feature>/README.md` |
 

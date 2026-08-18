@@ -121,6 +121,8 @@ git worktree add -b feat/automation-workbench D:\projects\dfm-wt-automation feat
 
 让 `git worktree add` 创建目标目录，不预先放置文件。
 
+多个 Worktree 在同一电脑并行运行时，必须按[本机多 Worktree 开发约定](./local-multi-worktree.md)使用固定实例槽位，隔离端口、`DATA_FORMULATOR_HOME`、浏览器状态和进程所有权。
+
 ## 测试门槛
 
 基础命令：

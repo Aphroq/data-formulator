@@ -13,7 +13,8 @@
 3. `docs/01-product/current-capabilities.md`
 4. `docs/02-architecture/system-design.md`
 5. `docs/03-delivery/implementation-plan.md`
-6. 当前分支对应的 `docs/04-features/<feature>/README.md`
+6. `docs/03-delivery/local-multi-worktree.md`
+7. 当前分支对应的 `docs/04-features/<feature>/README.md`
 
 以上是本项目的增量设计文档，不替代 Data Formulator 上游文档。修改具体模块前，必须使用 `rg` 按主题检索并阅读相关内容：
 
@@ -34,6 +35,7 @@
 - `feat/analysis-integrations` 位于 `D:\projects\dfm-wt-analysis`。
 - `feat/recipe-core` 位于 `D:\projects\dfm-wt-recipe`。
 - `feat/automation-workbench` 仅在 Recipe Core 基础契约提交后，从 Recipe Core 创建。
+- 同机并行运行多个 Worktree 时，使用 `docs/03-delivery/local-multi-worktree.md` 中的固定实例名、端口和数据目录，不临时随机分配。
 
 不要把 Feature 实现直接写到 `main`，也不要混合分支职责：
 
@@ -71,6 +73,14 @@
 - 避免空脚手架；有契约或测试时再创建模块。
 - API 所有权和 Workspace 授权必须显式校验。
 - 需要数据库或 TrustGraph 服务时，使用用户已有环境、明确提供的外部端点或测试替身，不为此启动容器。
+
+本机并行开发还必须遵守以下隔离规则：
+
+- 每个 Worktree 使用独立的后端端口、Vite 端口和 `DATA_FORMULATOR_HOME`；后者必须在后端进程启动前设置，不能只依赖 `--data-dir`。
+- Vite 必须设置与当前实例匹配的 `API_PORT`，并使用 `--strictPort`，端口被占用时直接失败。
+- 不同实例不得共享 Session、日志、凭据库、SQLite、artifact、任务队列、PID 或临时写目录；同一 Automation 实例的 Web 与 Worker 则必须解析到同一绝对数据路径。
+- 当前应用的浏览器 Cookie 不按端口隔离；在实例化 Cookie 名落地前，并行交互测试使用彼此独立的浏览器 Profile。
+- 启动前检查端口占用，只停止当前终端或本实例明确记录的进程，不按端口盲目结束未知进程。
 
 每个有意义的提交或验证节点，只更新当前 Feature 的工程记录：
 

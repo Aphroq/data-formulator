@@ -6,6 +6,7 @@
 | --- | --- |
 | 分支 | `feat/automation-workbench` |
 | Worktree | `D:\projects\dfm-wt-automation` |
+| 本机实例 | `automation`：后端 5570、Vite 5176、数据目录 `D:\projects\dfm-runtime\automation`（Worktree 创建后启用） |
 | 基线 | 在 Recipe Core 基础契约提交后从 `feat/recipe-core` 创建 |
 | 当前阶段 | 尚未创建 Worktree，等待 Recipe Core 基础契约 |
 
@@ -41,6 +42,7 @@
 | 2026-08-18 | 准备 | 增加仓库级 Agent 指南并记录分支创建前置条件 | 文档链接与范围核对 | `docs: add repository agent guide` |
 | 2026-08-18 | 准备 | Agent 指南中文化，工程记录迁入 Feature 独立目录 | 文档链接、目录和旧路径检查 | `docs: localize agent guide and organize feature records` |
 | 2026-08-18 | 准备 | 补充上游文档检索规则和无 Docker 开发约束 | 上游指南入口、文档链接和范围检查 | `docs: preserve upstream guidance and prohibit docker` |
+| 2026-08-18 | 准备 | 预留多 Worktree 本机实例和资源隔离约定 | 端口、数据目录、Worker/SQLite 边界和文档链接检查 | `docs: define multi-worktree runtime isolation` |
 
 ## 已确认决策
 

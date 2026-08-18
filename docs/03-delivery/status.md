@@ -21,11 +21,14 @@
 - 根目录中文 `AGENTS.md` 已建立，约束后续 Agent 的文档入口、分支边界、架构红线和验证门槛。
 - 项目增量文档明确为上游资料的覆盖层；实现前仍需检索根文档、`docs/dev-guides`、`docs/docs-cn` 和相关测试说明。
 - 项目开发、测试和运行不使用 Docker；上游已有容器资产保持原样且不进入默认验收路径。
+- 同机多 Worktree 固定使用 `main`、`analysis`、`recipe`、`automation` 实例槽位，分别隔离后端/Vite 端口、数据目录、桌面协调端口和外部资源命名空间。
+- 当前 Session Cookie 仍可能跨 `localhost` 端口覆盖；实例化 Cookie 名落地前，并行交互测试使用独立浏览器 Profile。
 
 ## 下一步
 
-1. 在 Analysis 和 Recipe 两个分支分别落 M0 探针、最小契约和失败测试。
-2. Recipe 基础契约提交后创建 `feat/automation-workbench`。
+1. 编码开始前增加轻量 `DF_INSTANCE_ID` Cookie 命名和 PowerShell 实例启动入口，不引入常驻进程管理器。
+2. 在 Analysis 和 Recipe 两个分支分别落 M0 探针、最小契约和失败测试。
+3. Recipe 基础契约提交后创建 `feat/automation-workbench`。
 
 ## 阻塞
 
