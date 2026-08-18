@@ -8,7 +8,7 @@
 | Worktree | `D:\projects\dfm-wt-recipe` |
 | 本机实例 | `recipe`：后端 5569、Vite 5175、数据目录 `D:\projects\dfm-runtime\recipe` |
 | 基线 | 共享文档提交，父提交为 Data Formulator `5477f0e` |
-| 当前阶段 | M0-D / M2-A 已完成：真实三步血缘可稳定编译为 RecipeSpec v1；下一步做 durable repository、独立 opener、dry run、发布和 manual run |
+| 当前阶段 | M2-B1 已完成：不可变 Recipe artifact store 与 SQLite draft repository 已落地；下一步做独立 opener、dry run、发布和 manual run |
 
 ## 目标
 
@@ -124,6 +124,13 @@
 3. `publish` 只接受 validated 版本，状态转为 `published` 后规范和验证引用不可修改；后续内容变化必须产生新 `version_id`。`archived` 是 published 的单向终态。
 4. SQLite 连接统一启用 WAL、foreign keys、`busy_timeout` 和显式事务；所有读写查询同时带 identity、workspace 和 recipe/version id，不能只凭全局 id 授权。
 
+M2-B1 实施结果：
+
+- `RecipeArtifactStore` 在 `artifacts/recipes/<recipe>/versions/<version>/` 先写同目录临时目录，再以 `os.replace` 原子发布；重复保存会逐字节验证并幂等返回，同 version 的不同 Workflow 或损坏文件拒绝覆盖。
+- manifest 固定记录 scope、Recipe hash 及 `recipe.json` / `workflow.md` 的完整 SHA-256 和长度；读取同时复核 SQLite 保存的 manifest hash、逐文件 hash、RecipeSpec 自校验 hash 和路径 scope，且拒绝 symlink 文件或越界路径。
+- `RecipeRepository` 使用标准库 `sqlite3` 和顺序 migration v1，创建共享 `recipes` / `recipe_versions` 表；draft 保存先发布不可变目录、再用 `BEGIN IMMEDIATE` 提交引用，支持进程退出后幂等补偿。
+- SQLite 不保存 `recipe_json`、代码或 Workflow；跨 identity/workspace 查询表现为 not found，跨 scope 写入和 DB/artifact 分歧失败关闭；旧版本的幂等重试不会回滚 Recipe catalog 的新名称/说明。Recipe + Workspace + vault 相关聚焦回归 120 passed。
+
 ### Request-independent opener
 
 - Workspace opener 显式接收 `identity_id + workspace_id + backend config`；首版只允许 durable local，且要求目录已经存在，不执行 Web 路径的 lazy create。
@@ -151,6 +158,7 @@
 | 2026-08-18 | M0-B | DataOperation 成功写表后记录 load Artifact；完整复制 step，对实际 parquet 和 Arrow schema 生成独立 SHA-256，并支持写表后 lineage 补偿重试 | 聚焦链路 63 passed；全量后端 2165 passed、13 skipped、1 xfailed、1 deselected | `feat: record loaded tables as artifacts` |
 | 2026-08-18 | M0-C | 将 visualize 声明输入升级为后端契约；签名后原子记录 transform/chart，回传 artifact ids，缺父时保留交互结果但禁用血缘 | 聚焦 53 passed；agent/route 781 passed；全量后端 2176 passed、13 skipped、1 xfailed、1 deselected | `feat: record visualize artifact lineage` |
 | 2026-08-18 | M0-D / M2-A | 新增稳定祖先拓扑遍历、RecipeSpec v1、结构化 typed binding 和确定性 Compiler；对实际表、schema、签名和父表逐项失败关闭，并生成派生 Workflow Markdown | Recipe 49 passed；纵向切片 + Recipe 51 passed；agent/route 714 passed；全量后端 2187 passed、13 skipped、1 xfailed、1 deselected；前端 391 passed；生产构建成功 | `feat: compile artifact lineage into recipes` |
+| 2026-08-18 | M2-B1 | 原子发布不可变 Recipe JSON/Workflow/manifest；以共享 automation SQLite 保存 scope、draft 生命周期和 artifact 引用，支持幂等恢复并拒绝篡改或跨 scope 访问 | Recipe + Workspace + vault 聚焦回归 120 passed | `feat: persist immutable recipe drafts` |
 
 ## 已确认决策
 
