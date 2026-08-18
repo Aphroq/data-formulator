@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -18,6 +19,14 @@ from data_formulator.recipes.artifact_store import (
 )
 from data_formulator.recipes.compiler import CompiledRecipe
 from data_formulator.recipes.models import HashDigest
+from data_formulator.recipes.run_store import (
+    RecipeRunArtifactError,
+    RecipeRunArtifactStore,
+    RecipeRunKind,
+    RecipeRunReference,
+    RecipeRunStatus,
+)
+from data_formulator.recipes.spec import RecipeSpec
 
 
 class RecipeRepositoryError(ValueError):
@@ -38,6 +47,10 @@ class RecipeConflictError(RecipeRepositoryError):
 
 class RecipeIntegrityError(RecipeRepositoryError):
     """SQLite metadata and immutable Workspace artifacts diverge."""
+
+
+class RecipeStateError(RecipeRepositoryError):
+    """A requested RecipeVersion lifecycle transition is not allowed."""
 
 
 class RecipeVersionStatus(StrEnum):
@@ -75,6 +88,8 @@ class StoredRecipeVersion:
     archived_at: str | None
     validation_run_id: str | None
     validation_manifest_hash: HashDigest | None
+    validation_artifact_path: str | None
+    validation_binding_hash: HashDigest | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +101,7 @@ class LoadedRecipeVersion:
 class RecipeRepository:
     """Own Recipe catalog state while immutable bytes remain in the Workspace."""
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(self, database_path: Path | str) -> None:
         self._database_path = Path(database_path).resolve()
@@ -262,6 +277,217 @@ class RecipeRepository:
         self._verify_artifact_reference(version, artifact)
         return LoadedRecipeVersion(version=version, compiled=artifact.compiled)
 
+    def mark_validated(
+        self,
+        workspace,
+        version_id: str,
+        validation_run: RecipeRunReference,
+    ) -> StoredRecipeVersion:
+        """Advance one draft using a verified, successful dry-run artifact."""
+        loaded = self.load_version(workspace, version_id)
+        if loaded.compiled.spec.has_unresolved_inputs:
+            raise RecipeStateError(
+                "RecipeVersion with unresolved inputs cannot be validated"
+            )
+        self._verify_validation_run(
+            workspace,
+            loaded.version,
+            validation_run,
+            loaded.compiled.spec,
+        )
+
+        now = self._now()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._get_version_row(
+                connection,
+                workspace.identity_id,
+                workspace.workspace_id,
+                version_id,
+            )
+            stored = self._version_from_row(row)
+            if stored.status is RecipeVersionStatus.VALIDATED:
+                if not self._same_validation_evidence(stored, validation_run):
+                    raise RecipeConflictError(
+                        "RecipeVersion already has different validation evidence"
+                    )
+                connection.commit()
+                return stored
+            if stored.status is not RecipeVersionStatus.DRAFT:
+                raise RecipeStateError(
+                    "Only a draft RecipeVersion can be marked validated"
+                )
+            connection.execute(
+                """
+                UPDATE recipe_versions
+                SET status = ?, validated_at = ?, validation_run_id = ?,
+                    validation_manifest_hash = ?, validation_artifact_path = ?,
+                    validation_binding_hash = ?
+                WHERE version_id = ? AND identity_id = ? AND workspace_id = ?
+                    AND status = ?
+                """,
+                (
+                    RecipeVersionStatus.VALIDATED.value,
+                    now,
+                    validation_run.run_id,
+                    str(validation_run.manifest_hash),
+                    validation_run.artifact_path,
+                    str(validation_run.binding_hash),
+                    version_id,
+                    workspace.identity_id,
+                    workspace.workspace_id,
+                    RecipeVersionStatus.DRAFT.value,
+                ),
+            )
+            updated = self._get_version_row(
+                connection,
+                workspace.identity_id,
+                workspace.workspace_id,
+                version_id,
+            )
+            connection.commit()
+            return self._version_from_row(updated)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def publish_version(self, workspace, version_id: str) -> StoredRecipeVersion:
+        """Publish a validated immutable RecipeVersion, idempotently."""
+        loaded = self.load_version(workspace, version_id)
+        version = loaded.version
+        if loaded.compiled.spec.has_unresolved_inputs:
+            raise RecipeStateError(
+                "RecipeVersion with unresolved inputs cannot be published"
+            )
+        if version.status is RecipeVersionStatus.DRAFT:
+            raise RecipeStateError(
+                "RecipeVersion must be validated before it can be published"
+            )
+        if version.status is RecipeVersionStatus.ARCHIVED:
+            raise RecipeStateError("Archived RecipeVersion cannot be published")
+        validation_run = self._validation_reference(version)
+        self._verify_validation_run(
+            workspace,
+            version,
+            validation_run,
+            loaded.compiled.spec,
+        )
+        if version.status is RecipeVersionStatus.PUBLISHED:
+            return version
+
+        now = self._now()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._get_version_row(
+                connection,
+                workspace.identity_id,
+                workspace.workspace_id,
+                version_id,
+            )
+            current = self._version_from_row(row)
+            if current.status is RecipeVersionStatus.PUBLISHED:
+                connection.commit()
+                return current
+            if current.status is not RecipeVersionStatus.VALIDATED:
+                raise RecipeStateError(
+                    "RecipeVersion must be validated before it can be published"
+                )
+            if not self._same_validation_evidence(current, validation_run):
+                raise RecipeIntegrityError(
+                    "RecipeVersion validation evidence changed during publication"
+                )
+            connection.execute(
+                """
+                UPDATE recipe_versions
+                SET status = ?, published_at = ?
+                WHERE version_id = ? AND identity_id = ? AND workspace_id = ?
+                    AND status = ?
+                """,
+                (
+                    RecipeVersionStatus.PUBLISHED.value,
+                    now,
+                    version_id,
+                    workspace.identity_id,
+                    workspace.workspace_id,
+                    RecipeVersionStatus.VALIDATED.value,
+                ),
+            )
+            updated = self._get_version_row(
+                connection,
+                workspace.identity_id,
+                workspace.workspace_id,
+                version_id,
+            )
+            connection.commit()
+            return self._version_from_row(updated)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def archive_version(self, workspace, version_id: str) -> StoredRecipeVersion:
+        """Move a published RecipeVersion into its immutable terminal state."""
+        loaded = self.load_version(workspace, version_id)
+        if loaded.version.status is RecipeVersionStatus.ARCHIVED:
+            return loaded.version
+        if loaded.version.status is not RecipeVersionStatus.PUBLISHED:
+            raise RecipeStateError(
+                "Only a published RecipeVersion can be archived"
+            )
+
+        now = self._now()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._get_version_row(
+                connection,
+                workspace.identity_id,
+                workspace.workspace_id,
+                version_id,
+            )
+            current = self._version_from_row(row)
+            if current.status is RecipeVersionStatus.ARCHIVED:
+                connection.commit()
+                return current
+            if current.status is not RecipeVersionStatus.PUBLISHED:
+                raise RecipeStateError(
+                    "Only a published RecipeVersion can be archived"
+                )
+            connection.execute(
+                """
+                UPDATE recipe_versions
+                SET status = ?, archived_at = ?
+                WHERE version_id = ? AND identity_id = ? AND workspace_id = ?
+                    AND status = ?
+                """,
+                (
+                    RecipeVersionStatus.ARCHIVED.value,
+                    now,
+                    version_id,
+                    workspace.identity_id,
+                    workspace.workspace_id,
+                    RecipeVersionStatus.PUBLISHED.value,
+                ),
+            )
+            updated = self._get_version_row(
+                connection,
+                workspace.identity_id,
+                workspace.workspace_id,
+                version_id,
+            )
+            connection.commit()
+            return self._version_from_row(updated)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def list_recipes(
         self,
         identity_id: str,
@@ -296,6 +522,11 @@ class RecipeRepository:
                     "SELECT version FROM automation_schema_migrations"
                 )
             }
+            unexpected = applied - set(range(1, self.SCHEMA_VERSION + 1))
+            if unexpected:
+                raise RecipeRepositoryError(
+                    f"Unsupported automation database migration(s): {sorted(unexpected)}"
+                )
             if 1 not in applied:
                 self._apply_schema_v1(connection)
                 connection.execute(
@@ -305,10 +536,14 @@ class RecipeRepository:
                     """,
                     (1, self._now()),
                 )
-            unexpected = applied - set(range(1, self.SCHEMA_VERSION + 1))
-            if unexpected:
-                raise RecipeRepositoryError(
-                    f"Unsupported automation database migration(s): {sorted(unexpected)}"
+            if 2 not in applied:
+                self._apply_schema_v2(connection)
+                connection.execute(
+                    """
+                    INSERT INTO automation_schema_migrations (version, applied_at)
+                    VALUES (?, ?)
+                    """,
+                    (2, self._now()),
                 )
             connection.commit()
         except Exception:
@@ -367,6 +602,15 @@ class RecipeRepository:
             """
         )
 
+    @staticmethod
+    def _apply_schema_v2(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "ALTER TABLE recipe_versions ADD COLUMN validation_artifact_path TEXT"
+        )
+        connection.execute(
+            "ALTER TABLE recipe_versions ADD COLUMN validation_binding_hash TEXT"
+        )
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._database_path, timeout=5.0)
         connection.row_factory = sqlite3.Row
@@ -383,6 +627,140 @@ class RecipeRepository:
     ) -> None:
         if row["identity_id"] != identity_id or row["workspace_id"] != workspace_id:
             raise RecipeScopeError("Recipe catalog identifier belongs to another scope")
+
+    def _get_version_row(
+        self,
+        connection: sqlite3.Connection,
+        identity_id: str,
+        workspace_id: str,
+        version_id: str,
+    ) -> sqlite3.Row:
+        row = connection.execute(
+            """
+            SELECT * FROM recipe_versions
+            WHERE version_id = ? AND identity_id = ? AND workspace_id = ?
+            """,
+            (version_id, identity_id, workspace_id),
+        ).fetchone()
+        if row is None:
+            raise RecipeNotFoundError(
+                "RecipeVersion was not found in this Workspace"
+            )
+        return row
+
+    @staticmethod
+    def _same_validation_evidence(
+        version: StoredRecipeVersion,
+        reference: RecipeRunReference,
+    ) -> bool:
+        return (
+            version.validation_run_id == reference.run_id
+            and version.validation_manifest_hash == reference.manifest_hash
+            and version.validation_artifact_path == reference.artifact_path
+            and version.validation_binding_hash == reference.binding_hash
+        )
+
+    @staticmethod
+    def _validation_reference(version: StoredRecipeVersion) -> RecipeRunReference:
+        if (
+            version.validation_run_id is None
+            or version.validation_manifest_hash is None
+            or version.validation_artifact_path is None
+            or version.validation_binding_hash is None
+        ):
+            raise RecipeIntegrityError(
+                "RecipeVersion validation evidence is incomplete"
+            )
+        return RecipeRunReference(
+            run_id=version.validation_run_id,
+            recipe_id=version.recipe_id,
+            version_id=version.version_id,
+            identity_id=version.identity_id,
+            workspace_id=version.workspace_id,
+            kind=RecipeRunKind.DRY_RUN,
+            status=RecipeRunStatus.SUCCEEDED,
+            binding_hash=version.validation_binding_hash,
+            artifact_path=version.validation_artifact_path,
+            manifest_hash=version.validation_manifest_hash,
+        )
+
+    @staticmethod
+    def _verify_validation_run(
+        workspace,
+        version: StoredRecipeVersion,
+        reference: RecipeRunReference,
+        spec: RecipeSpec,
+    ) -> None:
+        if not isinstance(reference, RecipeRunReference):
+            raise RecipeStateError(
+                "Validation requires a successful dry run"
+            )
+        if (
+            reference.kind is not RecipeRunKind.DRY_RUN
+            or reference.status is not RecipeRunStatus.SUCCEEDED
+        ):
+            raise RecipeStateError(
+                "Validation requires a successful dry run"
+            )
+        if (
+            reference.recipe_id != version.recipe_id
+            or reference.version_id != version.version_id
+        ):
+            raise RecipeStateError(
+                "Validation run does not match the RecipeVersion"
+            )
+        if (
+            reference.identity_id != workspace.identity_id
+            or reference.workspace_id != workspace.workspace_id
+            or version.identity_id != workspace.identity_id
+            or version.workspace_id != workspace.workspace_id
+        ):
+            raise RecipeScopeError(
+                "Validation run does not match the RecipeVersion scope"
+            )
+        try:
+            stored = RecipeRunArtifactStore.for_workspace(workspace).load(reference)
+        except RecipeRunArtifactError as exc:
+            raise RecipeIntegrityError(
+                "RecipeVersion validation run failed verification"
+            ) from exc
+        if stored.manifest.get("error") is not None:
+            raise RecipeIntegrityError(
+                "Successful validation run contains an error"
+            )
+        expected_events = [
+            (step.id, step.kind.value, status, step)
+            for step in spec.steps
+            for status in ("started", "succeeded")
+        ]
+        if len(stored.events) != len(expected_events):
+            raise RecipeIntegrityError(
+                "RecipeVersion validation run has incomplete step evidence"
+            )
+        files = stored.manifest["files"]
+        for event, (step_id, kind, status, step) in zip(
+            stored.events,
+            expected_events,
+        ):
+            if (
+                event.get("step_id") != step_id
+                or event.get("kind") != kind
+                or event.get("status") != status
+            ):
+                raise RecipeIntegrityError(
+                    "RecipeVersion validation run step evidence does not match"
+                )
+            if status != "succeeded":
+                continue
+            details = event.get("details")
+            if (
+                not isinstance(details, Mapping)
+                or details.get("schema_hash") != str(step.expected_schema)
+                or details.get("output_path") not in files
+            ):
+                raise RecipeIntegrityError(
+                    "RecipeVersion validation run output evidence does not match"
+                )
 
     @staticmethod
     def _verify_artifact_reference(
@@ -417,6 +795,7 @@ class RecipeRepository:
     @staticmethod
     def _version_from_row(row: sqlite3.Row) -> StoredRecipeVersion:
         validation_hash = row["validation_manifest_hash"]
+        validation_binding_hash = row["validation_binding_hash"]
         return StoredRecipeVersion(
             version_id=row["version_id"],
             recipe_id=row["recipe_id"],
@@ -434,6 +813,12 @@ class RecipeRepository:
             validation_manifest_hash=(
                 HashDigest.parse(validation_hash)
                 if validation_hash is not None
+                else None
+            ),
+            validation_artifact_path=row["validation_artifact_path"],
+            validation_binding_hash=(
+                HashDigest.parse(validation_binding_hash)
+                if validation_binding_hash is not None
                 else None
             ),
         )

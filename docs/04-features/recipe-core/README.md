@@ -8,7 +8,7 @@
 | Worktree | `D:\projects\dfm-wt-recipe` |
 | 本机实例 | `recipe`：后端 5569、Vite 5175、数据目录 `D:\projects\dfm-runtime\recipe` |
 | 基线 | 共享文档提交，父提交为 Data Formulator `5477f0e` |
-| 当前阶段 | M2-B2 已完成：durable local Workspace 与可恢复 Connector 已支持无 request 显式打开；下一步做 dry run、发布和 manual run |
+| 当前阶段 | M2-B 后端核心已完成：持久化 Recipe 可 dry run、验证、发布和 manual run；下一步进入 M2-C 最小 API 与 UI |
 
 ## 目标
 
@@ -55,8 +55,8 @@
 
 - Recipe Worktree 已建立独立 `.venv` 与 `node_modules`；Yarn 下载缓存使用 `D:\projects\dfm-runtime\recipe\yarn-cache`，避免 Windows 全局缓存锁争用。
 - 系统 Node `20.15.1` 低于 Vite 7.3.3 的最低要求；验证使用工作区运行时 Node `24.19.0`。后续固定启动入口必须显式选择兼容 Node，不能靠当前系统 PATH。
-- 聚焦 Recipe 契约：49 passed；包含 sandbox 的纵向切片与 Recipe 契约合计 51 passed。
-- 全量后端：2201 passed、13 skipped、1 xfailed、1 deselected。deselect 项是 Windows 未启用符号链接权限时无法创建 symlink 的安全测试；Codex 终端另需 `PYTHONUTF8=1` 和非 `dumb` TERM，分别避免 GBK 测试夹具与 spinner 环境误报。
+- 聚焦 Recipe 契约：76 passed；Recipe、DataOperation、Sandbox、代码签名和 Workspace 聚焦回归 190 passed、8 skipped。
+- 全量后端：2214 passed、13 skipped、1 xfailed、1 deselected。deselect 项是 Windows 未启用符号链接权限时无法创建 symlink 的安全测试；Codex 终端另需 `PYTHONUTF8=1` 和非 `dumb` TERM，分别避免 GBK 测试夹具与 spinner 环境误报。
 - 全量前端：45 files、391 tests passed；Vite 生产构建成功。构建仅有既有 eval、动态/静态混合导入和大 chunk 警告。
 
 ## M0 首个开发节点（已完成）
@@ -108,7 +108,7 @@
 - `refreshable` 当前只表示 Artifact 中有稳定 `source_id` 和逻辑 credential reference；它不证明后台能够恢复凭据。M2-B 必须由 request-independent opener 验证连接并完成 dry run，才可进入 `validated` 或 `published`。
 - 使用数据库 loader 替身的纵向测试现已覆盖 load → sandbox transform → signed code → chart → ancestry → 两次稳定编译；Recipe 聚焦 49 passed，Agent/路由回归 714 passed，全量后端 2187 passed、13 skipped、1 xfailed、1 deselected；前端 391 passed，生产构建成功。
 
-## M2-B 持久化与确定性执行计划（进行中）
+## M2-B 持久化与确定性执行计划（后端核心已完成）
 
 ### 事实来源边界
 
@@ -151,6 +151,15 @@ M2-B2 实施结果：
 - 每步在隔离 Run Workspace 中物化，记录实际 parquet SHA-256、schema fingerprint、耗时与状态。refreshable 数据允许 content hash 相对编译基线变化，但 schema drift、签名/step hash 不一致、输出缺失或 unresolved input 必须失败关闭；需要重新分析的 schema drift 返回 `needs_review`。
 - 事件和错误不记录 credential、连接参数、数据行或原始外部异常文本；失败 manifest 只保存稳定 error code、异常类型和经清洗的用户消息。
 
+M2-B3 实施结果：
+
+- `RecipeRunArtifactStore` 为每次执行原子占用 `artifacts/recipe-runs/<run_id>/`，在隔离 `Workspace` 中物化表和 chart；最终以原子 `manifest.json` 作为完成标记，并逐文件记录 SHA-256 与长度。读取会复核 scope、run/RecipeVersion/binding hash、descriptor、事件序列和全部输出，新增、删除、替换或 symlink 篡改均失败关闭。
+- `RecipeExecutor` 只编排 v1 的 `load`、`transform`、`chart`：load 复用 `DataOperationExecutor`，transform 复用 `LocalSandbox` 与 HMAC，chart 直接保存已校验 lineage 编译出的规范。交互 Workspace 不被修改；每步记录实际 content/schema hash 与耗时，schema drift 转为 `needs_review`。
+- typed 参数只进入内存中的结构化绑定；run descriptor 和 SQLite 只保存 `binding_hash`。DataOperation 临时写入的 bound connector metadata 会在提交前清洗，外部异常也只映射成稳定错误，因此参数值、loader params、credential 和原始异常文本不会落入运行事件或 manifest。
+- automation SQLite migration v2 补充 validation artifact path 与 binding hash；`draft → validated → published → archived` 为单向状态机。Repository 会重新打开不可变 Recipe 和成功 dry run，逐步核对 started/succeeded、schema 与输出 manifest，空成功 manifest、失败/needs-review run 或被篡改证据都不能发布。
+- `RecipeService` 是 lifecycle-aware 入口：dry run 始终从 repository 重开保存版本，成功后固定 validation 证据；manual run 只接受 published 版本。两条路径共享同一 Executor，不调用 Agent、LLM、TrustGraph 或 Workflow Replay。
+- Windows 下 Sandbox worker 会暂时把 Run Workspace 作为当前目录，因此运行目录不做完成时整体 rename；实现采用“锁内创建唯一目录 + 最终 manifest 同目录原子替换”的提交协议，避免依赖平台不支持的目录重命名语义。
+
 ## 开发记录
 
 | 日期 | 阶段 | 实质变更 | 验证 | 提交 |
@@ -167,6 +176,7 @@ M2-B2 实施结果：
 | 2026-08-18 | M0-D / M2-A | 新增稳定祖先拓扑遍历、RecipeSpec v1、结构化 typed binding 和确定性 Compiler；对实际表、schema、签名和父表逐项失败关闭，并生成派生 Workflow Markdown | Recipe 49 passed；纵向切片 + Recipe 51 passed；agent/route 714 passed；全量后端 2187 passed、13 skipped、1 xfailed、1 deselected；前端 391 passed；生产构建成功 | `feat: compile artifact lineage into recipes` |
 | 2026-08-18 | M2-B1 | 原子发布不可变 Recipe JSON/Workflow/manifest；以共享 automation SQLite 保存 scope、draft 生命周期和 artifact 引用，支持幂等恢复并拒绝篡改或跨 scope 访问 | Recipe + Workspace + vault 聚焦回归 120 passed | `feat: persist immutable recipe drafts` |
 | 2026-08-18 | M2-B2 | 拆分无 Flask 的 connector registry 初始化；新增显式 scope Workspace/Connector opener，只认可重启后可恢复的 no-auth、vault 或 ambient 连接 | 聚焦 139 passed；全量后端 2201 passed、13 skipped、1 xfailed、1 deselected | `feat: add request-independent recipe openers` |
+| 2026-08-18 | M2-B3 | 新增可校验 Run artifact、隔离确定性 Executor、dry-run validation 证据、SQLite v2 生命周期状态机和 lifecycle-aware manual run | Recipe 76 passed；相关回归 190 passed、8 skipped；全量后端 2214 passed、13 skipped、1 xfailed、1 deselected | `feat: execute and publish deterministic recipes` |
 
 ## 已确认决策
 
@@ -182,17 +192,17 @@ M2-B2 实施结果：
 - 现有 Workspace `content_hash` 是抽样 MD5；Artifact 完整性与 schema fingerprint 必须使用独立、明确版本的算法。
 - Azure Blob 首发支持取决于正式 artifact store 接口；不能使用 scratch。
 - 数据库纵向切片使用已有环境或测试替身，不建立 Docker 测试依赖。
-- Worker 所需 workspace opener 应从 Flask 请求依赖中解耦，但本分支只提供基础能力。
-- Recipe Core 的文件型 artifact store 与 Automation 的 SQLite 元数据边界须在 publish repository 落地前固定，避免出现两套 Recipe 事实来源。
+- Worker 调度、lease 与 Run catalog 属于 Automation Workbench；Recipe Core 已提供无 request opener 和确定性 service，但尚未接 Worker 生命周期。
+- Run 目录以最终 manifest 作为完成标记；进程崩溃留下的无 manifest 目录安全地不可读取，但自动回收策略留给 Automation Workbench 的维护任务。
 - 当前 sandbox 的文件访问边界仍是整个 workspace；M0-C 将声明输入作为可验证的 provenance/Compiler 契约，但不声称已动态追踪 Python 的每次文件读取。若发布威胁模型要求抵御恶意已签名代码，需增加只挂载声明文件的 sandbox view。
-- M2-A 的 credential reference 仍是逻辑引用；在 M2-B 的显式 identity/workspace opener 和凭据恢复探针完成前，不得据此宣称 Recipe 可发布或后台运行。
+- credential reference 仍是逻辑引用；只有 request-independent opener 能实际恢复连接且完整 dry run 成功时才会 validated/published。真实外部端点仍需在用户已有环境中补验，不建立 Docker 依赖。
 
 ## 合并前检查
 
 - [x] 相同 artifact 集合产生相同 Recipe hash。
 - [x] 缺失或篡改血缘会失败关闭。
 - [x] typed binding 拒绝字符串注入。
-- [ ] dry run 成功后才能发布。
-- [ ] Published RecipeVersion 不可修改。
-- [ ] 正常 manual run 不调用 LLM/TrustGraph。
+- [x] dry run 成功后才能发布。
+- [x] Published RecipeVersion 不可修改。
+- [x] 正常 manual run 不调用 LLM/TrustGraph。
 - [ ] `uv run pytest`、`yarn test`、`yarn build` 通过。

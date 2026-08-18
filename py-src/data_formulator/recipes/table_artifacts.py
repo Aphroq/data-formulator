@@ -14,16 +14,24 @@ from data_formulator.datalake.workspace_metadata import TableMetadata
 from data_formulator.recipes.models import HashDigest
 
 
-def parquet_artifact_hashes(workspace, metadata: TableMetadata) -> tuple[HashDigest, HashDigest]:
-    """Hash the complete local parquet and its persisted Arrow schema."""
-    file_path = workspace.get_file_path(metadata.filename)
-    if not isinstance(file_path, Path):
-        raise TypeError("Durable local artifact hashing requires a filesystem path")
+def parquet_file_hashes(file_path: Path) -> tuple[HashDigest, HashDigest]:
+    """Hash a complete local parquet file and its persisted Arrow schema."""
+    file_path = Path(file_path)
+    if not file_path.is_file() or file_path.is_symlink():
+        raise ValueError("Parquet artifact must be a safe regular file")
     schema = pq.read_schema(file_path)
     return (
         HashDigest.sha256_file(file_path),
         HashDigest.sha256(schema.serialize().to_pybytes()),
     )
+
+
+def parquet_artifact_hashes(workspace, metadata: TableMetadata) -> tuple[HashDigest, HashDigest]:
+    """Hash the complete local parquet and its persisted Arrow schema."""
+    file_path = workspace.get_file_path(metadata.filename)
+    if not isinstance(file_path, Path):
+        raise TypeError("Durable local artifact hashing requires a filesystem path")
+    return parquet_file_hashes(file_path)
 
 
 def table_artifact_id(metadata: TableMetadata) -> str | None:

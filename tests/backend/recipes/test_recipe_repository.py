@@ -3,20 +3,47 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import replace
 
+import pyarrow as pa
 import pytest
 
 from data_formulator.datalake.workspace import Workspace
 from data_formulator.recipes.compiler import CompiledRecipe
+from data_formulator.recipes.binding import bind_recipe_parameters
 from data_formulator.recipes.repository import (
+    RecipeConflictError,
     RecipeIntegrityError,
     RecipeNotFoundError,
     RecipeRepository,
     RecipeScopeError,
+    RecipeStateError,
     RecipeVersionStatus,
+)
+from data_formulator.recipes.executor import RecipeExecutor
+from data_formulator.recipes.run_store import (
+    RecipeRunArtifactStore,
+    RecipeRunKind,
+    RecipeRunStatus,
 )
 
 
 pytestmark = [pytest.mark.backend]
+
+
+class _LifecycleLoader:
+    def __init__(self, *, drift: bool = False):
+        self.drift = drift
+
+    def fetch_data_as_arrow(self, source_table: str, import_options: dict):
+        return pa.table({
+            "region": ["west", "east"],
+            "amount": (["30", "40"] if self.drift else [30, 40]),
+        })
+
+    def get_safe_params(self):
+        return {}
+
+    def get_column_types(self, source_table: str):
+        raise NotImplementedError
 
 
 def test_repository_factory_uses_the_shared_automation_database(
@@ -30,6 +57,41 @@ def test_repository_factory_uses_the_shared_automation_database(
     assert repository.database_path == (
         tmp_path / "data-home" / "automation" / "automation.db"
     ).resolve()
+
+
+def test_repository_migrates_existing_v1_catalog_in_place(tmp_path) -> None:
+    database_path = tmp_path / "automation.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE automation_schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        RecipeRepository._apply_schema_v1(connection)
+        connection.execute(
+            """
+            INSERT INTO automation_schema_migrations (version, applied_at)
+            VALUES (1, '2026-08-18T00:00:00Z')
+            """
+        )
+
+    RecipeRepository(database_path)
+
+    with sqlite3.connect(database_path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(recipe_versions)")
+        }
+        assert {
+            "validation_artifact_path",
+            "validation_binding_hash",
+        }.issubset(columns)
+        assert connection.execute(
+            "SELECT version FROM automation_schema_migrations ORDER BY version"
+        ).fetchall() == [(1,), (2,)]
 
 
 def test_repository_saves_and_reopens_draft_without_copying_recipe_json(
@@ -67,6 +129,13 @@ def test_repository_saves_and_reopens_draft_without_copying_recipe_json(
         assert connection.execute(
             "PRAGMA foreign_key_list(recipe_versions)"
         ).fetchall()
+        assert {
+            "validation_artifact_path",
+            "validation_binding_hash",
+        }.issubset(columns)
+        assert connection.execute(
+            "SELECT version FROM automation_schema_migrations ORDER BY version"
+        ).fetchall() == [(1,), (2,)]
 
 
 def test_repository_scopes_every_version_lookup(
@@ -140,3 +209,175 @@ def test_repository_detects_artifact_manifest_divergence(
 
     with pytest.raises(RecipeIntegrityError, match="artifact reference"):
         repository.load_version(recipe_workspace, version.version_id)
+
+
+def test_repository_validates_publishes_and_archives_with_verified_run(
+    tmp_path,
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+) -> None:
+    repository = RecipeRepository(tmp_path / "automation.db")
+    draft = repository.save_draft(recipe_workspace, executable_recipe)
+    run = RecipeExecutor(
+        recipe_workspace,
+        loader_resolver=lambda _source_id: _LifecycleLoader(),
+    ).execute(
+        executable_recipe.spec,
+        parameter_values={},
+        kind=RecipeRunKind.DRY_RUN,
+    )
+
+    validated = repository.mark_validated(
+        recipe_workspace,
+        draft.version_id,
+        run.reference,
+    )
+    idempotent = repository.mark_validated(
+        recipe_workspace,
+        draft.version_id,
+        run.reference,
+    )
+    published = RecipeRepository(repository.database_path).publish_version(
+        recipe_workspace,
+        draft.version_id,
+    )
+    published_again = repository.publish_version(
+        recipe_workspace,
+        draft.version_id,
+    )
+    with pytest.raises(RecipeStateError, match="draft"):
+        repository.mark_validated(
+            recipe_workspace,
+            draft.version_id,
+            run.reference,
+        )
+    archived = repository.archive_version(
+        recipe_workspace,
+        draft.version_id,
+    )
+
+    assert run.status is RecipeRunStatus.SUCCEEDED
+    assert validated == idempotent
+    assert validated.status is RecipeVersionStatus.VALIDATED
+    assert validated.validation_run_id == run.reference.run_id
+    assert validated.validation_manifest_hash == run.reference.manifest_hash
+    assert validated.validation_artifact_path == run.reference.artifact_path
+    assert validated.validation_binding_hash == run.reference.binding_hash
+    assert published.status is RecipeVersionStatus.PUBLISHED
+    assert published == published_again
+    assert archived.status is RecipeVersionStatus.ARCHIVED
+
+
+def test_repository_rejects_failed_validation_and_invalid_transitions(
+    tmp_path,
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+) -> None:
+    repository = RecipeRepository(tmp_path / "automation.db")
+    draft = repository.save_draft(recipe_workspace, executable_recipe)
+    drifted = RecipeExecutor(
+        recipe_workspace,
+        loader_resolver=lambda _source_id: _LifecycleLoader(drift=True),
+    ).execute(
+        executable_recipe.spec,
+        parameter_values={},
+        kind=RecipeRunKind.DRY_RUN,
+    )
+
+    assert drifted.status is RecipeRunStatus.NEEDS_REVIEW
+    with pytest.raises(RecipeStateError, match="successful dry run"):
+        repository.mark_validated(
+            recipe_workspace,
+            draft.version_id,
+            drifted.reference,
+        )
+    with pytest.raises(RecipeStateError, match="validated"):
+        repository.publish_version(recipe_workspace, draft.version_id)
+    with pytest.raises(RecipeStateError, match="published"):
+        repository.archive_version(recipe_workspace, draft.version_id)
+
+
+def test_repository_rejects_success_manifest_without_step_evidence(
+    tmp_path,
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+) -> None:
+    repository = RecipeRepository(tmp_path / "automation.db")
+    draft = repository.save_draft(recipe_workspace, executable_recipe)
+    writer = RecipeRunArtifactStore.for_workspace(recipe_workspace).begin(
+        executable_recipe.spec,
+        bind_recipe_parameters(executable_recipe.spec, {}),
+        RecipeRunKind.DRY_RUN,
+    )
+    empty_success = writer.finalize(RecipeRunStatus.SUCCEEDED)
+
+    with pytest.raises(RecipeIntegrityError, match="step evidence"):
+        repository.mark_validated(
+            recipe_workspace,
+            draft.version_id,
+            empty_success,
+        )
+
+
+def test_repository_rejects_changed_validation_evidence(
+    tmp_path,
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+) -> None:
+    repository = RecipeRepository(tmp_path / "automation.db")
+    draft = repository.save_draft(recipe_workspace, executable_recipe)
+    first = RecipeExecutor(
+        recipe_workspace,
+        loader_resolver=lambda _source_id: _LifecycleLoader(),
+    ).execute(
+        executable_recipe.spec,
+        parameter_values={},
+        kind=RecipeRunKind.DRY_RUN,
+    )
+    second = RecipeExecutor(
+        recipe_workspace,
+        loader_resolver=lambda _source_id: _LifecycleLoader(),
+    ).execute(
+        executable_recipe.spec,
+        parameter_values={},
+        kind=RecipeRunKind.DRY_RUN,
+    )
+    repository.mark_validated(
+        recipe_workspace,
+        draft.version_id,
+        first.reference,
+    )
+
+    with pytest.raises(RecipeConflictError, match="validation evidence"):
+        repository.mark_validated(
+            recipe_workspace,
+            draft.version_id,
+            second.reference,
+        )
+
+
+def test_publish_reverifies_validation_manifest(
+    tmp_path,
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+) -> None:
+    repository = RecipeRepository(tmp_path / "automation.db")
+    draft = repository.save_draft(recipe_workspace, executable_recipe)
+    run = RecipeExecutor(
+        recipe_workspace,
+        loader_resolver=lambda _source_id: _LifecycleLoader(),
+    ).execute(
+        executable_recipe.spec,
+        parameter_values={},
+        kind=RecipeRunKind.DRY_RUN,
+    )
+    repository.mark_validated(
+        recipe_workspace,
+        draft.version_id,
+        run.reference,
+    )
+    run_dir = recipe_workspace.confined_root.resolve(run.reference.artifact_path)
+    (run_dir / "events.jsonl").write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(RecipeIntegrityError, match="validation run"):
+        repository.publish_version(recipe_workspace, draft.version_id)
