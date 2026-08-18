@@ -28,11 +28,11 @@ fixed upstream baseline
 
 | 分支 | 工程记录 |
 | --- | --- |
-| `feat/analysis-integrations` | `docs/04-features/analysis-integrations.md` |
-| `feat/recipe-core` | `docs/04-features/recipe-core.md` |
-| `feat/automation-workbench` | `docs/04-features/automation-workbench.md` |
+| `feat/analysis-integrations` | `docs/04-features/analysis-integrations/README.md` |
+| `feat/recipe-core` | `docs/04-features/recipe-core/README.md` |
+| `feat/automation-workbench` | `docs/04-features/automation-workbench/README.md` |
 
-记录只包含阶段、实质变更、验证、提交和未决问题。每个有意义的提交或验证节点更新一行，不写逐命令流水账。
+每个 Feature 目录先只放一个 `README.md`，包含范围、实施顺序、工程记录、风险和检查项。以后只有确实产生独立设计或测试说明时，才在对应目录增加文件。记录只包含阶段、实质变更、验证、提交和未决问题，不写逐命令流水账。
 
 ## 里程碑
 

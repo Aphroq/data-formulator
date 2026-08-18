@@ -14,11 +14,11 @@
 - 不重复实现 Workspace 导入导出、数据导入和已有结果导出。
 - Agent 不生成最终机器 Recipe，也不在定时 Run 中自动修复。
 - 文档已按产品、架构、交付三层拆分，不再保留重复单体计划。
-- 三个 Feature 已各自建立工程记录文档。
+- `docs/04-features` 已按三个 Feature 拆分子目录，每个目录先用一个 `README.md` 维护范围和工程记录。
 - `feat/analysis-integrations` 和 `feat/recipe-core` 已各自准备独立 Worktree。
 - Git 提交身份使用仓库本地配置 `aphroq <shi1490672988@qq.com>`。
 - `origin` 已配置为 `https://github.com/Aphroq/data-formulator.git`，`upstream` 保持 Microsoft 官方仓库。
-- 根目录 `AGENTS.md` 已建立，约束后续 Agent 的文档入口、分支边界、架构红线和验证门槛。
+- 根目录中文 `AGENTS.md` 已建立，约束后续 Agent 的文档入口、分支边界、架构红线和验证门槛。
 
 ## 下一步
 

@@ -38,6 +38,7 @@
 | --- | --- | --- | --- | --- |
 | 2026-08-18 | 准备 | 核对真实 Skill、模型注册表和 LiteLLM 扩展点，建立共享文档与独立 Worktree | 固定源码审查、文档检查 | `docs: establish project plan` |
 | 2026-08-18 | 准备 | 增加仓库级 Agent 指南并配置 fork remote | 文档链接、范围和 Git remote 核对 | `docs: add repository agent guide` |
+| 2026-08-18 | 准备 | Agent 指南中文化，工程记录迁入 Feature 独立目录 | 文档链接、目录和旧路径检查 | `docs: localize agent guide and organize feature records` |
 
 ## 已确认决策
 

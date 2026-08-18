@@ -16,9 +16,12 @@ docs/
     implementation-plan.md
     status.md
   04-features/
-    analysis-integrations.md
-    recipe-core.md
-    automation-workbench.md
+    analysis-integrations/
+      README.md
+    recipe-core/
+      README.md
+    automation-workbench/
+      README.md
   ...                     # Data Formulator 上游文档，未重组
 ```
 
@@ -30,9 +33,9 @@ docs/
 4. [实施计划](./03-delivery/implementation-plan.md)：里程碑、分支、纵向切片和验收。
 5. [当前状态](./03-delivery/status.md)：现在做到哪里、下一步是什么。
 6. Feature 开发时只维护对应工程记录：
-   - [Analysis Integrations](./04-features/analysis-integrations.md)
-   - [Recipe Core](./04-features/recipe-core.md)
-   - [Automation Workbench](./04-features/automation-workbench.md)
+   - [Analysis Integrations](./04-features/analysis-integrations/README.md)
+   - [Recipe Core](./04-features/recipe-core/README.md)
+   - [Automation Workbench](./04-features/automation-workbench/README.md)
 
 ## 事实来源
 
@@ -43,7 +46,7 @@ docs/
 | 技术契约和状态机 | `02-architecture/system-design.md` |
 | 分支、顺序和验收 | `03-delivery/implementation-plan.md` |
 | 当前进度 | `03-delivery/status.md` |
-| Feature 内的实现、验证和交接 | `04-features/<feature>.md` |
+| Feature 内的实现、验证和交接 | `04-features/<feature>/README.md` |
 
 ## 维护规则
 
