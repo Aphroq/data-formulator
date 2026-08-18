@@ -1,6 +1,6 @@
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -8,14 +8,16 @@ vi.mock('react-i18next', () => ({
     useTranslation: () => ({
         t: (key: string) => ({
             'appBar.primaryNavigation': 'Primary navigation',
-            'appBar.app': 'App',
             'appBar.automation': 'Automation',
-            'appBar.about': 'About',
+            'sidebar.openUpload': 'Add data',
+            'sidebar.sessions': 'Saved workspaces',
+            'sidebar.openDataConnectors': 'Data connectors',
+            'sidebar.knowledge': 'Agent knowledge',
         }[key] ?? key),
     }),
 }));
 
-import { AppNavigation } from '../../../../src/app/AppNavigation';
+import { WorkspaceNavigationRail } from '../../../../src/views/WorkspaceNavigationRail';
 import { LegacyRecipesRedirect } from '../../../../src/app/LegacyRecipesRedirect';
 
 
@@ -25,25 +27,43 @@ const LocationProbe = () => {
 };
 
 
-describe('AppNavigation', () => {
-    it('shows Automation only when enabled and marks the current page', () => {
-        const { rerender } = render(
+describe('WorkspaceNavigationRail', () => {
+    it('places Automation beside the existing workspace destinations', () => {
+        const onSelectTab = vi.fn();
+        render(
             <MemoryRouter initialEntries={['/automation']}>
-                <AppNavigation automationEnabled />
+                <WorkspaceNavigationRail
+                    automationActive
+                    automationEnabled
+                    onAddData={vi.fn()}
+                    onSelectTab={onSelectTab}
+                />
             </MemoryRouter>,
         );
 
-        expect(screen.getByRole('navigation', { name: 'Primary navigation' })).toBeInTheDocument();
+        const navigation = screen.getByRole('navigation', { name: 'Primary navigation' });
+        expect(navigation).toContainElement(screen.getByRole('button', { name: 'Saved workspaces' }));
+        expect(navigation).toContainElement(screen.getByRole('button', { name: 'Data connectors' }));
+        expect(navigation).toContainElement(screen.getByRole('button', { name: 'Agent knowledge' }));
         expect(screen.getByRole('link', { name: 'Automation' })).toHaveAttribute('aria-current', 'page');
-        expect(screen.getByRole('link', { name: 'App' })).not.toHaveAttribute('aria-current');
 
-        rerender(
+        fireEvent.click(screen.getByRole('button', { name: 'Saved workspaces' }));
+        expect(onSelectTab).toHaveBeenCalledWith('sessions');
+    });
+
+    it('hides only the new Automation entry when the feature is disabled', () => {
+        render(
             <MemoryRouter initialEntries={['/app']}>
-                <AppNavigation automationEnabled={false} />
+                <WorkspaceNavigationRail
+                    automationEnabled={false}
+                    onAddData={vi.fn()}
+                    onSelectTab={vi.fn()}
+                />
             </MemoryRouter>,
         );
 
         expect(screen.queryByRole('link', { name: 'Automation' })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Saved workspaces' })).toBeInTheDocument();
     });
 });
 

@@ -64,6 +64,7 @@ import GitHubIcon from '@mui/icons-material/GitHub';
 import { ExampleSession, exampleSessions, ExampleSessionCard, fetchExampleSessions } from './ExampleSessions';
 import { useDataRefresh, useDerivedTableRefresh } from '../app/useDataRefresh';
 import { useTranslation } from 'react-i18next';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { fetchWithIdentity, getUrls, CONNECTOR_URLS } from '../app/utils';
 import { apiRequest } from '../app/apiClient';
 import { listWorkspaces, loadWorkspace, deleteWorkspace, exportWorkspace, importWorkspace, onWorkspaceListChanged, updateWorkspaceMeta, WorkspaceLoadSupersededError } from '../app/workspaceService';
@@ -114,6 +115,8 @@ export const DataFormulatorFC = ({ }) => {
 
     const dispatch = useDispatch<AppDispatch>();
     const { t } = useTranslation();
+    const location = useLocation();
+    const navigate = useNavigate();
 
     // Auto-focus removed: focus is the only thing that opens the canvas, so
     // re-focusing whenever it clears would make closing impossible. Table
@@ -338,7 +341,7 @@ export const DataFormulatorFC = ({ }) => {
     const sessionLoading = useSelector((state: DataFormulatorState) => state.sessionLoading);
     const sessionLoadingLabel = useSelector((state: DataFormulatorState) => state.sessionLoadingLabel);
 
-    const openUploadDialog = (tab: UploadTabType) => {
+    const openUploadDialog = useCallback((tab: UploadTabType) => {
         if (activeWorkspace?.readOnly) return;
         // If no workspace is active, generate an ID (backend creates folder lazily on first data op)
         if (!activeWorkspace) {
@@ -355,7 +358,18 @@ export const DataFormulatorFC = ({ }) => {
             : tab;
         setUploadDialogInitialTab(resolvedTab);
         setUploadDialogOpen(true);
-    };
+    }, [activeWorkspace, dataLoadingChatMessages.length, dispatch]);
+
+    // The standalone Automation rail routes back here before opening the
+    // existing upload dialog. Clear the one-shot navigation state immediately
+    // so a refresh or history traversal cannot reopen it.
+    useEffect(() => {
+        const action = (location.state as { workspaceNavigationAction?: string } | null)
+            ?.workspaceNavigationAction;
+        if (action !== 'add-data') return;
+        navigate(location.pathname, { replace: true, state: null });
+        openUploadDialog('menu');
+    }, [location.key, location.pathname, location.state, navigate, openUploadDialog]);
 
     // The dialog needs a workspace id to talk to the backend, but opening it is
     // not entering a session: stay on the landing page until data lands.

@@ -70,16 +70,18 @@ import ViewSidebarIcon from '@mui/icons-material/ViewSidebar';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import {
     createBrowserRouter,
+    Link as RouterLink,
     Outlet,
     RouterProvider,
     useLocation,
+    useNavigate,
     useRouteError,
     useSearchParams,
 } from "react-router-dom";
 import { About } from '../views/About';
 import { Automation } from '../views/Recipes';
-import { AppNavigation } from './AppNavigation';
 import { LegacyRecipesRedirect } from './LegacyRecipesRedirect';
+import { WorkspaceNavigationRail, type WorkspaceNavigationTab } from '../views/WorkspaceNavigationRail';
 import { MessageSnackbar } from '../views/MessageSnackbar';
 import { ChartRenderService } from '../views/ChartRenderService';
 import { DictTable } from '../components/ComponentType';
@@ -134,6 +136,39 @@ const AppBar = styled(MuiAppBar)(({ theme }) => ({
         duration: theme.transitions.duration.leavingScreen,
     }),
 }));
+
+const TopNavButton: FC<{ to: string; label: string; selected: boolean }> = ({ to, label, selected }) => (
+    <Button
+        component={RouterLink}
+        to={to}
+        aria-current={selected ? 'page' : undefined}
+        onClick={(event) => {
+            if (selected) {
+                event.preventDefault();
+            }
+        }}
+        sx={{
+            textDecoration: 'none',
+            textTransform: 'none',
+            fontSize: textVar.md,
+            fontWeight: 400,
+            border: 'none',
+            borderRadius: 0,
+            px: 1.5,
+            py: 0.5,
+            minWidth: 'auto',
+            cursor: selected ? 'default' : 'pointer',
+            color: selected ? 'text.primary' : 'text.secondary',
+            backgroundColor: selected ? 'rgba(0, 0, 0, 0.08)' : 'transparent',
+            '&:hover': {
+                color: 'text.primary',
+                backgroundColor: selected ? 'rgba(0, 0, 0, 0.08)' : 'rgba(0, 0, 0, 0.04)',
+            },
+        }}
+    >
+        {label}
+    </Button>
+);
 
 declare module '@mui/material/styles' {
     interface PaletteColor {
@@ -257,6 +292,69 @@ const LanguageMenuItems: React.FC<{ onSelect: () => void }> = ({ onSelect }) => 
                     </ListItemText>
                 </MenuItem>
             ))}
+        </>
+    );
+};
+
+/** Compact replacement for the original About / App top-nav buttons. */
+const PageNavMenu: React.FC<{ isAboutPage: boolean }> = ({ isAboutPage }) => {
+    const { t } = useTranslation();
+    const navigate = useNavigate();
+    const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+    const pages = [
+        { to: '/about', label: t('appBar.about'), selected: isAboutPage },
+        { to: '/app', label: t('appBar.app'), selected: !isAboutPage },
+    ];
+    const currentLabel = pages.find(page => page.selected)?.label ?? '';
+
+    return (
+        <>
+            <Button
+                color="inherit"
+                onClick={(event) => setAnchorEl(event.currentTarget)}
+                endIcon={<KeyboardArrowDownIcon sx={{ fontSize: iconVar.md, color: 'text.secondary' }} />}
+                aria-haspopup="menu"
+                sx={{
+                    textTransform: 'none',
+                    minWidth: 0,
+                    px: 0.75,
+                    gap: 0.25,
+                    '&:hover': { backgroundColor: 'rgba(0, 0, 0, 0.04)' },
+                }}
+            >
+                <Typography noWrap component="h1" sx={{ fontSize: textVar.xl, fontWeight: 300, letterSpacing: '0.03em' }}>
+                    {toolName}
+                </Typography>
+                <Typography noWrap sx={{ fontSize: textVar.md, color: 'text.secondary' }}>
+                    {`: ${currentLabel}`}
+                </Typography>
+            </Button>
+            <Menu
+                anchorEl={anchorEl}
+                open={Boolean(anchorEl)}
+                onClose={() => setAnchorEl(null)}
+                anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+            >
+                {pages.map(page => (
+                    <MenuItem
+                        key={page.to}
+                        selected={page.selected}
+                        sx={menuItemSx}
+                        onClick={() => {
+                            setAnchorEl(null);
+                            if (!page.selected) navigate(page.to);
+                        }}
+                    >
+                        <ListItemIcon>
+                            {page.selected ? <CheckIcon fontSize="small" /> : null}
+                        </ListItemIcon>
+                        <ListItemText primaryTypographyProps={{ fontSize: textVar.md }}>
+                            {`${toolName}: ${page.label}`}
+                        </ListItemText>
+                    </MenuItem>
+                ))}
+            </Menu>
         </>
     );
 };
@@ -963,6 +1061,7 @@ const AppShell: FC = () => {
     const dispatch = useDispatch<AppDispatch>();
     const { t } = useTranslation();
     const location = useLocation();
+    const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
     const viewMode = useSelector((state: DataFormulatorState) => state.viewMode);
     const tables = useSelector(dfSelectors.getAllTables);
@@ -1007,6 +1106,11 @@ const AppShell: FC = () => {
     const [logsOpen, setLogsOpen] = useState(false);
     const exitSession = useExitSession();
     const inSession = isAppPage && !!activeWorkspace;
+    const openWorkspaceTab = (tab: WorkspaceNavigationTab) => {
+        dispatch(dfActions.setDataSourceSidebarTab(tab));
+        dispatch(dfActions.setDataSourceSidebarOpen(true));
+        navigate('/app');
+    };
 
     return (
         <Box sx={{
@@ -1037,6 +1141,10 @@ const AppShell: FC = () => {
                         <Box sx={{ width: 40, minWidth: 40, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
                             <Box component="img" sx={{ height: 20 }} alt="" src={dfLogo} />
                         </Box>
+                        {isCompactToolbar ? (
+                            <PageNavMenu isAboutPage={isAboutPage} />
+                        ) : (
+                        <>
                         <Button sx={{
                             display: "flex", flexDirection: "row", textTransform: "none",
                             alignItems: 'stretch',
@@ -1047,10 +1155,23 @@ const AppShell: FC = () => {
                                 backgroundColor: "transparent"
                             }
                         }} color="inherit">
-                            <Typography noWrap component="h1" sx={{ fontWeight: 300, letterSpacing: '0.03em', fontSize: { xs: textVar.lg, sm: textVar.xl } }}>
+                            <Typography noWrap component="h1" sx={{ fontWeight: 300, display: { xs: 'none', sm: 'block' }, letterSpacing: '0.03em' }}>
                                 {toolName}
                             </Typography>
                         </Button>
+                        <Box
+                            sx={{
+                                ml: 2,
+                                height: '28px',
+                                my: 'auto',
+                                display: 'flex',
+                            }}
+                        >
+                            <TopNavButton to="/about" label={t('appBar.about')} selected={isAboutPage} />
+                            <TopNavButton to="/app" label={t('appBar.app')} selected={!isAboutPage} />
+                        </Box>
+                        </>
+                        )}
                         {!isCompactToolbar && !activeWorkspace && (
                             <Typography noWrap sx={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', fontWeight: 500, fontSize: '0.65rem', color: 'text.secondary', letterSpacing: '0.15em', textTransform: 'uppercase' }}>
                                 {t('appBar.microsoftResearch')}
@@ -1265,7 +1386,17 @@ const AppShell: FC = () => {
                     </Toolbar>
                 </AppBar>
                 <Box sx={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
-                    <AppNavigation automationEnabled={serverConfig.AUTOMATION_ENABLED} />
+                    {isAutomationPage && (
+                        <WorkspaceNavigationRail
+                            automationActive
+                            automationEnabled={serverConfig.AUTOMATION_ENABLED}
+                            standalone
+                            onAddData={() => navigate('/app', {
+                                state: { workspaceNavigationAction: 'add-data' },
+                            })}
+                            onSelectTab={openWorkspaceTab}
+                        />
+                    )}
                     <Box component="main" sx={{ flex: 1, minWidth: 0, overflow: 'hidden', '& > div': { height: '100%' } }}>
                         <Outlet />
                     </Box>

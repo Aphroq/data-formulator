@@ -43,11 +43,8 @@ import { ScrollFadeContainer } from '../components/ScrollFade';
 
 import StorageIcon from '@mui/icons-material/Storage';
 import AddIcon from '@mui/icons-material/Add';
-import AddCircleIcon from '@mui/icons-material/AddCircle';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
-import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
-import LightbulbOutlinedIcon from '@mui/icons-material/LightbulbOutlined';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
@@ -70,7 +67,7 @@ import { AppDispatch } from '../app/store';
 import { CONNECTOR_URLS, CONNECTOR_ACTION_URLS, SourceTableRef, translateBackend } from '../app/utils';
 import { apiRequest } from '../app/apiClient';
 import { LoadableState, errorLoadable, loadingLoadable, successLoadable } from '../app/loadableState';
-import { getConnectorIcon, connectorSortOrder, RelationalDBIcon } from '../icons';
+import { getConnectorIcon, connectorSortOrder } from '../icons';
 import { loadTable } from '../app/tableThunks';
 import { listWorkspaces, loadWorkspace, deleteWorkspace, exportWorkspace, importWorkspace, updateWorkspaceMeta, onWorkspaceListChanged, WorkspaceLoadSupersededError } from '../app/workspaceService';
 import type { WorkspaceSummary } from '../app/workspaceService';
@@ -88,6 +85,7 @@ import type { CatalogTableDragItem } from '../components/DndTypes';
 import { ResizeHandle } from '../components/ResizeHandle';
 import { REFERENCE, iconVar, sidebarFitsExpanded, textVar } from '../app/layout';
 import { useLayout } from '../app/LayoutProvider';
+import { WorkspaceNavigationRail, type WorkspaceNavigationTab } from './WorkspaceNavigationRail';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -177,11 +175,11 @@ export const DataSourceSidebar: React.FC<{
     onConnectorsChanged?: () => void;
     onStartDataLoadingChat?: (text: string) => void;
 }> = ({ onOpenUploadDialog, connectorRefreshKey = 0, onConnectorsChanged, onStartDataLoadingChat }) => {
-    const { t } = useTranslation();
     const dispatch = useDispatch<AppDispatch>();
 
     const isOpen = useSelector((state: DataFormulatorState) => state.dataSourceSidebarOpen);
     const disableConnectors = useSelector((state: DataFormulatorState) => state.serverConfig.DISABLE_DATA_CONNECTORS);
+    const automationEnabled = useSelector((state: DataFormulatorState) => state.serverConfig.AUTOMATION_ENABLED);
     const focusedConnectorId = useSelector((state: DataFormulatorState) => state.focusedConnectorId);
 
     const toggle = () => dispatch(dfActions.setDataSourceSidebarOpen(!isOpen));
@@ -207,7 +205,7 @@ export const DataSourceSidebar: React.FC<{
     // Fall back to 'sources' for older persisted state that predates this field.
     const initialTab = useSelector((state: DataFormulatorState) => state.dataSourceSidebarTab ?? 'sources');
     const setInitialTab = useCallback(
-        (tab: 'sources' | 'sessions' | 'knowledge') => dispatch(dfActions.setDataSourceSidebarTab(tab)),
+        (tab: WorkspaceNavigationTab) => dispatch(dfActions.setDataSourceSidebarTab(tab)),
         [dispatch],
     );
 
@@ -216,7 +214,7 @@ export const DataSourceSidebar: React.FC<{
     useEffect(() => {
         const handler = (e: Event) => {
             const detail = (e as CustomEvent).detail || {};
-            const tab = detail.tab as 'sources' | 'sessions' | 'knowledge' | undefined;
+            const tab = detail.tab as WorkspaceNavigationTab | undefined;
             setInitialTab(tab ?? 'knowledge');
             dispatch(dfActions.setDataSourceSidebarOpen(true));
         };
@@ -308,56 +306,22 @@ export const DataSourceSidebar: React.FC<{
                 }),
             }}
         >
-            {/* Rail — always visible */}
-            <Box sx={{
-                width: RAIL_WIDTH,
-                minWidth: RAIL_WIDTH,
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                pt: 1,
-                gap: 0.5,
-            }}>
-                {/* Primary action — adding data is the main task. Styled like
-                    the view-switcher icons but kept in primary color as a
-                    subtle cue; opens the upload dialog (landing menu). */}
-                <Tooltip title={t('sidebar.openUpload', { defaultValue: 'Add data' })} placement="right">
-                    <IconButton size="small" onClick={() => onOpenUploadDialog?.()} sx={{
-                        color: 'primary.main',
-                        borderRadius: 1,
-                        '&:hover': { bgcolor: 'action.hover' },
-                    }}>
-                        <AddCircleIcon fontSize="small" />
-                    </IconButton>
-                </Tooltip>
-                <Tooltip title={t('sidebar.sessions', { defaultValue: 'Saved workspaces' })} placement="right">
-                    <IconButton size="small" onClick={() => { setInitialTab('sessions'); if (!isOpen) toggle(); else if (initialTab !== 'sessions') setInitialTab('sessions'); else toggle(); }} sx={{
-                        color: isOpen && initialTab === 'sessions' ? 'primary.main' : 'text.secondary',
-                        bgcolor: isOpen && initialTab === 'sessions' ? 'action.selected' : 'transparent',
-                        borderRadius: 1,
-                    }}>
-                        <FolderOutlinedIcon fontSize="small" />
-                    </IconButton>
-                </Tooltip>
-                <Tooltip title={t('sidebar.openDataConnectors', { defaultValue: 'Data connectors' })} placement="right">
-                    <IconButton size="small" onClick={() => { setInitialTab('sources'); if (!isOpen) toggle(); else if (initialTab !== 'sources') setInitialTab('sources'); else toggle(); }} sx={{
-                        color: isOpen && initialTab === 'sources' ? 'primary.main' : 'text.secondary',
-                        bgcolor: isOpen && initialTab === 'sources' ? 'action.selected' : 'transparent',
-                        borderRadius: 1,
-                    }}>
-                        <RelationalDBIcon fontSize="small" />
-                    </IconButton>
-                </Tooltip>
-                <Tooltip title={t('sidebar.knowledge', { defaultValue: 'Agent knowledge' })} placement="right">
-                    <IconButton size="small" onClick={() => { setInitialTab('knowledge'); if (!isOpen) toggle(); else if (initialTab !== 'knowledge') setInitialTab('knowledge'); else toggle(); }} sx={{
-                        color: isOpen && initialTab === 'knowledge' ? 'primary.main' : 'text.secondary',
-                        bgcolor: isOpen && initialTab === 'knowledge' ? 'action.selected' : 'transparent',
-                        borderRadius: 1,
-                    }}>
-                        <LightbulbOutlinedIcon fontSize="small" />
-                    </IconButton>
-                </Tooltip>
-            </Box>
+            {/* Rail — always visible. Automation joins the existing workspace
+                destinations instead of introducing a second navigation layer. */}
+            <WorkspaceNavigationRail
+                activeTab={initialTab}
+                automationEnabled={automationEnabled}
+                panelOpen={isOpen}
+                onAddData={() => onOpenUploadDialog?.()}
+                onSelectTab={(tab) => {
+                    setInitialTab(tab);
+                    if (!isOpen) {
+                        toggle();
+                    } else if (initialTab === tab) {
+                        toggle();
+                    }
+                }}
+            />
 
             {/* The expanded panel overlays the workspace instead of changing
                 this flex item's width and relaying out charts on every toggle. */}
