@@ -18,6 +18,7 @@ from data_formulator.data_operations import (
 )
 from data_formulator.datalake.workspace import Workspace
 from data_formulator.datalake.catalog_cache import save_catalog
+from data_formulator.recipes.lineage import ArtifactLedger
 
 
 pytestmark = [pytest.mark.backend]
@@ -158,6 +159,8 @@ def test_selected_operation_executes_without_model_turn(
     assert persisted.status == DataOperationStatus.LOADED
     assert persisted.result_table_ids == ("recent_orders",)
     assert workspace.read_data_as_df("recent_orders")["id"].tolist() == [1, 2]
+    artifact = ArtifactLedger.for_workspace(workspace).list_nodes()[0]
+    assert artifact.to_dict()["execution"]["step"] == plan.steps[0].to_dict()
 
     with (
         patch("data_formulator.routes.agents.get_identity_id", return_value="test-user"),

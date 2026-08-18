@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any, ClassVar
 
 from data_formulator.recipes.canonical import (
@@ -43,6 +44,22 @@ class HashDigest:
         if not isinstance(content, bytes):
             raise TypeError("HashDigest.sha256 requires bytes")
         return cls("sha256", hashlib.sha256(content).hexdigest())
+
+    @classmethod
+    def sha256_file(
+        cls,
+        path: Path | str,
+        *,
+        chunk_size: int = 1024 * 1024,
+    ) -> "HashDigest":
+        """Hash a file without loading the complete artifact into memory."""
+        if chunk_size < 1:
+            raise ValueError("chunk_size must be positive")
+        digest = hashlib.sha256()
+        with Path(path).open("rb") as file:
+            while chunk := file.read(chunk_size):
+                digest.update(chunk)
+        return cls("sha256", digest.hexdigest())
 
     @classmethod
     def parse(cls, value: str) -> "HashDigest":

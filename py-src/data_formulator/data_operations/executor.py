@@ -2,16 +2,25 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import timezone
+from pathlib import Path
 from typing import Callable
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 
 from data_formulator.datalake.parquet_utils import sanitize_table_name
+from data_formulator.datalake.workspace_metadata import TableMetadata
 from data_formulator.data_loader.external_data_loader import (
     ExternalDataLoader,
     _merge_source_metadata,
     apply_import_projection,
 )
+from data_formulator.recipes.lineage import (
+    ArtifactConflictError,
+    ArtifactLedger,
+)
+from data_formulator.recipes.models import ArtifactNode, ArtifactType, HashDigest
 
 from .models import (
     ConnectorQueryStep,
@@ -28,6 +37,10 @@ logger = logging.getLogger(__name__)
 LoaderResolver = Callable[[str], ExternalDataLoader]
 
 
+class _ArtifactLineagePublicationError(RuntimeError):
+    """A table materialized, but its durable lineage could not be committed."""
+
+
 @dataclass(frozen=True)
 class DataOperationExecutionResult:
     result_table_ids: tuple[str, ...]
@@ -42,6 +55,12 @@ class DataOperationExecutor:
     ):
         self._workspace = workspace
         self._loader_resolver = loader_resolver or self._resolve_live_loader
+        capabilities = workspace.storage_capabilities
+        self._artifact_ledger = (
+            ArtifactLedger.for_workspace(workspace)
+            if capabilities.durable and capabilities.supports_durable_artifacts
+            else None
+        )
 
     def execute(self, operation: DataOperation) -> DataOperationExecutionResult:
         if operation.status != DataOperationStatus.RUNNING:
@@ -58,12 +77,21 @@ class DataOperationExecutor:
         result_table_ids: list[str] = []
         failed_steps: list[FailedOperationStep] = []
         for step_index, step in enumerate(plan.steps):
-            if step_index in published:
-                result_table_ids.append(published[step_index])
-                continue
-            table_name = self._allocate_table_name(step.display_name, used_names)
-            used_names.add(table_name)
             try:
+                if step_index in published:
+                    table_name = published[step_index]
+                    self._record_load_artifact(
+                        table_name,
+                        step,
+                        operation_id=operation.id,
+                        plan_hash=plan.plan_hash,
+                        step_index=step_index,
+                    )
+                    result_table_ids.append(table_name)
+                    continue
+
+                table_name = self._allocate_table_name(step.display_name, used_names)
+                used_names.add(table_name)
                 result_table_ids.append(self._publish_connector_query(
                     table_name,
                     step,
@@ -71,10 +99,12 @@ class DataOperationExecutor:
                     plan_hash=plan.plan_hash,
                     step_index=step_index,
                 ))
-            except Exception:
+            except Exception as exc:
+                lineage_failure = isinstance(exc, _ArtifactLineagePublicationError)
                 logger.exception(
-                    "Data operation %s failed to load step %d (%s)",
+                    "Data operation %s failed to %s step %d (%s)",
                     operation.id,
+                    "record lineage for" if lineage_failure else "load",
                     step_index,
                     step.display_name,
                 )
@@ -82,8 +112,17 @@ class DataOperationExecutor:
                     step_index=step_index,
                     display_name=step.display_name,
                     error=OperationError(
-                        code="connector_error",
-                        message=f"{step.display_name} could not be loaded.",
+                        code=(
+                            "artifact_lineage_error"
+                            if lineage_failure
+                            else "connector_error"
+                        ),
+                        message=(
+                            f"{step.display_name} was loaded, but its durable lineage "
+                            "could not be recorded."
+                            if lineage_failure
+                            else f"{step.display_name} could not be loaded."
+                        ),
                     ),
                 ))
         return DataOperationExecutionResult(
@@ -120,15 +159,16 @@ class DataOperationExecutor:
                 "loader_params": loader.get_safe_params(),
                 "source_table": step.source_table,
                 "import_options": {
-                **import_options,
-                "data_operation": {
-                    "operation_id": operation_id,
-                    "plan_hash": plan_hash,
-                    "step_index": step_index,
-                    "source_id": step.source_id,
-                    "table_key": step.table_key,
+                    **import_options,
+                    "data_operation": {
+                        "operation_id": operation_id,
+                        "plan_hash": plan_hash,
+                        "step_index": step_index,
+                        "source_id": step.source_id,
+                        "table_key": step.table_key,
+                        "step": step.to_dict(),
+                    },
                 },
-            },
             },
         )
         # Parity with ExternalDataLoader.ingest_to_workspace: without this the
@@ -140,7 +180,121 @@ class DataOperationExecutor:
                 self._workspace.add_table_metadata(metadata)
         except Exception:
             logger.debug("Metadata enrichment skipped for %s", table_name, exc_info=True)
+        self._record_load_artifact(
+            metadata.name,
+            step,
+            operation_id=operation_id,
+            plan_hash=plan_hash,
+            step_index=step_index,
+            metadata=metadata,
+        )
         return metadata.name
+
+    def _record_load_artifact(
+        self,
+        table_name: str,
+        step: ConnectorQueryStep,
+        *,
+        operation_id: str,
+        plan_hash: str,
+        step_index: int,
+        metadata: TableMetadata | None = None,
+    ) -> ArtifactNode | None:
+        if self._artifact_ledger is None:
+            return None
+
+        try:
+            table_metadata = metadata or self._workspace.get_table_metadata(table_name)
+            if table_metadata is None:
+                raise ValueError(f"Published table metadata is missing: {table_name}")
+            if not isinstance(table_metadata.import_options, dict):
+                raise ValueError(f"Published table provenance is missing: {table_name}")
+            provenance = table_metadata.import_options.get("data_operation")
+            if not isinstance(provenance, dict):
+                raise ValueError(f"Data operation provenance is missing: {table_name}")
+
+            expected_provenance = {
+                "operation_id": operation_id,
+                "plan_hash": plan_hash,
+                "step_index": step_index,
+                "source_id": step.source_id,
+                "table_key": step.table_key,
+            }
+            for key, expected in expected_provenance.items():
+                if provenance.get(key) != expected:
+                    raise ValueError(
+                        f"Published table provenance field {key!r} does not match"
+                    )
+
+            serialized_step = step.to_dict()
+            stored_step = provenance.get("step")
+            if stored_step is not None and stored_step != serialized_step:
+                raise ValueError("Published table step snapshot does not match selected plan")
+
+            file_path = self._workspace.get_file_path(table_metadata.filename)
+            if not isinstance(file_path, Path):
+                raise TypeError("Durable local artifact hashing requires a filesystem path")
+            schema = pq.read_schema(file_path)
+            artifact = ArtifactNode(
+                artifact_type=ArtifactType.LOAD,
+                identity_id=self._workspace.identity_id,
+                workspace_id=self._workspace.workspace_id,
+                origin_id=self._load_origin_id(
+                    operation_id,
+                    plan_hash,
+                    step_index,
+                ),
+                parent_ids=(),
+                content_hash=HashDigest.sha256_file(file_path),
+                schema_fingerprint=HashDigest.sha256(schema.serialize().to_pybytes()),
+                execution={
+                    "kind": step.kind,
+                    "operation_id": operation_id,
+                    "plan_hash": plan_hash,
+                    "step_index": step_index,
+                    "step": serialized_step,
+                    "output": {
+                        "table_id": table_metadata.name,
+                        "filename": table_metadata.filename,
+                    },
+                },
+                created_at=(
+                    table_metadata.created_at
+                    if table_metadata.created_at.tzinfo is not None
+                    else table_metadata.created_at.replace(tzinfo=timezone.utc)
+                ),
+            )
+
+            stored_artifact_id = provenance.get("artifact_id")
+            if stored_artifact_id not in (None, artifact.artifact_id):
+                raise ArtifactConflictError(
+                    f"Published table points to conflicting artifact {stored_artifact_id!r}"
+                )
+            recorded = self._artifact_ledger.record(artifact)
+
+            if stored_step != serialized_step or stored_artifact_id != recorded.artifact_id:
+                updated_options = dict(table_metadata.import_options)
+                updated_provenance = dict(provenance)
+                updated_provenance["step"] = serialized_step
+                updated_provenance["artifact_id"] = recorded.artifact_id
+                updated_options["data_operation"] = updated_provenance
+                table_metadata.import_options = updated_options
+                self._workspace.add_table_metadata(table_metadata)
+            return recorded
+        except Exception as exc:
+            raise _ArtifactLineagePublicationError(
+                f"Could not record lineage for table {table_name!r}"
+            ) from exc
+
+    @staticmethod
+    def _load_origin_id(
+        operation_id: str,
+        plan_hash: str,
+        step_index: int,
+    ) -> str:
+        return (
+            f"data-operation/{operation_id}/plan/{plan_hash}/step/{step_index}"
+        )
 
     def _find_published_results(
         self,

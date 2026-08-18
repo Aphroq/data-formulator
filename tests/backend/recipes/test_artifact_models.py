@@ -97,3 +97,15 @@ def test_artifact_type_enforces_parent_constraints(
 def test_hash_digest_rejects_malformed_values(value: str) -> None:
     with pytest.raises(ValueError):
         HashDigest.parse(value)
+
+
+def test_hash_digest_streams_file_content(tmp_path) -> None:
+    content = b"artifact-content" * 1000
+    artifact_file = tmp_path / "artifact.parquet"
+    artifact_file.write_bytes(content)
+
+    assert HashDigest.sha256_file(artifact_file, chunk_size=17) == (
+        HashDigest.sha256(content)
+    )
+    with pytest.raises(ValueError, match="chunk_size"):
+        HashDigest.sha256_file(artifact_file, chunk_size=0)

@@ -8,7 +8,7 @@
 | Worktree | `D:\projects\dfm-wt-recipe` |
 | 本机实例 | `recipe`：后端 5569、Vite 5175、数据目录 `D:\projects\dfm-runtime\recipe` |
 | 基线 | 共享文档提交，父提交为 Data Formulator `5477f0e` |
-| 当前阶段 | M0-A 已完成：Artifact 不可变模型、canonical hash、durable local ledger 与 Workspace capability 已落地；下一步接 load 记录点 |
+| 当前阶段 | M0-B 已完成：DataOperation load 已写入 durable lineage；下一步接后端 transform/chart 记录点 |
 
 ## 目标
 
@@ -78,6 +78,16 @@
 - Workspace 现在显式暴露 identity、workspace id 与 storage capability；首版只允许 durable local backend 写 `artifacts/lineage/lineage.json`，ephemeral 与尚无正式 artifact API 的 Azure 均失败关闭。
 - M0-A 聚焦测试 30 passed；相关 Workspace 回归 77 passed；全量后端 2160 passed、13 skipped、1 xfailed、1 deselected。deselect 仍是 Windows 当前终端没有 symlink 创建权限的既有测试。
 
+## M0-B Load 记录点（已完成）
+
+- `DataOperationExecutor` 只在 parquet 成功落盘后创建 `load` Artifact，origin 固定为 operation + plan hash + step index。
+- Artifact execution payload 复制完整 `ConnectorQueryStep`、plan hash 和 materialized output，不需要回读可淘汰的 `scratch/data_operations`。
+- content hash 对实际 parquet 文件做分块全量 SHA-256；schema fingerprint 直接使用 PyArrow 已持久化 schema 的序列化 bytes，未复用 workspace 中的抽样 MD5。
+- `workspace.yaml` 的 data-operation provenance 同步保存完整 step 与 artifact id；进程若在写表后、写 lineage 前失败，重试会从已发布表补记 Artifact，不重新查询 connector。
+- 同一 origin 对应的 parquet 内容或 step 快照被改写时，重试返回 `artifact_lineage_error`，不会把变化后的内容静默绑定到旧血缘。
+- ephemeral 与尚无正式 artifact API 的 backend 继续允许交互式 load，但不创建 durable Artifact，因此后续 Compiler/Publish 会按缺失血缘失败关闭。
+- M0-B 聚焦链路 63 passed；全量后端 2165 passed、13 skipped、1 xfailed、1 deselected。
+
 ## 开发记录
 
 | 日期 | 阶段 | 实质变更 | 验证 | 提交 |
@@ -89,6 +99,7 @@
 | 2026-08-18 | 准备 | 固定多 Worktree 本机实例和资源隔离约定 | 端口、数据目录、浏览器状态和文档链接检查 | `docs: define multi-worktree runtime isolation` |
 | 2026-08-18 | M0 审计 | 刷新 origin/upstream 引用，核对 load/transform/chart、Workspace、Sandbox、签名和 connector 的真实持久化边界，细化首个契约节点 | 聚焦后端 30 passed；全量后端 2130 passed；前端 391 passed；生产构建成功 | `docs: record recipe core M0 audit` |
 | 2026-08-18 | M0-A | 新增 canonical JSON、不可变 ArtifactNode、workspace-scoped durable ledger 与显式 Workspace storage capability；ephemeral/Azure 无正式 artifact store 时失败关闭 | Recipe 契约 30 passed；全量后端 2160 passed、13 skipped、1 xfailed、1 deselected | `feat: add durable artifact lineage core` |
+| 2026-08-18 | M0-B | DataOperation 成功写表后记录 load Artifact；完整复制 step，对实际 parquet 和 Arrow schema 生成独立 SHA-256，并支持写表后 lineage 补偿重试 | 聚焦链路 63 passed；全量后端 2165 passed、13 skipped、1 xfailed、1 deselected | `feat: record loaded tables as artifacts` |
 
 ## 已确认决策
 
