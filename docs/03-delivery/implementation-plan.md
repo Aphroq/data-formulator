@@ -47,6 +47,8 @@ fixed upstream baseline
 
 探针失败时先修正契约或收缩功能，不继续堆 UI。
 
+M0 不启动 Docker。数据库和 TrustGraph 合同验证使用已有可访问环境或测试替身；缺少真实端点时记录为外部条件，不以搭建容器作为解决方案。
+
 ### M1：可信交互分析
 
 - 通用 business context provider 和 Skill。
@@ -128,6 +130,8 @@ uv run pytest
 yarn test
 yarn build
 ```
+
+测试过程中不启动 Docker，也不新增容器 fixture。上游明确依赖 `tests/database-dockers/` 的测试不作为本项目默认验收前置，需在工程记录中注明未执行原因。
 
 必须覆盖：
 

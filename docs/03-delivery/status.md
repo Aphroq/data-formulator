@@ -19,6 +19,8 @@
 - Git 提交身份使用仓库本地配置 `aphroq <shi1490672988@qq.com>`。
 - `origin` 已配置为 `https://github.com/Aphroq/data-formulator.git`，`upstream` 保持 Microsoft 官方仓库。
 - 根目录中文 `AGENTS.md` 已建立，约束后续 Agent 的文档入口、分支边界、架构红线和验证门槛。
+- 项目增量文档明确为上游资料的覆盖层；实现前仍需检索根文档、`docs/dev-guides`、`docs/docs-cn` 和相关测试说明。
+- 项目开发、测试和运行不使用 Docker；上游已有容器资产保持原样且不进入默认验收路径。
 
 ## 下一步
 

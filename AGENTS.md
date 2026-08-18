@@ -15,7 +15,15 @@
 5. `docs/03-delivery/implementation-plan.md`
 6. 当前分支对应的 `docs/04-features/<feature>/README.md`
 
-文档与实现不一致时，以当前检出的源码和测试为最终事实。确认设计或实现决定发生变化后，同步修改对应事实来源文档。
+以上是本项目的增量设计文档，不替代 Data Formulator 上游文档。修改具体模块前，必须使用 `rg` 按主题检索并阅读相关内容：
+
+- 根目录 `README.md`、`CONTRIBUTING.md`、`SECURITY.md`。
+- `docs/dev-guides/` 中与当前模块相关的开发指南。
+- `docs/docs-cn/` 中相关的产品、配置和扩展说明。
+- `tests/README.md`、`tests/backend/README.md`、`tests/frontend/README.md` 及相关测试。
+- 当前模块的源码、类型和既有测试。
+
+不要因为新增了编号文档就跳过上游指南。文档与实现不一致时，以当前检出的源码和测试为最终事实，并在 Feature 工程记录中写明差异。确认设计或实现决定发生变化后，同步修改对应事实来源文档。
 
 ## 仓库与 Worktree
 
@@ -50,6 +58,8 @@
 - Recipe 和 Run 制品不得放入 `confined_scratch`；Ephemeral Workspace 不允许发布或调度。
 - Worker 必须显式打开 identity/workspace，不得伪造 Flask 请求。
 - v1 不引入 Celery、Redis、Temporal、Kafka、第二套 Agent runtime、Copilot SDK 或 LiteLLM Proxy。
+- 本项目开发、测试和运行方案不使用 Docker、Docker Compose 或容器化依赖，不执行 Docker 命令，也不新增镜像和 Compose 配置。
+- 上游已有 `containers/`、Docker 文件和 `tests/database-dockers/` 保持原样；除非用户明确改变约束，否则不修改、不启动，也不作为项目验收前置条件。
 
 ## 工程工作方式
 
@@ -60,6 +70,7 @@
 - 不提交 secret、bearer token、数据库密码或 OAuth token；通过现有凭据机制保存引用。
 - 避免空脚手架；有契约或测试时再创建模块。
 - API 所有权和 Workspace 授权必须显式校验。
+- 需要数据库或 TrustGraph 服务时，使用用户已有环境、明确提供的外部端点或测试替身，不为此启动容器。
 
 每个有意义的提交或验证节点，只更新当前 Feature 的工程记录：
 
@@ -71,12 +82,14 @@
 
 ## 验证要求
 
-开发过程中运行聚焦测试。包含代码的分支交付前执行：
+开发过程中运行聚焦测试，不启动 Docker。包含代码的分支交付前执行：
 
 ```text
 uv run pytest
 yarn test
 yarn build
 ```
+
+如果某个上游测试明确要求 Docker，将其标记为本项目默认开发环境之外并记录原因，不要为了通过该测试引入容器。
 
 纯文档变更需要检查相对链接、Markdown 代码围栏、未解析占位符、diff 范围和工作区状态。

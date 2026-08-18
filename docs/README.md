@@ -4,6 +4,8 @@
 
 编码 Agent 进入仓库后先读根目录 [`AGENTS.md`](../AGENTS.md)，再按本页顺序读取对应文档。
 
+本页是项目增量文档索引，不替代 Data Formulator 原有指导资料。
+
 ```text
 docs/
   README.md
@@ -36,6 +38,19 @@ docs/
    - [Analysis Integrations](./04-features/analysis-integrations/README.md)
    - [Recipe Core](./04-features/recipe-core/README.md)
    - [Automation Workbench](./04-features/automation-workbench/README.md)
+
+## 上游文档入口
+
+修改具体模块前，除项目文档外还要检索对应上游资料：
+
+| 类型 | 入口 |
+| --- | --- |
+| 项目介绍和开发规范 | [根 README](../README.md)、[CONTRIBUTING](../CONTRIBUTING.md)、[SECURITY](../SECURITY.md) |
+| 后端、模型、Workspace、连接器等开发指南 | [`docs/dev-guides`](./dev-guides/) |
+| 中文产品、配置和扩展说明 | [`docs/docs-cn`](./docs-cn/) |
+| 测试总览 | [测试 README](../tests/README.md)、[后端测试](../tests/backend/README.md)、[前端测试](../tests/frontend/README.md) |
+
+使用 `rg` 按当前模块和概念检索，不要求一次性通读全部上游文档。
 
 ## 事实来源
 

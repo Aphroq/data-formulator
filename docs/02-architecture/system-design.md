@@ -37,10 +37,18 @@ Data Thread / AnalystAgent
 
 部署单元：
 
-- 现有 Data Formulator Web 应用。
-- 一个新增的 `data_formulator_worker` 入口。
+- 以本机进程运行的现有 Data Formulator Web 应用。
+- 以本机进程运行的一个新增 `data_formulator_worker` 入口。
 - 一个自动化 SQLite 数据库。
 - Web 和 Worker 都能访问的持久化 Workspace/Artifact Store。
+
+### 开发与运行环境
+
+- 不使用 Docker、Docker Compose 或容器化服务。
+- 不新增镜像、Compose 配置或基于容器的本地依赖。
+- 上游已有容器相关文件原样保留，不纳入本项目默认开发和验收路径。
+- 数据库和 TrustGraph 验证使用用户已有环境、明确提供的外部端点或测试替身。
+- Web、Worker、SQLite 和前端工具链均直接在本机运行。
 
 ## 分析集成
 

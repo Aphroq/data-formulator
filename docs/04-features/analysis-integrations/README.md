@@ -39,6 +39,7 @@
 | 2026-08-18 | 准备 | 核对真实 Skill、模型注册表和 LiteLLM 扩展点，建立共享文档与独立 Worktree | 固定源码审查、文档检查 | `docs: establish project plan` |
 | 2026-08-18 | 准备 | 增加仓库级 Agent 指南并配置 fork remote | 文档链接、范围和 Git remote 核对 | `docs: add repository agent guide` |
 | 2026-08-18 | 准备 | Agent 指南中文化，工程记录迁入 Feature 独立目录 | 文档链接、目录和旧路径检查 | `docs: localize agent guide and organize feature records` |
+| 2026-08-18 | 准备 | 补充上游文档检索规则和无 Docker 开发约束 | 上游指南入口、文档链接和范围检查 | `docs: preserve upstream guidance and prohibit docker` |
 
 ## 已确认决策
 
@@ -52,6 +53,7 @@
 
 - LiteLLM `1.91.3` 的 Copilot token 存储与刷新行为需真实验证。
 - TrustGraph bearer token、flow、collection 与 workspace 映射需用真实环境验证。
+- TrustGraph 验证使用已有外部端点或测试替身，不在本地启动 Docker 服务。
 - Citation 需要找到稳定的线程持久化位置，不能只进入 thinking step。
 
 ## 合并前检查

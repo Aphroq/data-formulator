@@ -55,6 +55,7 @@ Workflow Replay 保留为灵活的“分析方法复用”；Recipe 是严格的
 - 不在正常 Recipe Run 中调用 LLM、TrustGraph 或重新生成代码。
 - 不允许模板字符串把参数直接替换进 Python 或 SQL。
 - 不做多节点 Worker、网络共享盘 SQLite 或高可用调度。
+- 项目开发、测试和运行不使用 Docker、Docker Compose 或容器化依赖。
 - 不新增 Excel/Parquet/JSON 表格导出、报告投递和 Webhook。
 - v1 不把 Recipe/Run 数据塞进现有 Workspace ZIP；自动化制品迁移另行设计。
 

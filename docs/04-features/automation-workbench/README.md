@@ -40,6 +40,7 @@
 | 2026-08-18 | 准备 | 确定 SQLite、单 Worker、lease、状态机和 Recipe Core 依赖边界 | 设计审查 | `docs: establish project plan` |
 | 2026-08-18 | 准备 | 增加仓库级 Agent 指南并记录分支创建前置条件 | 文档链接与范围核对 | `docs: add repository agent guide` |
 | 2026-08-18 | 准备 | Agent 指南中文化，工程记录迁入 Feature 独立目录 | 文档链接、目录和旧路径检查 | `docs: localize agent guide and organize feature records` |
+| 2026-08-18 | 准备 | 补充上游文档检索规则和无 Docker 开发约束 | 上游指南入口、文档链接和范围检查 | `docs: preserve upstream guidance and prohibit docker` |
 
 ## 已确认决策
 
@@ -53,6 +54,7 @@
 ## 未决与风险
 
 - Worktree 只能在 Recipe Core 基础契约提交后创建。
+- Web、Worker 和 SQLite 直接在本机运行，不提供 Docker 或 Compose 方案。
 - SQLite 数据库和 artifact store 必须由 Web/Worker 解析到相同绝对路径。
 - 进程崩溃、过期 lease 和运行中取消需要专门的恢复测试。
 

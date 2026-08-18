@@ -41,6 +41,7 @@
 | 2026-08-18 | 准备 | 核对 DataOperation plan hash、Sandbox、HMAC、Workspace 和前端刷新边界，建立共享文档与独立 Worktree | 固定源码审查、文档检查 | `docs: establish project plan` |
 | 2026-08-18 | 准备 | 增加仓库级 Agent 指南并配置 fork remote | 文档链接、范围和 Git remote 核对 | `docs: add repository agent guide` |
 | 2026-08-18 | 准备 | Agent 指南中文化，工程记录迁入 Feature 独立目录 | 文档链接、目录和旧路径检查 | `docs: localize agent guide and organize feature records` |
+| 2026-08-18 | 准备 | 补充上游文档检索规则和无 Docker 开发约束 | 上游指南入口、文档链接和范围检查 | `docs: preserve upstream guidance and prohibit docker` |
 
 ## 已确认决策
 
@@ -54,6 +55,7 @@
 
 - Chart spec 的后端持久化记录点需通过真实纵向切片确认。
 - Azure Blob 首发支持取决于正式 artifact store 接口；不能使用 scratch。
+- 数据库纵向切片使用已有环境或测试替身，不建立 Docker 测试依赖。
 - Worker 所需 workspace opener 应从 Flask 请求依赖中解耦，但本分支只提供基础能力。
 
 ## 合并前检查
