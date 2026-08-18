@@ -1,0 +1,59 @@
+{
+  "recipes": {
+    "title": "Recipes",
+    "subtitle": "Validate, publish, and run deterministic workflows compiled from durable analysis artifacts.",
+    "unavailable": "Recipe automation is not enabled on this server.",
+    "openWorkspace": "Open a workspace before viewing its Recipes.",
+    "savedRecipes": "Saved Recipes",
+    "empty": "No Recipes have been saved in this workspace yet.",
+    "selectVersion": "Select a Recipe version to inspect it.",
+    "versionNumber": "Version {{number}}",
+    "hash": "Recipe hash",
+    "parameters": "Parameters",
+    "noParameters": "This Recipe has no runtime parameters.",
+    "inputs": "Inputs",
+    "steps": "Steps",
+    "localInput": "Workspace input",
+    "dryRun": "Dry run",
+    "publish": "Publish",
+    "runNow": "Run now",
+    "archive": "Archive",
+    "archiveConfirm": "Archive this published Recipe version? This cannot be undone.",
+    "dryRunSucceeded": "Dry run succeeded. This version is now validated.",
+    "publishSucceeded": "Recipe version published.",
+    "runSucceeded": "Run {{runId}} succeeded.",
+    "archiveSucceeded": "Recipe version archived.",
+    "needsReview": "The run detected schema drift and needs review before it can continue.",
+    "runFailed": "Recipe execution failed.",
+    "loadFailed": "Recipes could not be loaded.",
+    "actionFailed": "The Recipe action failed.",
+    "invalidParameter": "Enter a valid value for {{name}}.",
+    "true": "True",
+    "false": "False",
+    "saveAsRecipe": "Save as Recipe",
+    "saveDescription": "Create an immutable draft from this chart's durable Artifact Lineage. Publishing requires a successful dry run.",
+    "defaultName": "Analysis Recipe",
+    "name": "Recipe name",
+    "description": "Description",
+    "save": "Save Recipe",
+    "saveFailed": "The Recipe could not be saved.",
+    "artifactStale": "This chart no longer matches its durable artifact. Re-run the analysis to save the edited result.",
+    "status": {
+      "draft": "Draft",
+      "validated": "Validated",
+      "published": "Published",
+      "archived": "Archived"
+    },
+    "inputMode": {
+      "refreshable": "Refreshable",
+      "pinned_snapshot": "Pinned snapshot",
+      "external_path": "External path",
+      "unresolved": "Unresolved"
+    },
+    "stepKind": {
+      "load": "Load data",
+      "transform": "Transform data",
+      "chart": "Create chart"
+    }
+  }
+}

@@ -79,6 +79,7 @@ import {
     useSearchParams,
 } from "react-router-dom";
 import { About } from '../views/About';
+import { Recipes } from '../views/Recipes';
 import { MessageSnackbar } from '../views/MessageSnackbar';
 import { ChartRenderService } from '../views/ChartRenderService';
 import { DictTable } from '../components/ComponentType';
@@ -293,14 +294,22 @@ const LanguageMenuItems: React.FC<{ onSelect: () => void }> = ({ onSelect }) => 
     );
 };
 
-/** Compact replacement for the About / App top-nav buttons. */
-const PageNavMenu: React.FC<{ isAboutPage: boolean }> = ({ isAboutPage }) => {
+/** Compact replacement for the top-nav buttons. */
+const PageNavMenu: React.FC<{
+    currentPage: 'about' | 'app' | 'recipes';
+    recipesEnabled: boolean;
+}> = ({ currentPage, recipesEnabled }) => {
     const { t } = useTranslation();
     const navigate = useNavigate();
     const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
     const pages = [
-        { to: '/about', label: t('appBar.about'), selected: isAboutPage },
-        { to: '/app', label: t('appBar.app'), selected: !isAboutPage },
+        { to: '/about', label: t('appBar.about'), selected: currentPage === 'about' },
+        { to: '/app', label: t('appBar.app'), selected: currentPage === 'app' },
+        ...(recipesEnabled ? [{
+            to: '/recipes',
+            label: t('appBar.recipes'),
+            selected: currentPage === 'recipes',
+        }] : []),
     ];
     const currentLabel = pages.find(page => page.selected)?.label ?? '';
 
@@ -1084,14 +1093,16 @@ const AppShell: FC = () => {
     const generatedReports = useSelector((state: DataFormulatorState) => state.generatedReports);
 
     const isAboutPage = location.pathname === '/about';
-    const isAppPage = !isAboutPage;
+    const isRecipesPage = location.pathname === '/recipes';
+    const isAppPage = !isAboutPage && !isRecipesPage;
+    const currentPage = isAboutPage ? 'about' : isRecipesPage ? 'recipes' : 'app';
 
     // The desktop canvas (threads, encoding shelf, viz cards) genuinely needs
     // room, so the app shell floors content at MIN_SUPPORTED. Landing and phone
     // workspace views reflow instead; the media override below removes the
     // desktop floor when Thread and Canvas become alternate full-width views.
     const isLandingView = isAppPage && !activeWorkspace;
-    const shellMinWidth = isLandingView ? 0 : `${MIN_SUPPORTED.width}px`;
+    const shellMinWidth = isLandingView || isRecipesPage ? 0 : `${MIN_SUPPORTED.width}px`;
 
     // Narrow toolbars fold their controls into menus instead of letting the
     // nav buttons, session name and trailing actions overlap.
@@ -1132,7 +1143,10 @@ const AppShell: FC = () => {
                             <Box component="img" sx={{ height: 20 }} alt="" src={dfLogo} />
                         </Box>
                         {isCompactToolbar ? (
-                            <PageNavMenu isAboutPage={isAboutPage} />
+                            <PageNavMenu
+                                currentPage={currentPage}
+                                recipesEnabled={serverConfig.AUTOMATION_ENABLED}
+                            />
                         ) : (
                         <>
                         <Button sx={{
@@ -1159,6 +1173,9 @@ const AppShell: FC = () => {
                         >
                             <TopNavButton to="/about" label={t('appBar.about')} selected={isAboutPage} />
                             <TopNavButton to="/app" label={t('appBar.app')} selected={isAppPage} />
+                            {serverConfig.AUTOMATION_ENABLED && (
+                                <TopNavButton to="/recipes" label={t('appBar.recipes')} selected={isRecipesPage} />
+                            )}
                         </Box>
                         </>
                         )}
@@ -1170,7 +1187,7 @@ const AppShell: FC = () => {
                         {/* Workspace name — session indicator/switcher. Centered
                             absolutely when there is room, otherwise it flows
                             between the nav menu and the trailing actions. */}
-                        {activeWorkspace && isAppPage && (
+                        {activeWorkspace && (isAppPage || isRecipesPage) && (
                             isCompactToolbar ? (
                                 <Box sx={{ flex: 1, minWidth: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', mx: 1 }}>
                                     <WorkspaceMenu />
@@ -1365,6 +1382,11 @@ const AppShell: FC = () => {
                                         <DiscordIcon sx={{ fontSize: 20 }} />
                                     </IconButton>
                                 </Tooltip>
+                            </Box>
+                        )}
+                        {isRecipesPage && (
+                            <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center' }}>
+                                <LanguageSwitcher />
                             </Box>
                         )}
                         <AuthButton />
@@ -1701,6 +1723,10 @@ export const AppFC: FC<AppFCProps> = function AppFC(appProps) {
                 {
                     path: "about",
                     element: <About />,
+                },
+                {
+                    path: "recipes",
+                    element: <Recipes />,
                 },
                 {
                     path: "*",

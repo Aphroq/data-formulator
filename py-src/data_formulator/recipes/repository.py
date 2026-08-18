@@ -504,6 +504,27 @@ class RecipeRepository:
             ).fetchall()
         return tuple(self._recipe_from_row(row) for row in rows)
 
+    def list_versions(
+        self,
+        identity_id: str,
+        workspace_id: str,
+        *,
+        recipe_id: str | None = None,
+    ) -> tuple[StoredRecipeVersion, ...]:
+        """List versions visible in one explicit identity/Workspace scope."""
+        query = """
+            SELECT * FROM recipe_versions
+            WHERE identity_id = ? AND workspace_id = ?
+        """
+        parameters: list[str] = [identity_id, workspace_id]
+        if recipe_id is not None:
+            query += " AND recipe_id = ?"
+            parameters.append(recipe_id)
+        query += " ORDER BY created_at DESC, version_id ASC"
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return tuple(self._version_from_row(row) for row in rows)
+
     def _initialize(self) -> None:
         connection = self._connect()
         try:

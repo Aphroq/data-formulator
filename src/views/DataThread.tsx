@@ -90,6 +90,7 @@ import { SimpleChartRecBox } from './SimpleChartRecBox';
 import { InteractionEntryCard, ResolvedConversationCard, getEntryGutterIcon, getDefaultGutterIcon, PlanStepsView } from './InteractionEntryCard';
 import { fittableThreadColumnsFor, iconVar, textVar } from '../app/layout';
 import { useLayout } from '../app/LayoutProvider';
+import { SaveAsRecipeButton } from './SaveAsRecipeDialog';
 
 /** Pick the icon component for a step line based on known prefixes. */
 // Re-exported from InteractionEntryCard — kept here for backward compat with gutter icon logic
@@ -2520,6 +2521,9 @@ export const DataThread: FC<{sx?: SxProps, centered?: boolean, denseColumns?: bo
     let inputTables = useSelector(dfSelectors.getInputTables);
     let focusedId = useSelector((state: DataFormulatorState) => state.focusedId);
     let charts = useSelector(dfSelectors.getAllCharts);
+    const automationEnabled = useSelector(
+        (state: DataFormulatorState) => state.serverConfig.AUTOMATION_ENABLED,
+    );
 
     let generatedReports = useSelector(dfSelectors.getAllGeneratedReports);
     const loadedTableNodes = useSelector((state: DataFormulatorState) => state.loadedTableNodes);
@@ -2846,9 +2850,12 @@ export const DataThread: FC<{sx?: SxProps, centered?: boolean, denseColumns?: bo
                 onDelete: () => { dispatch(dfActions.deleteChartById(chart.id)); },
                 deleteTooltip: t('dataThread.deleteChart'),
                 unread: !!chart.unread,
+                actions: automationEnabled && chart.recipeArtifactId
+                    ? <SaveAsRecipeButton chart={chart} compact />
+                    : undefined,
             };
         });
-    }, [charts, tables, conceptShelfItems, chartSynthesisInProgress]);
+    }, [automationEnabled, charts, tables, conceptShelfItems, chartSynthesisInProgress]);
 
     let isLeafTable = (table: DictTable) => {
         // A table with no derivations is a leaf. Conversation-

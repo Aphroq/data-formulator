@@ -54,6 +54,9 @@ app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500 MB
 app.config['PERMANENT_SESSION_LIFETIME'] = 60 * 60 * 24 * 365
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['AUTOMATION_ENABLED'] = (
+    os.environ.get('AUTOMATION_ENABLED', 'false').lower() == 'true'
+)
 
 # Server-side session via flask-session (filesystem / cachelib backend).
 # Stores SSO tokens + service tokens without hitting the 4 KB cookie limit.
@@ -274,6 +277,7 @@ def _register_blueprints():
     # Import server-log inspection routes (local-mode gated)
     from data_formulator.routes.logs import logs_bp
     from data_formulator.routes.model_endpoints import model_endpoints_bp
+    from data_formulator.routes.recipes import recipes_bp
 
     # Register blueprints
     app.register_blueprint(tables_bp)
@@ -282,6 +286,7 @@ def _register_blueprints():
     app.register_blueprint(demo_stream_bp)
     app.register_blueprint(logs_bp)
     app.register_blueprint(model_endpoints_bp)
+    app.register_blueprint(recipes_bp)
 
     # Initialise pluggable authentication (reads AUTH_PROVIDER env var)
     from data_formulator.auth.identity import init_auth, get_active_provider
@@ -383,6 +388,7 @@ def get_app_config():
         "DEV_MODE": args.get('dev', False),
         "WORKSPACE_BACKEND": workspace_backend,
         "AVAILABLE_LANGUAGES": args.get('available_languages', ['en', 'zh']),
+        "AUTOMATION_ENABLED": bool(app.config.get('AUTOMATION_ENABLED', False)),
     }
 
     from data_formulator.auth.identity import is_local_mode

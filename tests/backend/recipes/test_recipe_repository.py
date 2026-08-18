@@ -118,6 +118,12 @@ def test_repository_saves_and_reopens_draft_without_copying_recipe_json(
         recipe_workspace.identity_id,
         recipe_workspace.workspace_id,
     )[0].recipe_id == compiled_recipe.spec.recipe_id
+    assert reopened.list_versions(
+        recipe_workspace.identity_id,
+        recipe_workspace.workspace_id,
+        recipe_id=compiled_recipe.spec.recipe_id,
+    ) == (first,)
+    assert reopened.list_versions("user:bob", "ws-2") == ()
 
     with sqlite3.connect(database_path) as connection:
         columns = {

@@ -100,6 +100,7 @@ export interface ServerConfig {
     IDENTITY?: { type: string; id: string };
     CREDENTIAL_VAULT_ENABLED?: boolean;
     IS_LOCAL_MODE?: boolean;
+    AUTOMATION_ENABLED: boolean;
 }
 
 export interface ModelConfig {
@@ -350,6 +351,7 @@ const initialState: DataFormulatorState = {
         AVAILABLE_LANGUAGES: ['en', 'zh'],
         DEV_MODE: false,
         WORKSPACE_BACKEND: 'local',
+        AUTOMATION_ENABLED: false,
     },
 
     config: {

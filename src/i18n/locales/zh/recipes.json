@@ -1,0 +1,59 @@
+{
+  "recipes": {
+    "title": "配方",
+    "subtitle": "管理从持久化分析制品编译出的确定性工作流，并完成验证、发布与运行。",
+    "unavailable": "此服务器未启用配方自动化功能。",
+    "openWorkspace": "请先打开一个工作区，再查看其中的配方。",
+    "savedRecipes": "已保存配方",
+    "empty": "此工作区尚未保存配方。",
+    "selectVersion": "请选择一个配方版本查看详情。",
+    "versionNumber": "版本 {{number}}",
+    "hash": "配方哈希",
+    "parameters": "参数",
+    "noParameters": "此配方没有运行时参数。",
+    "inputs": "输入",
+    "steps": "步骤",
+    "localInput": "工作区输入",
+    "dryRun": "试运行",
+    "publish": "发布",
+    "runNow": "立即运行",
+    "archive": "归档",
+    "archiveConfirm": "要归档这个已发布的配方版本吗？此操作无法撤销。",
+    "dryRunSucceeded": "试运行成功，此版本已通过验证。",
+    "publishSucceeded": "配方版本已发布。",
+    "runSucceeded": "运行 {{runId}} 已成功完成。",
+    "archiveSucceeded": "配方版本已归档。",
+    "needsReview": "运行检测到 schema 漂移，需要人工检查后才能继续。",
+    "runFailed": "配方执行失败。",
+    "loadFailed": "无法加载配方。",
+    "actionFailed": "配方操作失败。",
+    "invalidParameter": "请为 {{name}} 输入有效值。",
+    "true": "是",
+    "false": "否",
+    "saveAsRecipe": "保存为配方",
+    "saveDescription": "根据此图表的持久化制品血缘创建不可变草稿；发布前必须先成功试运行。",
+    "defaultName": "分析配方",
+    "name": "配方名称",
+    "description": "说明",
+    "save": "保存配方",
+    "saveFailed": "无法保存配方。",
+    "artifactStale": "当前图表已与持久化制品不一致。请重新运行分析后再保存编辑结果。",
+    "status": {
+      "draft": "草稿",
+      "validated": "已验证",
+      "published": "已发布",
+      "archived": "已归档"
+    },
+    "inputMode": {
+      "refreshable": "可刷新",
+      "pinned_snapshot": "固定快照",
+      "external_path": "外部路径",
+      "unresolved": "未解析"
+    },
+    "stepKind": {
+      "load": "加载数据",
+      "transform": "转换数据",
+      "chart": "创建图表"
+    }
+  }
+}

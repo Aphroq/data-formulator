@@ -29,8 +29,18 @@ import { iconVar, textVar } from '../app/layout';
 
 // ─── Chart Card ──────────────────────────────────────────────────────────────
 
+type ChartCardElement = {
+    tableId: string;
+    chartId: string;
+    element: any;
+    onDelete?: () => void;
+    deleteTooltip?: string;
+    unread?: boolean;
+    actions?: React.ReactNode;
+};
+
 export let buildChartCard = (
-    chartElement: { tableId: string, chartId: string, element: any, onDelete?: () => void, deleteTooltip?: string, unread?: boolean },
+    chartElement: ChartCardElement,
     focusedChartId?: string,
 ) => {
     let selectedClassName = focusedChartId == chartElement.chartId ? 'selected-card' : '';
@@ -43,8 +53,12 @@ export let buildChartCard = (
             alignItems: 'flex-start',
             width: 'fit-content',
             mx: 1,
-            '& .data-thread-chart-delete-btn-external': { opacity: 0, transition: 'opacity 0.15s' },
-            '&:hover .data-thread-chart-delete-btn-external': { opacity: 1 },
+            '& .data-thread-chart-actions-external': { opacity: 0, transition: 'opacity 0.15s' },
+            '&:hover .data-thread-chart-actions-external': { opacity: 1 },
+            '&:focus-within .data-thread-chart-actions-external': { opacity: 1 },
+            '@media (hover: none)': {
+                '& .data-thread-chart-actions-external': { opacity: 1 },
+            },
             '@keyframes unreadPulse': {
                 '0%, 100%': { transform: 'scale(1)', opacity: 0.75 },
                 '50%': { transform: 'scale(1.2)', opacity: 1 },
@@ -78,32 +92,38 @@ export let buildChartCard = (
                 }} />
             )}
         </Card>
-        {chartElement.onDelete && (
-            <Tooltip title={chartElement.deleteTooltip ?? ''}>
-                <IconButton
-                    className="data-thread-chart-delete-btn-external"
-                    size="small"
-                    color="error"
-                    aria-label={chartElement.deleteTooltip ?? 'delete chart'}
-                    sx={{
-                        alignSelf: 'flex-start',
-                        ml: 0.25,
-                        padding: 0.5,
-                        flexShrink: 0,
-                        '&:hover': { transform: 'scale(1.15)' },
-                    }}
-                    onClick={(event) => { event.stopPropagation(); chartElement.onDelete?.(); }}
-                >
-                    <DeleteIcon sx={{ fontSize: iconVar.md }} />
-                </IconButton>
-            </Tooltip>
+        {(chartElement.actions || chartElement.onDelete) && (
+            <Stack
+                className="data-thread-chart-actions-external"
+                spacing={0.25}
+                sx={{ alignSelf: 'flex-start', ml: 0.25, flexShrink: 0 }}
+            >
+                {chartElement.actions}
+                {chartElement.onDelete && (
+                    <Tooltip title={chartElement.deleteTooltip ?? ''}>
+                        <IconButton
+                            className="data-thread-chart-delete-btn-external"
+                            size="small"
+                            color="error"
+                            aria-label={chartElement.deleteTooltip ?? 'delete chart'}
+                            sx={{
+                                padding: 0.5,
+                                '&:hover': { transform: 'scale(1.15)' },
+                            }}
+                            onClick={(event) => { event.stopPropagation(); chartElement.onDelete?.(); }}
+                        >
+                            <DeleteIcon sx={{ fontSize: iconVar.md }} />
+                        </IconButton>
+                    </Tooltip>
+                )}
+            </Stack>
         )}
     </Box>
 }
 
 /** Wrap chart elements as thumbnail rows under their table. */
 export let buildChartCards = (
-    relevantCharts: { tableId: string, chartId: string, element: any }[],
+    relevantCharts: ChartCardElement[],
     focusedChartId: string | undefined,
     collapsed: boolean = false,
 ) => {

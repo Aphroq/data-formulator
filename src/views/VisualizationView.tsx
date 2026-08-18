@@ -97,6 +97,7 @@ import CodeIcon from '@mui/icons-material/Code';
 import type { DataOperation } from '../dataOperations/models';
 import { DataFrameTable } from './DataFrameTable';
 import { LocalFolderPanel } from './UnifiedDataUploadDialog';
+import { SaveAsRecipeButton } from './SaveAsRecipeDialog';
 
 export interface VisPanelProps { }
 
@@ -1532,6 +1533,9 @@ export const ChartEditorFC: FC<{}> = function ChartEditorFC({}) {
             {/* `mr` leaves room for the pane's close-canvas button, which floats
                 above this bar at the same corner. */}
             <Box sx={{ ml: 'auto', mr: '40px', display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                {serverConfig.AUTOMATION_ENABLED && focusedChart?.recipeArtifactId && (
+                    <SaveAsRecipeButton chart={focusedChart} />
+                )}
                 {hasDerived && (
                     <Tooltip title={t('chart.log')} placement="bottom">
                         <IconButton

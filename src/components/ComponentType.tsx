@@ -569,6 +569,33 @@ export type Chart = {
     activeVariantId?: string,  // id of the variant currently rendered in the focused canvas; undefined = default
     scaleFactor?: number,  // zoom level applied by the resizer; undefined = 1 (no zoom)
     unread?: boolean,  // true for agent-generated charts the user hasn't focused yet; cleared on focus
+    recipeArtifactId?: string,  // durable backend chart Artifact eligible for Recipe compilation
+    recipeArtifactFingerprint?: string,  // frontend chart state when that Artifact was minted
+}
+
+function sortJsonValue(value: any): any {
+    if (Array.isArray(value)) return value.map(sortJsonValue);
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(
+            Object.keys(value).sort().map(key => [key, sortJsonValue(value[key])]),
+        );
+    }
+    return value;
+}
+
+/**
+ * Snapshot the reproducible chart state associated with a durable Artifact.
+ * UI-only identity/read markers and the Artifact fields themselves are excluded.
+ */
+export function computeRecipeArtifactFingerprint(chart: Chart): string {
+    const {
+        id: _id,
+        unread: _unread,
+        recipeArtifactId: _recipeArtifactId,
+        recipeArtifactFingerprint: _recipeArtifactFingerprint,
+        ...reproducibleState
+    } = chart;
+    return JSON.stringify(sortJsonValue(reproducibleState));
 }
 
 /** Compute a key for title/subtitle staleness using the chart's analytical encoding. */

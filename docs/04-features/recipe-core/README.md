@@ -8,7 +8,7 @@
 | Worktree | `D:\projects\dfm-wt-recipe` |
 | 本机实例 | `recipe`：后端 5569、Vite 5175、数据目录 `D:\projects\dfm-runtime\recipe` |
 | 基线 | 共享文档提交，父提交为 Data Formulator `5477f0e` |
-| 当前阶段 | M2-B 后端核心已完成：持久化 Recipe 可 dry run、验证、发布和 manual run；下一步进入 M2-C 最小 API 与 UI |
+| 当前阶段 | M2-C 已完成：Recipe Core 已具备受 feature flag 保护的 API、Save as Recipe 与 Recipes 生命周期页面 |
 
 ## 目标
 
@@ -55,9 +55,9 @@
 
 - Recipe Worktree 已建立独立 `.venv` 与 `node_modules`；Yarn 下载缓存使用 `D:\projects\dfm-runtime\recipe\yarn-cache`，避免 Windows 全局缓存锁争用。
 - 系统 Node `20.15.1` 低于 Vite 7.3.3 的最低要求；验证使用工作区运行时 Node `24.19.0`。后续固定启动入口必须显式选择兼容 Node，不能靠当前系统 PATH。
-- 聚焦 Recipe 契约：76 passed；Recipe、DataOperation、Sandbox、代码签名和 Workspace 聚焦回归 190 passed、8 skipped。
-- 全量后端：2214 passed、13 skipped、1 xfailed、1 deselected。deselect 项是 Windows 未启用符号链接权限时无法创建 symlink 的安全测试；Codex 终端另需 `PYTHONUTF8=1` 和非 `dumb` TERM，分别避免 GBK 测试夹具与 spinner 环境误报。
-- 全量前端：45 files、391 tests passed；Vite 生产构建成功。构建仅有既有 eval、动态/静态混合导入和大 chunk 警告。
+- 聚焦 Recipe 契约：82 passed；M2-C route/repository 聚焦回归 17 passed。
+- 全量后端：2220 passed、13 skipped、1 xfailed、1 deselected。deselect 项是 Windows 未启用符号链接权限时无法创建 symlink 的安全测试；Codex 终端另需 `PYTHONUTF8=1` 和非 `dumb` TERM，分别避免 GBK 测试夹具与 spinner 环境误报。
+- 全量前端：48 files、396 tests passed；Vite 生产构建成功。构建仅有既有 eval、动态/静态混合导入和大 chunk 警告。
 
 ## M0 首个开发节点（已完成）
 
@@ -160,6 +160,30 @@ M2-B3 实施结果：
 - `RecipeService` 是 lifecycle-aware 入口：dry run 始终从 repository 重开保存版本，成功后固定 validation 证据；manual run 只接受 published 版本。两条路径共享同一 Executor，不调用 Agent、LLM、TrustGraph 或 Workflow Replay。
 - Windows 下 Sandbox worker 会暂时把 Run Workspace 作为当前目录，因此运行目录不做完成时整体 rename；实现采用“锁内创建唯一目录 + 最终 manifest 同目录原子替换”的提交协议，避免依赖平台不支持的目录重命名语义。
 
+## M2-C 最小 API 与 UI 计划（已完成）
+
+### 接入边界与复用策略
+
+1. API 只做现有 Compiler、Repository 和 `RecipeService` 的 workspace-scoped 适配，不复制状态机或执行逻辑；请求 identity 与 `X-Workspace-Id` 继续走现有认证和 Workspace factory。
+2. 复用 Flask Blueprint、统一 `AppError/json_ok`、标准库 SQLite、既有 request-independent connector opener 和 `LocalSandbox`；不引入新 Web 框架、ORM、队列或表单状态库。
+3. 前端复用 React Router、Redux 的现有 Workspace/server config selector、MUI、i18next 和统一 `apiRequest`。Recipe 目录状态只从后端读取，不再放入 Redux 或 session state 建立第二事实来源。
+4. Save as Recipe 只提交后端生成的 durable `chart_artifact_id`。前端保存 artifact 产生时的稳定 chart 快照；后续 chart type、encoding、config、theme 或其他可复现状态变化会禁用保存，不能把编辑后的画面错误绑定到旧 Artifact。
+5. `AUTOMATION_ENABLED` 默认关闭并同时控制 Blueprint before-request gate、app config、导航、Data Thread action 和画布 action；关闭时不会打开 Workspace 或调用 Recipe service。
+
+### API 与页面契约
+
+- `POST /api/recipes/compile` 从 1–20 个显式 artifact id 编译并保存 immutable draft；`GET /api/recipes` 和 `GET /api/recipes/versions/<id>` 返回当前 identity/workspace 内的目录、版本、输入和步骤。
+- dry-run、publish、manual run、archive 分别调用同一后端生命周期服务；API 只返回经清洗的状态、run id、hash 和相对输出证据，不返回 credential、连接参数、数据行或绝对路径。
+- Recipes 页面按后端状态只开放合法动作：draft 可 dry run、validated 可 publish、published 可 manual run/archive；typed parameter 控件在提交前把 number/integer/boolean/date/datetime 转成 JSON 类型，不做代码字符串替换。
+- Data Thread 图表卡和聚焦画布复用同一个 Save as Recipe dialog。桌面线程卡使用 hover/focus action rail，触摸设备直接显示；保存后导航到刚创建的确切 RecipeVersion。
+
+M2-C 实施结果：
+
+- 新 Blueprint 全部路由先经过 default-off feature gate，再解析 request identity 和 durable local Workspace；repository 新增同时带 identity/workspace 条件的版本列表。纵向 route 测试已覆盖 compile → list/get → dry run → publish → manual run → archive，并证明 flag 关闭时连 Workspace 都不会打开。
+- `chart_artifact_id` 随生成图表进入可持久化 Chart 描述；稳定递归 JSON 快照忽略图表 UI identity/read 标记，但会识别可复现状态变化。手工图表、缺 durable lineage 的图表和已编辑图表均不能静默保存旧 Recipe。
+- 新 Recipes 页面展示版本状态、input mode、schema hash、步骤、typed parameters 与合法生命周期动作；前端 API 客户端对 version id 做 URL 编码，并始终把运行参数作为结构化 JSON object 发送。
+- 新增中英文完整键集合、API/Artifact/UI 单元测试；Recipe 82 passed，全量后端 2220 passed、13 skipped、1 xfailed、1 deselected，前端 48 files / 396 tests passed，生产构建成功。
+
 ## 开发记录
 
 | 日期 | 阶段 | 实质变更 | 验证 | 提交 |
@@ -177,6 +201,7 @@ M2-B3 实施结果：
 | 2026-08-18 | M2-B1 | 原子发布不可变 Recipe JSON/Workflow/manifest；以共享 automation SQLite 保存 scope、draft 生命周期和 artifact 引用，支持幂等恢复并拒绝篡改或跨 scope 访问 | Recipe + Workspace + vault 聚焦回归 120 passed | `feat: persist immutable recipe drafts` |
 | 2026-08-18 | M2-B2 | 拆分无 Flask 的 connector registry 初始化；新增显式 scope Workspace/Connector opener，只认可重启后可恢复的 no-auth、vault 或 ambient 连接 | 聚焦 139 passed；全量后端 2201 passed、13 skipped、1 xfailed、1 deselected | `feat: add request-independent recipe openers` |
 | 2026-08-18 | M2-B3 | 新增可校验 Run artifact、隔离确定性 Executor、dry-run validation 证据、SQLite v2 生命周期状态机和 lifecycle-aware manual run | Recipe 76 passed；相关回归 190 passed、8 skipped；全量后端 2214 passed、13 skipped、1 xfailed、1 deselected | `feat: execute and publish deterministic recipes` |
+| 2026-08-18 | M2-C | 注册 default-off Recipe API；新增 Save as Recipe、artifact 编辑失效契约、Recipes 版本/输入/步骤与生命周期页面 | Recipe 82 passed；全量后端 2220 passed、13 skipped、1 xfailed、1 deselected；前端 48 files、396 tests；生产构建成功 | `feat: expose recipe lifecycle in the app` |
 
 ## 已确认决策
 
@@ -188,7 +213,7 @@ M2-B3 实施结果：
 
 ## 未决与风险
 
-- 手工创建或编辑后的 Chart 目前只有 Redux/session_state，不能直接作为机器 Recipe 输入。
+- 手工创建 Chart 没有 durable artifact id，不能直接作为机器 Recipe 输入；后端生成 Chart 一旦在前端编辑，其保存动作会因 artifact 快照失效而禁用，重新持久化编辑结果仍需后续正式入口。
 - 现有 Workspace `content_hash` 是抽样 MD5；Artifact 完整性与 schema fingerprint 必须使用独立、明确版本的算法。
 - Azure Blob 首发支持取决于正式 artifact store 接口；不能使用 scratch。
 - 数据库纵向切片使用已有环境或测试替身，不建立 Docker 测试依赖。
@@ -205,4 +230,4 @@ M2-B3 实施结果：
 - [x] dry run 成功后才能发布。
 - [x] Published RecipeVersion 不可修改。
 - [x] 正常 manual run 不调用 LLM/TrustGraph。
-- [ ] `uv run pytest`、`yarn test`、`yarn build` 通过。
+- [x] `uv run pytest`、`yarn test`、`yarn build` 通过。

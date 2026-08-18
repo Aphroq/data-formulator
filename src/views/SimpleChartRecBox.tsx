@@ -28,7 +28,7 @@ import { AppDispatch } from '../app/store';
 import { resolveRecommendedChart, getUrls, getTriggers, translateBackend } from '../app/utils';
 import { streamRequest, apiRequest } from '../app/apiClient';
 import { getErrorMessage } from '../app/errorCodes';
-import { Chart, ClarificationResponse, DictTable, FieldItem, createDictTable, InteractionEntry, computeInsightKey, TextTurn, TableSemanticsInfo, ROOTLESS_THREAD_ID } from "../components/ComponentType";
+import { Chart, ClarificationResponse, DictTable, FieldItem, createDictTable, InteractionEntry, computeInsightKey, computeRecipeArtifactFingerprint, TextTurn, TableSemanticsInfo, ROOTLESS_THREAD_ID } from "../components/ComponentType";
 import { normalizeClarifyEvent, formatClarificationResponses } from '../app/clarification';
 import { parseDataOperation } from '../dataOperations/models';
 import { buildDictTableFromWorkspace } from '../app/tableThunks';
@@ -1429,6 +1429,11 @@ export const SimpleChartRecBox: FC<{ onInputFocus?: () => void }> = function ({ 
                         newChart.subtitle = insightSubtitle.trim();
                     }
                     newChart.titleKey = computeInsightKey(newChart);
+                }
+                const recipeArtifactId = transformResult.chart_artifact_id;
+                if (typeof recipeArtifactId === 'string' && recipeArtifactId) {
+                    newChart.recipeArtifactId = recipeArtifactId;
+                    newChart.recipeArtifactFingerprint = computeRecipeArtifactFingerprint(newChart);
                 }
                 runCreatedChartIds.push(newChart.id);
                 // Mark as unread by default; cleared below if we auto-focus it
