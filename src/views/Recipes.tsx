@@ -227,11 +227,13 @@ export const Automation: FC = () => {
     ): Promise<{ applied: boolean; error?: string }> => {
         if (requestSequence.current !== sequence) return { applied: false };
         setSelectedVersionId(versionId);
-        setDetail(null);
-        setLastRun(null);
-        setError('');
+        if (clearDetail) {
+            setDetail(null);
+            setLastRun(null);
+        }
         try {
             const next = await getRecipeVersion(versionId);
+            if (requestSequence.current !== sequence) return { applied: false };
             setSelectedRecipeId(next.recipe.recipe_id);
             setDetail(next);
             setParameters(initialParameterValues(next.spec.parameters));
@@ -269,6 +271,7 @@ export const Automation: FC = () => {
                 if (outcome.error && surfaceError) setError(outcome.error);
                 return outcome;
             } else {
+                setSelectedRecipeId('');
                 setSelectedVersionId('');
                 setDetail(null);
                 return { applied: true };
@@ -296,9 +299,19 @@ export const Automation: FC = () => {
         setError('');
         setNotice('');
         setLastRun(null);
-        if (activeWorkspace && enabled) void refresh(searchParams.get('version') || undefined);
-        // Reload only when the active Workspace or feature availability changes.
-    }, [activeWorkspace?.id, enabled]);
+        setWarning('');
+        if (activeWorkspace && enabled) void refresh(requestedVersionId || undefined);
+        return () => {
+            requestSequence.current += 1;
+        };
+    }, [activeWorkspace?.id, enabled, refresh, requestedVersionId]);
+
+    const selectVersion = (versionId: string) => {
+        if (requestedVersionId === versionId) return;
+        const next = new URLSearchParams(searchParams);
+        next.set('version', versionId);
+        setSearchParams(next);
+    };
 
     const parameterValues = () => {
         if (!detail) return {};
@@ -327,6 +340,7 @@ export const Automation: FC = () => {
             if (action === 'dry-run') {
                 const response = await dryRunRecipe(versionId, parameterValues());
                 completedRun = response.result;
+                completedVersion = response.version;
                 if (response.result.status === 'succeeded') {
                     completedNotice = t('recipes.dryRunSucceeded');
                 }
@@ -407,6 +421,7 @@ export const Automation: FC = () => {
                 </Box>
                 {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
                 {notice && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setNotice('')}>{notice}</Alert>}
+                {warning && <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setWarning('')}>{warning}</Alert>}
                 {loading && recipes.length === 0 ? (
                     <Paper variant="outlined" sx={{ minHeight: 260, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         <CircularProgress size={28} />
@@ -435,15 +450,16 @@ export const Automation: FC = () => {
                                         <ListItemButton
                                             key={recipe.recipe_id}
                                             selected={selectedRecipeId === recipe.recipe_id}
-                                            onClick={() => void loadDetail(latestVersion.version_id)}
+                                            onClick={() => selectVersion(latestVersion.version_id)}
                                             divider
                                             alignItems="flex-start"
                                         >
                                             <ListItemText
+                                                slotProps={{ secondary: { component: 'div' } }}
                                                 primary={recipe.name}
                                                 secondary={
-                                                    <Box component="span" sx={{ display: 'block', mt: 0.75 }}>
-                                                        <Stack component="span" direction="row" spacing={1} alignItems="center">
+                                                    <Box sx={{ mt: 0.75 }}>
+                                                        <Stack direction="row" spacing={1} alignItems="center">
                                                             <Chip size="small" label={t(`recipes.status.${latestVersion.status}`)} color={statusColor(latestVersion.status)} />
                                                             <Typography component="span" variant="caption" color="text.secondary">
                                                                 {t('automation.versionsCount', { count: recipe.versions.length })}
@@ -477,7 +493,7 @@ export const Automation: FC = () => {
                                             <InputLabel htmlFor="automation-version-picker">{t('automation.versionPicker')}</InputLabel>
                                             <NativeSelect
                                                 value={selectedVersionId}
-                                                onChange={event => void loadDetail(event.target.value)}
+                                                onChange={event => selectVersion(event.target.value)}
                                                 inputProps={{
                                                     id: 'automation-version-picker',
                                                     'aria-label': t('automation.versionPicker'),

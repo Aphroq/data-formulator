@@ -7,8 +7,8 @@
 | 分支 | `feat/automation-workbench` |
 | Worktree | `D:\projects\dfm-wt-automation` |
 | 本机实例 | `automation`：后端 5570、Vite 5176、数据目录 `D:\projects\dfm-runtime\automation`（Worktree 创建后启用） |
-| 基线 | 在 Recipe Core 基础契约提交后从 `feat/recipe-core` 创建 |
-| 当前阶段 | M3-A 已完成：Automation 已收敛到现有工作区侧栏；下一步为持久化 Schedule/Run 契约 |
+| 基线 | Recipe Core M2-D `2a14bd15`；Automation 的 5 个既有提交已线性 rebase 到该提交之后 |
+| 当前阶段 | M3-A 已完成并同步 Recipe Core 最新完整性/API/UI 契约；下一步为持久化 Schedule/Run 契约 |
 
 ## 目标
 
@@ -111,6 +111,7 @@ Recipe Core 已经可以保存、校验、发布和手动运行 Recipe，但入�
 - `Save as Recipe` 改为进入 `/automation?version=...`；旧 `/recipes` 路径保留 query/hash 后重定向。
 - `AUTOMATION_ENABLED=false` 时导航入口隐藏且直接访问失败关闭；无活动 Workspace 时不展示跨 Workspace 数据。
 - 试运行和手动运行返回后展示轻量结果面板；它不冒充持久化运行历史，刷新页面后不承诺恢复。
+- 已继承 Recipe Core M2-D 的过期请求丢弃、URL 版本同步、immutable 版本元数据和“动作结果先落地、后续刷新失败只告警”语义；Automation 继续只展示一套较详细的当前运行结果面板。
 - 未加入节点画布、Scheduler、Worker、Runs Inbox、新数据库表或新的状态管理依赖。
 
 ## 实施顺序
@@ -135,6 +136,7 @@ Recipe Core 已经可以保存、校验、发布和手动运行 Recipe，但入�
 | 2026-08-19 | M3-A 反馈完善 | 增加当前会话最近运行结果面板，展示状态、Run ID、步骤、耗时、输出位置、最终产物与错误，不扩展持久化 Runs Inbox | Automation 聚焦测试、前端全量测试、生产构建 | `feat: show latest automation run result` |
 | 2026-08-18 | M3-A 导航优化 | 移除新增的 `App / Automation` 外层左栏，将 Automation 接入原有工作区 rail，并恢复原有 `About / App` 顶部导航；会话、知识和 Workflow Replay 概念不变 | 前端 49 files / 402 tests；后端 2220 passed、13 skipped、1 deselected、1 xfailed；生产构建；真实页面导航、返回原面板、加载数据入口与控制台检查 | `fix: integrate automation into workspace navigation` |
 | 2026-08-18 | M3-A UI 收口 | 删除 Automation 页头残留的“打开应用”按钮，并移除空状态中对 App 层级的表述 | Automation 聚焦测试、生产构建、真实页面检查 | `fix: remove redundant automation app action` |
+| 2026-08-19 | M3-A 基线同步 | 将 5 个既有 Automation 提交线性 rebase 到 Recipe Core M2-D；解决页面/测试重叠，保留详细运行结果并继承防串请求、URL 版本和刷新失败语义 | Automation 页面 7 passed；前端 49 files / 405 tests；后端 2239 passed、16 skipped、1 xfailed；生产构建和相关 ESLint 通过 | `fix: align automation with recipe core` |
 
 ## 已确认决策
 
@@ -147,7 +149,7 @@ Recipe Core 已经可以保存、校验、发布和手动运行 Recipe，但入�
 
 ## 未决与风险
 
-- 当前 Worktree 基于 Recipe Core 基础契约提交 `9d20f70f` 创建；后续 Schedule/Run 工作不得回写 Recipe Core 分支。
+- 当前 Worktree 已基于 Recipe Core M2-D `2a14bd15` 重放 Automation 提交；后续 Schedule/Run 工作不得回写 Recipe Core 分支。
 - Web、Worker 和 SQLite 直接在本机运行，不提供 Docker 或 Compose 方案。
 - SQLite 数据库和 artifact store 必须由 Web/Worker 解析到相同绝对路径。
 - 进程崩溃、过期 lease 和运行中取消需要专门的恢复测试。

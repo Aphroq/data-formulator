@@ -1,6 +1,6 @@
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -71,7 +71,9 @@ vi.mock('react-i18next', () => ({
             'recipes.dryRun': 'Dry run',
             'recipes.dryRunSucceeded': 'Dry run succeeded',
             'recipes.runNow': 'Run now',
+            'recipes.runSucceeded': `Run ${values?.runId} succeeded.`,
             'recipes.runFailed': 'Run failed',
+            'recipes.refreshAfterActionFailed': 'Action completed, but Automation could not be refreshed.',
         }[key] ?? key),
     }),
 }));
@@ -149,9 +151,32 @@ const publishedDetail = {
     spec: { ...detail.spec, version_id: 'rv_1' },
 };
 
+const runResult = {
+    status: 'succeeded',
+    run: { run_id: 'run_2', kind: 'manual', status: 'succeeded', manifest_hash: 'sha256:a' },
+    steps: [{
+        step_id: 'step_1',
+        kind: 'load',
+        content_hash: `sha256:${'b'.repeat(64)}`,
+        schema_hash: `sha256:${'c'.repeat(64)}`,
+        output_path: 'workspace/data/orders.parquet',
+        duration_ms: 125,
+    }],
+    error: null,
+};
+
+function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>(next => {
+        resolve = next;
+    });
+    return { promise, resolve };
+}
+
 
 beforeEach(() => {
     vi.clearAllMocks();
+    state.activeWorkspace = { id: 'ws-1', displayName: 'Regional analysis' };
     state.serverConfig.AUTOMATION_ENABLED = true;
     mocks.listRecipes.mockResolvedValue([recipe]);
     mocks.getRecipeVersion.mockImplementation((versionId: string) => Promise.resolve(
@@ -235,6 +260,73 @@ describe('Automation page', () => {
             expect(mocks.getRecipeVersion).toHaveBeenCalledWith('rv_1');
         });
         expect(await screen.findByText('Published')).toBeInTheDocument();
+    });
+
+    it('shows immutable version metadata instead of the mutable catalog name', async () => {
+        mocks.getRecipeVersion.mockResolvedValue({
+            ...detail,
+            recipe: { ...detail.recipe, name: 'Renamed catalog entry' },
+            spec: { ...detail.spec, name: 'Immutable version name' },
+        });
+
+        render(<MemoryRouter initialEntries={['/automation']}><Automation /></MemoryRouter>);
+
+        expect(await screen.findByRole('heading', { name: 'Immutable version name' })).toBeInTheDocument();
+        expect(screen.queryByRole('heading', { name: 'Renamed catalog entry' })).not.toBeInTheDocument();
+    });
+
+    it('ignores a stale detail response after another project is selected', async () => {
+        const firstDetail = deferred<typeof detail>();
+        const secondVersion = {
+            ...version,
+            version_id: 'rv_second',
+            recipe_id: 'rcp_2',
+        };
+        const secondRecipe = {
+            ...recipe,
+            recipe_id: 'rcp_2',
+            name: 'Second automation',
+            versions: [secondVersion],
+        };
+        const secondDetail = {
+            ...detail,
+            recipe: { ...detail.recipe, recipe_id: 'rcp_2', name: 'Second automation' },
+            version: secondVersion,
+            spec: {
+                ...detail.spec,
+                recipe_id: 'rcp_2',
+                version_id: 'rv_second',
+                name: 'Second immutable version',
+            },
+        };
+        mocks.listRecipes.mockResolvedValue([recipe, secondRecipe]);
+        mocks.getRecipeVersion.mockImplementation((versionId: string) => (
+            versionId === 'rv_2' ? firstDetail.promise : Promise.resolve(secondDetail)
+        ));
+
+        render(<MemoryRouter initialEntries={['/automation?version=rv_2']}><Automation /></MemoryRouter>);
+
+        fireEvent.click(await screen.findByText('Second automation'));
+        expect(await screen.findByRole('heading', { name: 'Second immutable version' })).toBeInTheDocument();
+
+        await act(async () => firstDetail.resolve(detail));
+        expect(screen.getByRole('heading', { name: 'Second immutable version' })).toBeInTheDocument();
+    });
+
+    it('keeps a successful run result when the follow-up refresh fails', async () => {
+        mocks.listRecipes
+            .mockResolvedValueOnce([recipe])
+            .mockRejectedValueOnce(new Error('refresh failed'));
+
+        render(<MemoryRouter initialEntries={['/automation?version=rv_1']}><Automation /></MemoryRouter>);
+
+        expect(await screen.findByText('Published')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+
+        await waitFor(() => expect(mocks.runRecipe).toHaveBeenCalledWith('rv_1', {}));
+        expect(await screen.findByRole('region', { name: 'Latest run result' })).toBeInTheDocument();
+        expect(screen.getByText('Action completed, but Automation could not be refreshed.')).toBeInTheDocument();
+        expect(screen.queryByText('recipes.actionFailed')).not.toBeInTheDocument();
     });
 
     it('fails closed without loading projects when Automation is disabled', () => {
