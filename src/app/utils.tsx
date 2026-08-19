@@ -72,6 +72,11 @@ export function getUrls() {
         LOGS_TAIL: `/api/logs/tail`,
         LOGS_DOWNLOAD: `/api/logs/download`,
         MODEL_ENDPOINTS: `/api/model-endpoints`,
+        COPILOT_AUTH_STATUS: `/api/copilot/auth/status`,
+        COPILOT_AUTH_START: `/api/copilot/auth/device/start`,
+        COPILOT_AUTH_POLL: `/api/copilot/auth/device/poll`,
+        COPILOT_AUTH_CANCEL: `/api/copilot/auth/device/cancel`,
+        COPILOT_AUTH_DISCONNECT: `/api/copilot/auth/disconnect`,
 
         // Session management
         SESSION_SAVE: `/api/sessions/save`,

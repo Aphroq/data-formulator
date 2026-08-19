@@ -90,6 +90,45 @@ class TestModelDiscovery:
         registry = ModelRegistry()
         assert registry.list_public() == []
 
+    @patch.dict(os.environ, {
+        "GITHUB_COPILOT_ENABLED": "true",
+        "GITHUB_COPILOT_MODELS": "gpt-4.1, github_copilot/gpt-4o, gpt-4.1",
+    }, clear=True)
+    def test_copilot_candidates_need_no_generic_api_key_or_base(self):
+        registry = ModelRegistry()
+
+        assert registry.list_public() == [
+            {
+                "id": "global-github_copilot-gpt-4.1",
+                "endpoint": "github_copilot",
+                "model": "gpt-4.1",
+                "api_base": "",
+                "api_version": "",
+                "auth_mode": "oauth_device",
+                "is_global": True,
+            },
+            {
+                "id": "global-github_copilot-gpt-4o",
+                "endpoint": "github_copilot",
+                "model": "gpt-4o",
+                "api_base": "",
+                "api_version": "",
+                "auth_mode": "oauth_device",
+                "is_global": True,
+            },
+        ]
+
+    @patch.dict(os.environ, {
+        "GITHUB_COPILOT_ENABLED": "false",
+        "GITHUB_COPILOT_MODELS": "gpt-4.1",
+    }, clear=True)
+    def test_copilot_candidates_are_absent_when_flag_is_off(self):
+        assert ModelRegistry().list_public() == []
+
+    @patch.dict(os.environ, {"GITHUB_COPILOT_ENABLED": "true"}, clear=True)
+    def test_copilot_requires_an_explicit_candidate_list(self):
+        assert ModelRegistry().list_public() == []
+
 
 # ---------------------------------------------------------------------------
 # Tests: public listing never leaks credentials

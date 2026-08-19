@@ -23,6 +23,7 @@ import { InteractionEntry } from '../components/ComponentType';
 import { AgentIcon } from '../icons';
 import { radius, borderColor } from '../app/tokens';
 import { textVar } from '../app/layout';
+import { ContextSources } from './ContextSources';
 
 /** Pick the icon component for a step line based on known prefixes. */
 export const getStepIconComponent = (line: string) => {
@@ -568,6 +569,7 @@ export const InteractionEntryCard: React.FC<InteractionEntryCardProps> = memo(({
                             : displayText}
                     </Typography>
                 )}
+                <ContextSources items={entry.contextItems} />
             </Box>
         );
     }
@@ -636,7 +638,12 @@ export const ResolvedConversationCard: React.FC<ResolvedConversationCardProps> =
                 const timestamps = pairs.flatMap(p => [p.agentEntry.timestamp, p.userEntry.timestamp])
                     .filter((t): t is number => typeof t === 'number');
                 window.dispatchEvent(new CustomEvent('df-view-explanation', {
-                    detail: { content: md, sourceTableId, timestamps },
+                    detail: {
+                        content: md,
+                        sourceTableId,
+                        timestamps,
+                        contextItems: lastPair.agentEntry.contextItems,
+                    },
                 }));
             }
         } else {
@@ -691,6 +698,7 @@ export const ResolvedConversationCard: React.FC<ResolvedConversationCardProps> =
                             ↳ {followup}
                         </Typography>
                     )}
+                    <ContextSources items={lastPair.agentEntry.contextItems} />
                 </Box>
             ) : (
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: '4px', py: '2px' }}>
@@ -707,6 +715,7 @@ export const ResolvedConversationCard: React.FC<ResolvedConversationCardProps> =
                                 <Typography component="div" sx={{ fontSize: 'inherit', color: 'inherit' }}>
                                     {renderFieldHighlights(p.agentEntry.displayContent || p.agentEntry.content, theme.palette.primary.main)}
                                 </Typography>
+                                <ContextSources items={p.agentEntry.contextItems} />
                             </Box>
                             <Box sx={{
                                 fontSize: textVar.xs,

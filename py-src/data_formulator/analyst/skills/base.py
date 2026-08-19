@@ -38,8 +38,11 @@ the user.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Generator, Protocol, runtime_checkable
+
+from data_formulator.analyst.business_context.base import ContextItem
 
 # An ``Event`` is a channel-tagged dict yielded on the unified output stream.
 # See design-docs/35 §5. Examples:
@@ -51,6 +54,49 @@ from typing import Any, Generator, Protocol, runtime_checkable
 # A committing action (visualize / delegate / write_report) is dispatched from a
 # committing tool call and yields these same events; see design-docs/36.
 Event = dict[str, Any]
+
+MAX_SKILL_AUTHORIZATION_ID_CHARS = 512
+MAX_TOOL_RESULT_PUBLIC_SUMMARY_CHARS = 512
+_TOOL_RESULT_ERROR_CODE_PATTERN = re.compile(
+    r"^[a-z][a-z0-9_.-]{0,127}$",
+)
+
+
+def _normalized_authorization_id(value: str, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field_name} cannot be empty")
+    if len(normalized) > MAX_SKILL_AUTHORIZATION_ID_CHARS:
+        raise ValueError(f"{field_name} exceeds the maximum length")
+    if any(ord(char) < 32 for char in normalized):
+        raise ValueError(f"{field_name} contains control characters")
+    return normalized
+
+
+@dataclass(frozen=True)
+class SkillAuthorization:
+    """Backend-authorized scope for a Skill invocation.
+
+    It is deliberately separate from the model-visible/free-form ``payload`` so
+    request fields and tool arguments cannot replace identity or workspace.
+    """
+
+    identity_id: str
+    workspace_id: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "identity_id",
+            _normalized_authorization_id(self.identity_id, "identity_id"),
+        )
+        object.__setattr__(
+            self,
+            "workspace_id",
+            _normalized_authorization_id(self.workspace_id, "workspace_id"),
+        )
 
 
 @dataclass(frozen=True)
@@ -102,6 +148,10 @@ class SkillContext:
     # ``ctx.runtime.run_visualize_code(...)`` / ``run_explore_code(...)``. The
     # shell sets it to itself; ``None`` in standalone unit tests.
     runtime: Any = None
+    # Authenticated/authorized request scope injected by the shell. This stays
+    # optional during migration so standalone existing Skill tests remain valid;
+    # a Skill that calls an external service must fail closed when it is absent.
+    authorization: SkillAuthorization | None = None
 
 
 @dataclass(frozen=True)
@@ -111,11 +161,54 @@ class ToolResult:
     ``text`` is fed back to the model as the tool-result message. ``images``
     are base64 data-URLs (e.g. a rendered chart) that the shell attaches as a
     follow-up vision message, since tool-result messages cannot carry image
-    content on most providers.
+    content on most providers. ``context_items`` are provider-neutral source
+    references routed separately by the shell. ``public_summary`` is an
+    optional bounded replacement for external result text in frontend events
+    and operational logs; it never replaces the full model observation.
+    ``error_code`` is an optional stable, secret-free failure classification.
     """
 
     text: str = ""
     images: tuple[str, ...] = ()
+    context_items: tuple[ContextItem, ...] = ()
+    public_summary: str | None = None
+    error_code: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.text, str):
+            raise ValueError("text must be a string")
+
+        images = tuple(self.images)
+        if not all(isinstance(image, str) for image in images):
+            raise ValueError("images must contain strings")
+        object.__setattr__(self, "images", images)
+
+        context_items = tuple(self.context_items)
+        if not all(isinstance(item, ContextItem) for item in context_items):
+            raise ValueError("context_items must contain ContextItem values")
+        object.__setattr__(self, "context_items", context_items)
+
+        if self.public_summary is not None:
+            if not isinstance(self.public_summary, str):
+                raise ValueError("public_summary must be a string or None")
+            public_summary = self.public_summary.strip()
+            if not public_summary:
+                object.__setattr__(self, "public_summary", None)
+            else:
+                if len(public_summary) > MAX_TOOL_RESULT_PUBLIC_SUMMARY_CHARS:
+                    raise ValueError("public_summary exceeds the maximum length")
+                if any(ord(char) < 32 for char in public_summary):
+                    raise ValueError("public_summary contains control characters")
+                object.__setattr__(self, "public_summary", public_summary)
+
+        if self.error_code is not None:
+            if (
+                not isinstance(self.error_code, str)
+                or not _TOOL_RESULT_ERROR_CODE_PATTERN.fullmatch(
+                    self.error_code,
+                )
+            ):
+                raise ValueError("error_code must be a stable lowercase code")
 
 
 @runtime_checkable
@@ -179,6 +272,7 @@ class Skill(Protocol):
 __all__ = [
     "Event",
     "Skill",
+    "SkillAuthorization",
     "SkillContext",
     "SkillMeta",
     "ToolResult",

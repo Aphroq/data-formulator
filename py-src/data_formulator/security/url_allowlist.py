@@ -68,12 +68,21 @@ def _is_allowlist_configured() -> bool:
 # Public API
 # ---------------------------------------------------------------------------
 
-def validate_api_base(api_base: str | None) -> None:
+def validate_api_base(
+    api_base: str | None,
+    *,
+    require_configured: bool = False,
+) -> None:
     """Validate *api_base* against the configured allowlist.
 
     - ``None`` or empty string → always allowed (provider default).
     - Open mode (env var unset) → everything allowed.
     - Enforce mode → must match at least one pattern.
+
+    Callers that expose a server-owned external integration can set
+    ``require_configured=True`` to fail closed when the shared allowlist is
+    absent. Existing user-configured model providers retain open-mode
+    compatibility by using the default.
 
     Raises ``ValueError`` with a user-facing message on rejection.
     """
@@ -85,6 +94,11 @@ def validate_api_base(api_base: str | None) -> None:
 
     # Open mode — no restrictions.
     if patterns is None:
+        if require_configured:
+            raise ValueError(
+                f"This integration requires an API base URL allowlist. "
+                f"Configure {_ENV_KEY} before enabling it."
+            )
         return
 
     url_lower = api_base.lower()

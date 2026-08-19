@@ -1,0 +1,171 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "inspect_trustgraph_catalog",
+      "description": "List the server-bound TrustGraph flows, collections, documents, processing jobs, and knowledge cores.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "search_trustgraph_entities",
+      "description": "Find RDF entities in the server-bound TrustGraph collection by semantic similarity.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8000,
+            "description": "Text describing the entity or concept to find."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 10
+          }
+        },
+        "required": ["query"],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "query_trustgraph_rows",
+      "description": "Run an explicit read-only GraphQL query against structured rows in the server-bound TrustGraph collection.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000,
+            "description": "An explicit GraphQL query. This tool does not materialize or synchronize a Data Formulator table."
+          },
+          "variables": {
+            "type": "object",
+            "description": "Optional GraphQL variable values."
+          },
+          "operation_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Optional operation name for a multi-operation GraphQL document."
+          }
+        },
+        "required": ["query"],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "inspect_trustgraph_ontology",
+      "description": "Read the server-bound TrustGraph ontology for the current workspace.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "query_trustgraph_triples",
+      "description": "Read bounded RDF triples from the server-bound TrustGraph knowledge or provenance graph.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "description": "Optional absolute RDF IRI for the subject."
+          },
+          "predicate": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "description": "Optional absolute RDF IRI for the predicate."
+          },
+          "object": {
+            "type": "object",
+            "description": "Optional typed RDF object filter.",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["iri", "literal"]
+              },
+              "value": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32768
+              },
+              "datatype": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "language": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            },
+            "required": ["kind", "value"],
+            "additionalProperties": false
+          },
+          "graph": {
+            "type": "string",
+            "enum": ["knowledge", "provenance"],
+            "default": "knowledge"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 50
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "query_trustgraph_sparql",
+      "description": "Run a bounded read-only SPARQL SELECT, ASK, CONSTRUCT, or DESCRIBE query against the server-bound TrustGraph collection.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000,
+            "description": "A read-only SPARQL query. Updates and SERVICE clauses are rejected."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 100
+          }
+        },
+        "required": ["query"],
+        "additionalProperties": false
+      }
+    }
+  }
+]

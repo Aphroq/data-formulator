@@ -80,6 +80,20 @@
     "viewRecentLog": "View recent log",
     "recentLog": "Recent logs",
     "recentConfigurations": "Recent configurations",
-    "configuredMessage": "Server configured, click to verify connectivity"
+    "configuredMessage": "Server configured, click to verify connectivity",
+    "copilotTitle": "GitHub Copilot",
+    "copilotDescription": "Connect your Copilot subscription. Credentials stay encrypted on this server.",
+    "copilotChecking": "Checking GitHub Copilot connection",
+    "copilotConnect": "Connect",
+    "copilotDisconnect": "Disconnect",
+    "copilotConnected": "GitHub Copilot is connected.",
+    "copilotEnterCode": "Open GitHub and enter this one-time code:",
+    "copilotOpenGitHub": "Open GitHub",
+    "copilotCancel": "Cancel",
+    "copilotWaiting": "Waiting for authorization…",
+    "copilotFailed": "GitHub Copilot authorization failed.",
+    "copilotDenied": "GitHub authorization was denied.",
+    "copilotExpired": "The authorization code expired. Start again.",
+    "copilotCancelled": "GitHub authorization was cancelled."
   }
 }

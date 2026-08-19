@@ -24,12 +24,15 @@ from data_formulator.auth.identity import get_identity_id
 from data_formulator.security.code_signing import sign_result, verify_code, MAX_CODE_SIZE
 from data_formulator.datalake.parquet_utils import df_to_safe_records
 from data_formulator.datalake.workspace import Workspace, get_user_home
-from data_formulator.workspace_factory import get_workspace
+from data_formulator.workspace_factory import get_active_workspace_id, get_workspace
 from data_formulator.agents.agent_data_load import DataLoadAgent
 from data_formulator.agents.agent_data_loading_chat import DataLoadingAgent
 from data_formulator.agents.agent_code_explanation import CodeExplanationAgent
 from data_formulator.agents.client_utils import Client
+from data_formulator.copilot.capabilities import copilot_capability_store
+from data_formulator.copilot.device_flow import is_github_copilot_enabled
 from data_formulator.model_registry import model_registry
+from data_formulator.routes.copilot_auth import get_copilot_device_flow_service
 from data_formulator.knowledge.store import KnowledgeStore
 from data_formulator.data_operations import DataOperationExecutor, DataOperationRepository
 from data_formulator.datalake.parquet_utils import make_json_safe
@@ -180,7 +183,19 @@ def _set_cors(response):
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
     return response
 
-def get_client(model_config, trusted=False):
+def _is_copilot_config(model_config: dict) -> bool:
+    endpoint = str(model_config.get("endpoint", "")).strip().lower()
+    model = str(model_config.get("model", "")).strip().lower()
+    return endpoint == "github_copilot" or model.startswith("github_copilot/")
+
+
+def get_client(
+    model_config,
+    trusted=False,
+    *,
+    identity_id=None,
+    allow_unqualified_copilot=False,
+):
     """Build a LiteLLM client for *model_config*.
 
     ``trusted`` marks a config that came from the server-side registry rather
@@ -219,6 +234,60 @@ def get_client(model_config, trusted=False):
         if isinstance(model_config[key], str):
             model_config[key] = model_config[key].strip()
 
+    copilot_requested = _is_copilot_config(model_config)
+    copilot_token_manager = None
+    if copilot_requested:
+        # A caller may select a server-published id, but may never provide its
+        # own Copilot endpoint/model config.  This is what keeps identity and
+        # vault resolution entirely on the server side.
+        if not trusted:
+            raise AppError(
+                ErrorCode.ACCESS_DENIED,
+                "GitHub Copilot models must come from the server model list",
+            )
+        if not is_github_copilot_enabled():
+            raise AppError(
+                ErrorCode.SERVICE_UNAVAILABLE,
+                "GitHub Copilot is not enabled",
+                retry=False,
+            )
+
+        model_id = model_config.get("id")
+        registered = model_registry.get_config(model_id)
+        if (
+            not isinstance(model_id, str)
+            or registered is None
+            or not _is_copilot_config(registered)
+            or str(registered.get("model", "")).strip()
+            != str(model_config.get("model", "")).strip()
+        ):
+            raise AppError(
+                ErrorCode.ACCESS_DENIED,
+                "Unknown GitHub Copilot model",
+            )
+
+        resolved_identity = identity_id or get_identity_id()
+        if (
+            not allow_unqualified_copilot
+            and copilot_capability_store.get_qualified(
+                resolved_identity,
+                model_id,
+            ) is None
+        ):
+            raise AppError(
+                ErrorCode.SERVICE_UNAVAILABLE,
+                "GitHub Copilot model has not passed the required capability checks",
+                retry=False,
+            )
+
+        from data_formulator.copilot.litellm_adapter import CopilotTokenManager
+
+        github_access_token = (
+            get_copilot_device_flow_service()
+            .retrieve_access_token(resolved_identity)
+        )
+        copilot_token_manager = CopilotTokenManager(github_access_token)
+
     # Validate caller-provided api_base against the allowlist (SSRF
     # protection).  Registry configs are exempt because their api_base is set
     # by the operator's env vars, not by a request.
@@ -238,6 +307,7 @@ def get_client(model_config, trusted=False):
         model_config.get("api_key") or None,
         model_config.get("api_base") or None,
         model_config.get("api_version") or None,
+        copilot_token_manager=copilot_token_manager,
     )
 
     return client
@@ -251,7 +321,22 @@ def list_global_models():
     'checking' status), then calls /check-available-models to get real statuses.
     """
     public_models = model_registry.list_public()
-    return json_ok(public_models)
+    copilot_models = [model for model in public_models if _is_copilot_config(model)]
+    if not copilot_models:
+        return json_ok(public_models)
+
+    identity_id = get_identity_id()
+    visible_models = [
+        model for model in public_models if not _is_copilot_config(model)
+    ]
+    for model in copilot_models:
+        result = copilot_capability_store.get_qualified(identity_id, model["id"])
+        if result is not None:
+            visible_models.append({
+                **model,
+                "capabilities": result.public_capabilities(),
+            })
+    return json_ok(visible_models)
 
 
 @agent_bp.route('/check-available-models', methods=['GET', 'POST'])
@@ -267,6 +352,10 @@ def check_available_models():
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     all_public = model_registry.list_public()
+    has_copilot = any(_is_copilot_config(model) for model in all_public)
+    # Flask request context is not copied into ThreadPoolExecutor workers.
+    # Resolve the authenticated identity once before launching them.
+    identity_id = get_identity_id() if has_copilot else None
     logger.info("=" * 60)
     logger.info(f"[check-available-models] Checking {len(all_public)} global models")
     from data_formulator.security.log_sanitizer import sanitize_url
@@ -275,12 +364,41 @@ def check_available_models():
                      p['id'], p['endpoint'], p['model'], sanitize_url(p.get('api_base', '')))
     overall_start = time.time()
 
-    def _check_one(public_info: dict) -> dict:
+    def _check_one(public_info: dict) -> dict | None:
         model_id = public_info["id"]
         t0 = time.time()
         full_config = model_registry.get_config(model_id)
         status = "disconnected"
         error = None
+
+        if _is_copilot_config(public_info):
+            result = copilot_capability_store.probe(
+                identity_id,
+                model_id,
+                public_info["model"],
+                lambda: get_client(
+                    full_config,
+                    trusted=True,
+                    identity_id=identity_id,
+                    allow_unqualified_copilot=True,
+                ),
+            )
+            logger.info(
+                "  [%s] Copilot capabilities chat=%s streaming=%s tools=%s errors=%s",
+                model_id,
+                result.chat,
+                result.streaming,
+                result.tools,
+                result.error_codes,
+            )
+            if not result.qualified:
+                return None
+            return {
+                **public_info,
+                "capabilities": result.public_capabilities(),
+                "status": "connected",
+                "error": None,
+            }
 
         try:
             client = get_client(full_config, trusted=True)
@@ -301,12 +419,15 @@ def check_available_models():
             futures = {executor.submit(_check_one, p): p["id"] for p in all_public}
             for future in as_completed(futures):
                 try:
-                    results.append(future.result())
+                    result = future.result()
+                    if result is not None:
+                        results.append(result)
                 except Exception as e:
                     model_id = futures[future]
-                    logger.error(f"  [{model_id}] Thread exception: {e}")
+                    logger.error("  [%s] Model check thread failed", model_id)
                     pub = next(p for p in all_public if p["id"] == model_id)
-                    results.append({**pub, "status": "disconnected", "error": "Check thread exception"})
+                    if not _is_copilot_config(pub):
+                        results.append({**pub, "status": "disconnected", "error": "Check thread exception"})
 
     id_order = [p["id"] for p in all_public]
     results.sort(key=lambda r: id_order.index(r["id"]))
@@ -458,6 +579,7 @@ def analyst_streaming():
     if not identity_id:
         return stream_preflight_error(AppError(ErrorCode.AUTH_REQUIRED, "Identity ID required"))
 
+    workspace_id = get_active_workspace_id()
     workspace = get_workspace(identity_id)
 
     input_tables = content["input_tables"]
@@ -589,6 +711,7 @@ def analyst_streaming():
                 max_iterations=max_iterations,
                 max_repair_attempts=max_repair_attempts,
                 identity_id=identity_id,
+                workspace_id=workspace_id,
             )
 
             trajectory = None

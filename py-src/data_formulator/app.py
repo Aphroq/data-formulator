@@ -312,6 +312,14 @@ def _register_blueprints():
     from data_formulator.routes.credentials import credential_bp
     app.register_blueprint(credential_bp)
 
+    # Copilot owns an explicit device authorization API.  Do not import or
+    # register it in the default-off state: ordinary model requests must never
+    # fall through to LiteLLM's interactive filesystem Authenticator.
+    from data_formulator.copilot.device_flow import is_github_copilot_enabled
+    if is_github_copilot_enabled():
+        from data_formulator.routes.copilot_auth import copilot_auth_bp
+        app.register_blueprint(copilot_auth_bp)
+
     # Register knowledge management API (rules, skills, workflows)
     from data_formulator.routes.knowledge import knowledge_bp
     app.register_blueprint(knowledge_bp)
@@ -413,6 +421,11 @@ def get_app_config():
     # Expose credential vault availability to the frontend
     from data_formulator.auth.vault import get_credential_vault
     config["CREDENTIAL_VAULT_ENABLED"] = get_credential_vault() is not None
+
+    # This is a non-secret UI capability flag.  The corresponding blueprint is
+    # also absent when false, so hiding the UI is not the authorization bound.
+    from data_formulator.copilot.device_flow import is_github_copilot_enabled
+    config["GITHUB_COPILOT_ENABLED"] = is_github_copilot_enabled()
 
     # Expose data connectors to the frontend
     from data_formulator.data_connector import _public_connector_id, _visible_connector_items

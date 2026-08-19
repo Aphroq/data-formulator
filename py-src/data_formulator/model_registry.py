@@ -5,6 +5,8 @@ import os
 from typing import Optional, Dict, List
 
 BUILTIN_PROVIDERS = {'openai', 'azure', 'anthropic', 'gemini', 'ollama'}
+COPILOT_PROVIDER = "github_copilot"
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 class ModelRegistry:
@@ -48,7 +50,12 @@ class ModelRegistry:
 
     def _reload(self) -> None:
         self._models = {}
+        self._load_copilot_candidates()
         for provider in self._discover_providers():
+            # GitHub Copilot is an application-owned OAuth provider.  It must
+            # never fall through to the generic API-key/base configuration.
+            if provider == COPILOT_PROVIDER:
+                continue
             env = provider.upper()
 
             api_key = os.getenv(f"{env}_API_KEY", "").strip()
@@ -80,6 +87,35 @@ class ModelRegistry:
                     "provider_display": provider,
                 }
 
+    def _load_copilot_candidates(self) -> None:
+        """Load explicit Copilot candidates without treating OAuth as a key."""
+
+        enabled = os.getenv("GITHUB_COPILOT_ENABLED", "").strip().lower()
+        if enabled not in _TRUE_VALUES:
+            return
+        models_str = os.getenv("GITHUB_COPILOT_MODELS", "").strip()
+        if not models_str:
+            return
+
+        seen: set[str] = set()
+        for raw_name in models_str.split(","):
+            model_name = raw_name.strip()
+            if model_name.lower().startswith(f"{COPILOT_PROVIDER}/"):
+                model_name = model_name[len(COPILOT_PROVIDER) + 1 :].strip()
+            if not model_name or model_name in seen:
+                continue
+            seen.add(model_name)
+            model_id = self.make_id(COPILOT_PROVIDER, model_name)
+            self._models[model_id] = {
+                "id": model_id,
+                "endpoint": COPILOT_PROVIDER,
+                "model": model_name,
+                "api_key": "",
+                "api_base": "",
+                "api_version": "",
+                "provider_display": COPILOT_PROVIDER,
+            }
+
     def get_config(self, model_id: str) -> Optional[dict]:
         """Return the full config (including credentials) for a global model."""
         return self._models.get(model_id)
@@ -97,9 +133,13 @@ class ModelRegistry:
                 "api_base": m["api_base"],
                 "api_version": m["api_version"],
                 "auth_mode": (
-                    "azure_identity"
-                    if m["endpoint"] == "azure" and not m["api_key"]
-                    else "key"
+                    "oauth_device"
+                    if m["endpoint"] == COPILOT_PROVIDER
+                    else (
+                        "azure_identity"
+                        if m["endpoint"] == "azure" and not m["api_key"]
+                        else "key"
+                    )
                 ),
                 "is_global": True,
             }

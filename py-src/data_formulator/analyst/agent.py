@@ -54,8 +54,10 @@ from data_formulator.agents.context import (
 from data_formulator.agents.client_utils import Client
 from data_formulator.datalake.parquet_utils import df_to_safe_records
 
+from data_formulator.analyst.business_context.base import ContextItem
 from data_formulator.analyst.skills import (
     Event,
+    SkillAuthorization,
     SkillContext,
     SkillRegistry,
     ToolResult,
@@ -66,6 +68,7 @@ from data_formulator.analyst.tools import build_tools
 logger = logging.getLogger(__name__)
 
 _AGENT_ID = "analyst"
+_MAX_CONTEXT_ITEMS_PER_EVENT = 50
 
 # The always-on baseline skill, auto-loaded at the start of every run. It owns
 # the built-in tools (execute_python_script / inspect_source_data) and the always-available
@@ -277,6 +280,7 @@ class AnalystAgent:
         max_iterations: int = 5,
         max_repair_attempts: int = 2,
         identity_id: str | None = None,
+        workspace_id: str | None = None,
     ):
         self.client = client
         self.workspace = workspace
@@ -286,6 +290,14 @@ class AnalystAgent:
         self.language_instruction = language_instruction
         self.max_iterations = max_iterations
         self.max_repair_attempts = max_repair_attempts
+        self._skill_authorization = (
+            SkillAuthorization(
+                identity_id=identity_id,
+                workspace_id=workspace_id,
+            )
+            if identity_id is not None and workspace_id is not None
+            else None
+        )
 
         from data_formulator.agents.reasoning_log import (
             ReasoningLogger, _NullReasoningLogger,
@@ -327,10 +339,58 @@ class AnalystAgent:
         # skill's duplicate (buffered) emission of the same content.
         self._streamed_channels: dict[str, str] = {}
         self._suppress_stream_channel: str | None = None
+        # Full sensitive tool observations remain in the model trajectory. If a
+        # later action pauses and sends a resumable trajectory to the browser,
+        # these call IDs are replaced with their bounded public summaries.
+        self._public_tool_result_summaries: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _make_skill_context(
+        self,
+        *,
+        trajectory: list[dict],
+        payload: dict[str, Any] | None = None,
+        runtime: Any = None,
+    ) -> SkillContext:
+        """Create a Skill context with shell-owned authorization attached."""
+
+        return SkillContext(
+            client=self.client,
+            workspace=self.workspace,
+            language_instruction=self.language_instruction,
+            trajectory=trajectory,
+            payload=dict(payload or {}),
+            runtime=runtime,
+            authorization=self._skill_authorization,
+        )
+
+    @staticmethod
+    def _prepare_context_items(
+        context_items: tuple[ContextItem, ...],
+    ) -> tuple[ContextItem, ...]:
+        """Revalidate, deduplicate, and cap source references for streaming."""
+
+        prepared: list[ContextItem] = []
+        seen_uris: set[str] = set()
+        for item in context_items:
+            try:
+                normalized = ContextItem(
+                    uri=item.uri,
+                    title=item.title,
+                    provider=item.provider,
+                )
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if normalized.uri in seen_uris:
+                continue
+            seen_uris.add(normalized.uri)
+            prepared.append(normalized)
+            if len(prepared) >= _MAX_CONTEXT_ITEMS_PER_EVENT:
+                break
+        return tuple(prepared)
 
     def _explore_ns_dir(self) -> Path:
         """Directory for cross-turn namespace serialisation."""
@@ -409,6 +469,7 @@ class AnalystAgent:
             # one run and is replaced at the beginning of the next run.
             "skill_state": {},
         }
+        self._public_tool_result_summaries = {}
 
         try:
             rlog.log(
@@ -777,10 +838,7 @@ class AnalystAgent:
                 f"'{action_type}'. Choose a core action instead."
             )
 
-        ctx = SkillContext(
-            client=self.client,
-            workspace=self.workspace,
-            language_instruction=self.language_instruction,
+        ctx = self._make_skill_context(
             trajectory=trajectory,
             payload={
                 **self._run_payload,
@@ -1590,9 +1648,14 @@ class AnalystAgent:
                 for tc in readonly_calls:
                     tool_name = tc.function.name
                     try:
-                        tool_args = json.loads(tc.function.arguments)
-                    except json.JSONDecodeError:
-                        tool_args = {}
+                        parsed_tool_args = json.loads(tc.function.arguments)
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        parsed_tool_args = None
+                    tool_args = (
+                        parsed_tool_args
+                        if isinstance(parsed_tool_args, dict)
+                        else {}
+                    )
 
                     yield {
                         "type": "tool_start",
@@ -1605,6 +1668,8 @@ class AnalystAgent:
 
                     tool_t0 = time.time()
                     tool_status = "ok"
+                    public_tool_content: str | None = None
+                    context_log_fields: dict[str, Any] = {}
 
                     if tool_name == "execute_python_script":
                         result = self._run_explore_code(
@@ -1660,38 +1725,99 @@ class AnalystAgent:
                         }
                     elif tool_name in skill_tool_owners:
                         skill = skill_tool_owners[tool_name]
-                        skill_ctx = SkillContext(
-                            client=self.client,
-                            workspace=self.workspace,
-                            language_instruction=self.language_instruction,
+                        skill_ctx = self._make_skill_context(
                             trajectory=messages,
                             payload=dict(self._run_payload),
                         )
                         try:
-                            result = skill.handle_tool(tool_name, tool_args, skill_ctx)
+                            # Preserve a non-object parse result for the Skill's
+                            # strict input boundary.  ``tool_args`` remains the
+                            # safe object used only for event/log metadata.
+                            result = skill.handle_tool(
+                                tool_name,
+                                parsed_tool_args,
+                                skill_ctx,
+                            )
                         except Exception as exc:
-                            logger.warning("[AnalystAgent] Skill tool %r failed", tool_name, exc_info=exc)
-                            result = ToolResult(text=f"Tool '{tool_name}' failed: {exc}")
+                            logger.warning(
+                                "[AnalystAgent] Skill tool %r failed (%s)",
+                                tool_name,
+                                type(exc).__name__,
+                            )
+                            result = ToolResult(
+                                text=f"Tool '{tool_name}' failed.",
+                                public_summary=f"Tool '{tool_name}' failed.",
+                            )
                             tool_status = "error"
                         tool_content = result.text
                         if result.images:
                             pending_images.extend(result.images)
-                        yield {
+
+                        context_items = self._prepare_context_items(
+                            result.context_items,
+                        )
+                        if context_items:
+                            yield {
+                                "type": "context_info",
+                                "tool": tool_name,
+                                "context_items": [
+                                    {
+                                        "uri": item.uri,
+                                        "title": item.title,
+                                        "provider": item.provider,
+                                    }
+                                    for item in context_items
+                                ],
+                            }
+
+                        public_tool_content = result.public_summary
+                        if public_tool_content is None and context_items:
+                            public_tool_content = (
+                                "Business context retrieved with "
+                                f"{len(context_items)} source(s)."
+                            )
+                        context_log_fields = {
+                            "context_item_count": len(context_items),
+                            "context_providers": sorted({
+                                item.provider
+                                for item in context_items
+                                if item.provider
+                            }),
+                        }
+                        if result.error_code is not None:
+                            tool_status = "error"
+                            context_log_fields["error_code"] = result.error_code
+                        if public_tool_content is not None:
+                            self._public_tool_result_summaries[tc.id] = (
+                                public_tool_content
+                            )
+                        tool_result_event = {
                             "type": "tool_result",
                             "tool": tool_name,
                             "status": tool_status,
-                            "stdout": tool_content,
+                            "stdout": public_tool_content or tool_content,
                         }
+                        if result.error_code is not None:
+                            tool_result_event["error"] = (
+                                public_tool_content or tool_content
+                            )
+                        yield tool_result_event
                     else:
                         tool_content = f"Unknown tool: {tool_name}"
 
                     tool_latency = int((time.time() - tool_t0) * 1000)
-                    output_summary = (tool_content[:200] + "...") if len(tool_content) > 200 else tool_content
+                    log_content = public_tool_content or tool_content
+                    output_summary = (
+                        log_content[:200] + "..."
+                        if len(log_content) > 200
+                        else log_content
+                    )
                     rlog.log("tool_execution", iteration=outer_iteration,
                              tool=tool_name,
                              input_summary=tool_args.get("purpose", "")[:200],
                              output_summary=output_summary,
-                             latency_ms=tool_latency, status=tool_status)
+                             latency_ms=tool_latency, status=tool_status,
+                             **context_log_fields)
 
                     messages.append({
                         "role": "tool",
@@ -2053,20 +2179,32 @@ class AnalystAgent:
     # Helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _strip_images(trajectory: list[dict]) -> list[dict]:
-        """Return a copy of the trajectory with image_url blocks removed."""
+    def _strip_images(self, trajectory: list[dict]) -> list[dict]:
+        """Build the browser-safe resumable trajectory.
+
+        Image payloads are removed and external/sensitive tool observations are
+        replaced by the public summaries recorded when those tools ran. The
+        in-memory model trajectory is left unchanged.
+        """
         stripped: list[dict] = []
         for msg in trajectory:
+            public_msg = dict(msg)
             content = msg.get("content")
             if isinstance(content, list):
                 text_parts = [p for p in content if p.get("type") == "text"]
                 if text_parts:
-                    stripped.append({**msg, "content": text_parts})
+                    public_msg["content"] = text_parts
                 else:
-                    stripped.append({**msg, "content": "[image removed]"})
-            else:
-                stripped.append(msg)
+                    public_msg["content"] = "[image removed]"
+            tool_call_id = msg.get("tool_call_id")
+            if (
+                msg.get("role") == "tool"
+                and tool_call_id in self._public_tool_result_summaries
+            ):
+                public_msg["content"] = self._public_tool_result_summaries[
+                    tool_call_id
+                ]
+            stripped.append(public_msg)
         return stripped
 
     @staticmethod

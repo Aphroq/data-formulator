@@ -100,6 +100,7 @@ export interface ServerConfig {
     IDENTITY?: { type: string; id: string };
     CREDENTIAL_VAULT_ENABLED?: boolean;
     IS_LOCAL_MODE?: boolean;
+    GITHUB_COPILOT_ENABLED?: boolean;
 }
 
 export interface ModelConfig {
@@ -110,7 +111,9 @@ export interface ModelConfig {
     api_base?: string;
     api_version?: string;
     /** Non-sensitive server hint describing how a global model authenticates. */
-    auth_mode?: 'key' | 'azure_identity';
+    auth_mode?: 'key' | 'azure_identity' | 'oauth_device';
+    /** Present only after the server has qualified a Copilot model. */
+    capabilities?: { chat: boolean; streaming: boolean; tools: boolean };
     /** True for models configured server-side via .env. Their credentials never leave the server. */
     is_global?: boolean;
 }
@@ -350,6 +353,7 @@ const initialState: DataFormulatorState = {
         AVAILABLE_LANGUAGES: ['en', 'zh'],
         DEV_MODE: false,
         WORKSPACE_BACKEND: 'local',
+        GITHUB_COPILOT_ENABLED: false,
     },
 
     config: {
@@ -829,7 +833,10 @@ export const fetchAvailableModels = createAsyncThunk(
     "dataFormulatorSlice/fetchAvailableModels",
     async () => {
         const controller = new AbortController()
-        const timeoutId = setTimeout(() => controller.abort(), 30000)
+        // Copilot qualification deliberately runs independent buffered chat,
+        // streaming, and streamed-tool probes. Leave room for all three
+        // bounded backend calls plus the request-local token exchange.
+        const timeoutId = setTimeout(() => controller.abort(), 60000)
 
         try {
             const { data } = await apiRequest(getUrls().CHECK_AVAILABLE_MODELS, {
@@ -2379,24 +2386,31 @@ export const dataFormulatorSlice = createSlice({
             replaceStoredTable(state, table);
         })
         .addCase(fetchGlobalModelList.fulfilled, (state, action) => {
-            // Populate globalModels so the UI renders every configured model
-            // immediately. Server-configured models are trusted by default:
-            // they start as "unknown" and are selectable without a connectivity
-            // check. Users can click "Test" to verify manually if they want.
+            // Populate models the server considers selectable without a fresh
+            // check. Copilot candidates are withheld until this identity has
+            // passed the required capability probes.
             const models: ModelConfig[] = action.payload;
+            const previousGlobalIds = new Set(state.globalModels.map(m => m.id));
+            const globalIds = new Set(models.map(m => m.id));
             state.globalModels = models;
 
-            // Reset stale global model statuses on every app start so a previous
-            // session's "ok"/"error" doesn't linger. User-added model test
-            // results are preserved.
-            const globalIds = new Set(models.map(m => m.id));
+            // Remove statuses for server models that were withdrawn (for
+            // example after Copilot disconnect or a failed re-probe), while
+            // preserving user-added model results.
             state.testedModels = [
                 ...models.map(m => ({ id: m.id, status: 'unknown' as const, message: '' })),
-                ...state.testedModels.filter(t => !globalIds.has(t.id)),
+                ...state.testedModels.filter(t => (
+                    !globalIds.has(t.id) && !previousGlobalIds.has(t.id)
+                )),
             ];
 
-            // Auto-select the first global model when nothing is selected.
-            if (state.selectedModelId == undefined && models.length > 0) {
+            const selectedWasWithdrawn = state.selectedModelId !== undefined
+                && previousGlobalIds.has(state.selectedModelId)
+                && !globalIds.has(state.selectedModelId);
+            if (selectedWasWithdrawn) {
+                state.selectedModelId = undefined;
+                try { localStorage.removeItem('df_selected_model'); } catch { /* */ }
+            } else if (state.selectedModelId == undefined && models.length > 0) {
                 state.selectedModelId = models[0].id;
             }
         })
@@ -2412,6 +2426,8 @@ export const dataFormulatorSlice = createSlice({
         .addCase(fetchAvailableModels.fulfilled, (state, action) => {
             // Phase 2 (after connectivity checks): update statuses for each model.
             const serverModels: (ModelConfig & { status: string; error: string | null })[] = action.payload;
+            const previousGlobalIds = new Set(state.globalModels.map(m => m.id));
+            const serverIds = new Set(serverModels.map(m => m.id));
 
             // Update globalModels with the full response (may include extra fields).
             state.globalModels = serverModels;
@@ -2424,8 +2440,18 @@ export const dataFormulatorSlice = createSlice({
                     status: (m.status === 'connected' ? 'ok' : 'error') as 'ok' | 'error' | 'testing' | 'unknown',
                     message: m.error ?? '',
                 })),
-                ...state.testedModels.filter(t => !serverModels.some(m => m.id === t.id)),
+                ...state.testedModels.filter(t => (
+                    !serverIds.has(t.id) && !previousGlobalIds.has(t.id)
+                )),
             ];
+
+            const selectedWasWithdrawn = state.selectedModelId !== undefined
+                && previousGlobalIds.has(state.selectedModelId)
+                && !serverIds.has(state.selectedModelId);
+            if (selectedWasWithdrawn) {
+                state.selectedModelId = undefined;
+                try { localStorage.removeItem('df_selected_model'); } catch { /* */ }
+            }
 
             // Auto-select the first connected global model when nothing is selected.
             if (state.selectedModelId == undefined) {

@@ -1,19 +1,20 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Skill registry — discovery and eager instantiation of analyst skills.
+"""Skill registry — discovery and conditional instantiation of analyst skills.
 
 Each skill lives in its own sub-package under this directory and ships a
 ``SKILL.md`` with YAML frontmatter (``name`` / ``description`` /
 ``when_to_use`` / ``always_on`` / ``actions``). At startup the registry scans
 those frontmatter blocks to build a cheap, always-resident index (tier-1
-progressive disclosure) **and** imports each skill's Python code module so the
-skill instance is always available to the agent.
+progressive disclosure). Skills whose optional ``enabled_if`` environment flag
+is not explicitly true are omitted before importing their Python code. The
+remaining skills are imported so their instances are available to the agent.
 
-The distinction is deliberate: a skill's code is always imported and callable;
-what ``load_skill(name)`` does is flip a *switch* that exposes the skill's
-tools, opens its action gate, and injects its ``SKILL.md`` body into context —
-i.e. it controls exposure to the model, not availability of the code.
+The distinction is deliberate: for an available skill, ``load_skill(name)``
+flips a *switch* that exposes the skill's tools, opens its action gate, and
+injects its ``SKILL.md`` body into context. Availability is controlled before
+import; loading controls exposure to the model.
 
 Convention for a skill code module: ``skills/<skill-name>/skill.py`` exposing a
 ``get_skill() -> Skill`` factory. Modules are loaded through ``importlib``, so
@@ -27,7 +28,9 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -35,6 +38,7 @@ from typing import Any
 from data_formulator.analyst.skills.base import (
     Event,
     Skill,
+    SkillAuthorization,
     SkillContext,
     SkillMeta,
     ToolResult,
@@ -47,6 +51,8 @@ SKILL_DOC_NAME = "SKILL.md"
 TOOLS_FILE_NAME = "tools.json"
 
 _FM_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
+_FEATURE_FLAG_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
 def _parse_front_matter(content: str) -> tuple[dict[str, Any], str]:
@@ -83,6 +89,28 @@ def _meta_from_frontmatter(raw: dict[str, Any], fallback_name: str) -> SkillMeta
         tool_names=_coerce_name_list(raw.get("tools")),
         action_names=_coerce_name_list(raw.get("actions")),
     )
+
+
+def _is_skill_available(
+    raw: dict[str, Any],
+    environment: Mapping[str, str],
+    *,
+    skill_name: str,
+) -> bool:
+    """Evaluate an optional server-owned ``enabled_if`` frontmatter flag."""
+
+    enabled_if = raw.get("enabled_if")
+    if enabled_if is None:
+        return True
+    if not isinstance(enabled_if, str) or not _FEATURE_FLAG_PATTERN.fullmatch(
+        enabled_if,
+    ):
+        logger.warning(
+            "Skill %r has an invalid enabled_if feature flag; skipping it.",
+            skill_name,
+        )
+        return False
+    return environment.get(enabled_if, "").strip().lower() in _TRUE_VALUES
 
 
 @dataclass
@@ -307,10 +335,17 @@ def _load_tool_specs(skill_dir: Path) -> list[dict[str, Any]]:
     return [s for s in data if isinstance(s, dict)] if isinstance(data, list) else []
 
 
-def build_registry(skills_dir: Path | None = None) -> SkillRegistry:
+def build_registry(
+    skills_dir: Path | None = None,
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> SkillRegistry:
     """Scan ``skills_dir`` for ``<name>/SKILL.md``, build the index, eagerly
-    instantiate each skill's code module, and load its ``tools.json`` schemas."""
+    instantiate each available skill's code module, and load its ``tools.json``
+    schemas. A Skill with ``enabled_if`` is absent — and its Python module is not
+    imported — unless that environment flag is explicitly true."""
     root = skills_dir or SKILLS_DIR
+    source_environment = os.environ if environment is None else environment
     registry = SkillRegistry()
     for child in sorted(root.iterdir()):
         if not child.is_dir() or child.name.startswith((".", "_")):
@@ -322,6 +357,12 @@ def build_registry(skills_dir: Path | None = None) -> SkillRegistry:
             raw, _ = _parse_front_matter(doc.read_text(encoding="utf-8"))
         except Exception:
             logger.warning("Failed to read SKILL.md for %s", child.name, exc_info=True)
+            continue
+        if not _is_skill_available(
+            raw,
+            source_environment,
+            skill_name=child.name,
+        ):
             continue
         meta = _meta_from_frontmatter(raw, child.name)
         registry.metas[meta.name] = meta
@@ -383,6 +424,7 @@ __all__ = [
     # Re-exported skill substrate (defined in skills/base.py)
     "Event",
     "Skill",
+    "SkillAuthorization",
     "SkillContext",
     "SkillMeta",
     "ToolResult",

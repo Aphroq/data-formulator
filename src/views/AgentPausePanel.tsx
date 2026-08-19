@@ -31,8 +31,10 @@ import { AgentToyIcon } from './AgentToyIcon';
 import {
     ClarificationQuestion,
     ClarificationResponse,
+    ContextItem,
 } from '../components/ComponentType';
 import { renderFieldHighlights, CompactMarkdown } from './InteractionEntryCard';
+import { ContextSources } from './ContextSources';
 import { iconVar, textVar } from '../app/layout';
 import { DataOperationCard } from '../components/DataOperationCard';
 import type { DataOperation } from '../dataOperations/models';
@@ -629,6 +631,8 @@ export const ClarificationPanel: FC<ClarificationPanelProps> = ({
 interface ExplanationPanelProps {
     /** The agent's plain-text answer (markdown) to display read-only. */
     content: string;
+    /** Provider-neutral evidence referenced by this answer. */
+    contextItems?: ContextItem[];
     /** Close: de-highlight the panel and switch focus to the previous chart. */
     onClose: () => void;
     /** Delete: remove this explanation block from the thread. */
@@ -642,7 +646,7 @@ interface ExplanationPanelProps {
  * but carries no inputs or actions — it's purely "here's what I said",
  * dismissible by the header's delete button or by focusing another item.
  */
-export const ExplanationPanel: FC<ExplanationPanelProps> = ({ content, onClose, onDelete }) => {
+export const ExplanationPanel: FC<ExplanationPanelProps> = ({ content, contextItems, onClose, onDelete }) => {
     const theme = useTheme();
     const { t } = useTranslation();
 
@@ -666,6 +670,7 @@ export const ExplanationPanel: FC<ExplanationPanelProps> = ({ content, onClose, 
                 fontSize: textVar.sm,
             }}>
                 <CompactMarkdown content={content} color={theme.palette.text.primary} />
+                <ContextSources items={contextItems} />
             </Box>
         </AgentPauseShell>
     );

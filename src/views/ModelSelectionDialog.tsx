@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import '../scss/App.scss';
 
 import { useDispatch, useSelector } from "react-redux";
@@ -10,6 +10,8 @@ import {
     dfActions,
     ModelConfig,
     dfSelectors,
+    fetchAvailableModels,
+    fetchGlobalModelList,
 } from '../app/dfSlice'
 import _ from 'lodash';
 
@@ -62,7 +64,9 @@ import { getUrls } from '../app/utils';
 import { apiRequest, ApiError, ApiRequestError } from '../app/apiClient';
 import { useTranslation } from 'react-i18next';
 import { LogViewerDialog } from './LogViewerDialog';
+import { CopilotConnectionPanel } from './CopilotConnectionPanel';
 import { iconVar } from '../app/layout';
+import type { AppDispatch } from '../app/store';
 
 
 // Add this helper function at the top of the file, after the imports
@@ -93,7 +97,7 @@ interface RememberedModelEndpoint {
 export const ModelSelectionButton: React.FC<ModelSelectionButtonProps> = ({ appearance = 'toolbar' }) => {
     const { t } = useTranslation();
 
-    const dispatch = useDispatch();
+    const dispatch = useDispatch<AppDispatch>();
     const globalModels = useSelector((state: DataFormulatorState) => state.globalModels ?? []);
     const models = useSelector((state: DataFormulatorState) => state.models);
     const selectedModelId = useSelector((state: DataFormulatorState) => state.selectedModelId);
@@ -112,6 +116,13 @@ export const ModelSelectionButton: React.FC<ModelSelectionButtonProps> = ({ appe
         'ollama': []
     });
     const serverConfig = useSelector((state: DataFormulatorState) => state.serverConfig);
+    const refreshCopilotModels = useCallback((connected: boolean) => {
+        if (connected) {
+            void dispatch(fetchAvailableModels());
+        } else {
+            void dispatch(fetchGlobalModelList());
+        }
+    }, [dispatch]);
 
     let updateModelStatus = (model: ModelConfig, status: 'ok' | 'error' | 'testing' | 'unknown', message: string) => {
         dispatch(dfActions.updateModelStatus({id: model.id, status, message}));
@@ -772,7 +783,15 @@ export const ModelSelectionButton: React.FC<ModelSelectionButtonProps> = ({ appe
             }}
         >
             <DialogTitle>{t('model.models')}</DialogTitle>
-            <DialogContent sx={{ minWidth: { sm: 720 } }}>{modelManagerView}</DialogContent>
+            <DialogContent sx={{ minWidth: { sm: 720 } }}>
+                {serverConfig.GITHUB_COPILOT_ENABLED && (
+                    <CopilotConnectionPanel
+                        active={modelDialogOpen}
+                        onConnectionChange={refreshCopilotModels}
+                    />
+                )}
+                {modelManagerView}
+            </DialogContent>
             <DialogActions>
                 {isEditingDetails ? (
                     <>

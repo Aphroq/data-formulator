@@ -200,4 +200,58 @@ describe('agent metadata thunks', () => {
         expect(state.testedModels[0].status).toBe('testing');
         expect(state.messages).toHaveLength(0);
     });
+
+    it('removes a withdrawn qualified model and its stale selection', () => {
+        const initial = {
+            ...dataFormulatorSlice.getInitialState(),
+            globalModels: [{
+                id: 'global-github_copilot-gpt-4.1',
+                endpoint: 'github_copilot',
+                model: 'gpt-4.1',
+                is_global: true,
+            }],
+            selectedModelId: 'global-github_copilot-gpt-4.1',
+            testedModels: [{
+                id: 'global-github_copilot-gpt-4.1',
+                status: 'ok' as const,
+                message: '',
+            }],
+        };
+
+        const state = dataFormulatorSlice.reducer(initial, {
+            type: fetchGlobalModelList.fulfilled.type,
+            payload: [],
+        });
+
+        expect(state.globalModels).toEqual([]);
+        expect(state.testedModels).toEqual([]);
+        expect(state.selectedModelId).toBeUndefined();
+    });
+
+    it('does not retain a Copilot model that fails a fresh capability check', () => {
+        const initial = {
+            ...dataFormulatorSlice.getInitialState(),
+            globalModels: [{
+                id: 'global-github_copilot-gpt-4.1',
+                endpoint: 'github_copilot',
+                model: 'gpt-4.1',
+                is_global: true,
+            }],
+            selectedModelId: 'global-github_copilot-gpt-4.1',
+            testedModels: [{
+                id: 'global-github_copilot-gpt-4.1',
+                status: 'ok' as const,
+                message: '',
+            }],
+        };
+
+        const state = dataFormulatorSlice.reducer(initial, {
+            type: fetchAvailableModels.fulfilled.type,
+            payload: [],
+        });
+
+        expect(state.globalModels).toEqual([]);
+        expect(state.testedModels).toEqual([]);
+        expect(state.selectedModelId).toBeUndefined();
+    });
 });

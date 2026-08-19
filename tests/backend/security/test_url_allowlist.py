@@ -40,6 +40,14 @@ class TestOpenMode:
     def test_none_base_allowed(self):
         validate_api_base(None)
 
+    @patch.dict(os.environ, {}, clear=True)
+    def test_caller_can_require_a_configured_allowlist(self):
+        with pytest.raises(ValueError, match="allowlist"):
+            validate_api_base(
+                "https://trustgraph.example.com/api",
+                require_configured=True,
+            )
+
 
 # ===================================================================
 # Enforce mode — only allowlisted patterns pass

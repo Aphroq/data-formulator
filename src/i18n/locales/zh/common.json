@@ -32,6 +32,10 @@
   "common": {
     "save": "保存"
   },
+  "contextSources": {
+    "title": "来源（{{count}}）",
+    "open": "打开来源：{{title}}"
+  },
   "appBar": {
     "session": "会话",
     "explore": "探索",

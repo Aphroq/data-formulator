@@ -15,6 +15,7 @@ import flask
 import pytest
 
 from data_formulator.routes.sessions import session_bp
+from data_formulator.datalake.workspace import Workspace
 
 pytestmark = [pytest.mark.backend]
 
@@ -42,6 +43,31 @@ def _make_zip_bytes(state: dict | None = None) -> bytes:
         zf.writestr("state.json", json.dumps(state or {"tables": []}))
     buf.seek(0)
     return buf.read()
+
+
+def test_context_items_survive_workspace_zip_round_trip(tmp_path):
+    """Structured citations are ordinary session data, not transient UI state."""
+
+    context_items = [{
+        "uri": "https://example.com/evidence",
+        "title": "Evidence",
+        "provider": "trustgraph",
+    }]
+    state = {
+        "derivedTables": [{
+            "derive": {
+                "trigger": {
+                    "interaction": [{"contextItems": context_items}],
+                },
+            },
+        }],
+        "textTurns": [{"contextItems": context_items}],
+    }
+    workspace = Workspace("test-user", root_dir=tmp_path)
+
+    restored = workspace.import_session_zip(workspace.export_session_zip(state))
+
+    assert restored == state
 
 
 # ── Export ────────────────────────────────────────────────────────────────

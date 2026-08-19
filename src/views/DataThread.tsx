@@ -88,6 +88,7 @@ import { ComponentBorderStyle, transition, radius, borderColor, conversationWidt
 
 import { SimpleChartRecBox } from './SimpleChartRecBox';
 import { InteractionEntryCard, ResolvedConversationCard, getEntryGutterIcon, getDefaultGutterIcon, PlanStepsView } from './InteractionEntryCard';
+import { ContextSources } from './ContextSources';
 import { fittableThreadColumnsFor, iconVar, textVar } from '../app/layout';
 import { useLayout } from '../app/LayoutProvider';
 
@@ -1323,6 +1324,7 @@ let SingleThreadGroupView: FC<{
                     }}>
                         {preview}
                     </Typography>
+                    <ContextSources items={turn.contextItems} />
                 </Box>
                 {/* Delete floats over the top-right corner so it doesn't take
                     horizontal space from the text; a translucent bg + blur keeps

@@ -44,6 +44,13 @@ export interface Trigger {
 
 export type Actor = 'user' | 'data-agent' | 'datarec-agent' | 'datatransform-agent';
 
+/** Provider-neutral evidence reference emitted by an Analyst Skill. */
+export interface ContextItem {
+    uri: string;
+    title?: string;
+    provider?: string;
+}
+
 export interface ClarificationOption {
     label: string;
     /** Opaque backend-owned identifier submitted separately from the label. */
@@ -86,6 +93,8 @@ export interface InteractionEntry {
     /** Legacy persisted delegate metadata; new AnalystAgent runs do not emit it. */
     delegateTarget?: DelegateTarget;
     delegateOptions?: string[];
+    /** External evidence used for this specific agent interaction. */
+    contextItems?: ContextItem[];
     timestamp?: number;
 }
 
@@ -181,6 +190,8 @@ export interface TextTurn {
         completedStepCount: number;
         operationId?: string;
     };
+    /** Run-wide external evidence available to this persisted answer. */
+    contextItems?: ContextItem[];
     createdAt: number;
 }
 

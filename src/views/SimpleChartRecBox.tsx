@@ -28,7 +28,7 @@ import { AppDispatch } from '../app/store';
 import { resolveRecommendedChart, getUrls, getTriggers, translateBackend } from '../app/utils';
 import { streamRequest, apiRequest } from '../app/apiClient';
 import { getErrorMessage } from '../app/errorCodes';
-import { Chart, ClarificationResponse, DictTable, FieldItem, createDictTable, InteractionEntry, computeInsightKey, TextTurn, TableSemanticsInfo, ROOTLESS_THREAD_ID } from "../components/ComponentType";
+import { Chart, ClarificationResponse, ContextItem, DictTable, FieldItem, createDictTable, InteractionEntry, computeInsightKey, TextTurn, TableSemanticsInfo, ROOTLESS_THREAD_ID } from "../components/ComponentType";
 import { normalizeClarifyEvent, formatClarificationResponses } from '../app/clarification';
 import { parseDataOperation } from '../dataOperations/models';
 import { buildDictTableFromWorkspace } from '../app/tableThunks';
@@ -48,6 +48,7 @@ import { borderColor, transition, conversationWidth } from '../app/tokens';
 import { Theme } from '@mui/material/styles';
 import { useTranslation } from 'react-i18next';
 import { shouldAutoFocusGeneratedChart } from '../app/agentInteractionPolicy';
+import { ContextItemAccumulator } from '../app/contextItems';
 import { ClarificationPanel, ExplanationPanel } from './AgentPausePanel';
 import { CARD_WIDTH } from './threadLayout';
 import { iconVar, textVar } from '../app/layout';
@@ -244,7 +245,12 @@ export const SimpleChartRecBox: FC<{ onInputFocus?: () => void }> = function ({ 
     // Markdown of an explanation the user clicked in the data thread to re-open
     // in the read-only ExplanationPanel popup. Set via the `df-view-explanation`
     // window event (see below); kept local to avoid growing the redux slice.
-    const [viewingExplanation, setViewingExplanation] = useState<{ content: string; sourceTableId?: string; timestamps?: number[] } | null>(null);
+    const [viewingExplanation, setViewingExplanation] = useState<{
+        content: string;
+        sourceTableId?: string;
+        timestamps?: number[];
+        contextItems?: ContextItem[];
+    } | null>(null);
     // When the user clicks "Close" on a live pause we KEEP the pending block in
     // the thread but hide its panel (and switch focus to the previous chart).
     // Keyed by the pause draft id so a brand-new pause still surfaces.
@@ -910,6 +916,15 @@ export const SimpleChartRecBox: FC<{ onInputFocus?: () => void }> = function ({ 
         let currentDraftInteraction: InteractionEntry[] = [];
         let currentDraftId: string | null = null;
         let currentDraftParentTableId: string | null = null;
+        const inheritedTurnContextItems = textTurns.find(turn => turn.id === askedFromNode)?.contextItems || [];
+        const inheritedDraftContextItems = isResume && pendingClarification?.draftId
+            ? (draftNodes.find(node => node.id === pendingClarification.draftId)
+                ?.derive?.trigger?.interaction || []).flatMap(entry => entry.contextItems || [])
+            : [];
+        const contextItemAccumulator = new ContextItemAccumulator([
+            ...inheritedTurnContextItems,
+            ...inheritedDraftContextItems,
+        ]);
         const createNextDraft = (parentNodeId: string, parentTableId: string, initialInteraction: InteractionEntry[]) => {
             const draftId = `draft-${actionId}-${Date.now()}`;
             dispatch(dfActions.createDraftNode({
@@ -1049,6 +1064,7 @@ export const SimpleChartRecBox: FC<{ onInputFocus?: () => void }> = function ({ 
                 }
                 const turnId = `textTurn_${actionId}_${String(Date.now())}`;
                 const firstEntry = currentDraftInteraction[0];
+                const turnContextItems = contextItemAccumulator.all();
                 dispatch(dfActions.addTextTurn({
                     kind: 'text',
                     id: turnId,
@@ -1070,6 +1086,7 @@ export const SimpleChartRecBox: FC<{ onInputFocus?: () => void }> = function ({ 
                     parentNodeId: runLastNodeRef.current || askedFromTable || focusedTableId || ROOTLESS_THREAD_ID,
                     ...(runSourceChartIdRef.current ? { sourceChartId: runSourceChartIdRef.current } : {}),
                     actionId,
+                    ...(turnContextItems.length > 0 ? { contextItems: turnContextItems } : {}),
                     createdAt: Date.now(),
                 }));
                 runLastNodeRef.current = turnId;
@@ -1182,6 +1199,7 @@ export const SimpleChartRecBox: FC<{ onInputFocus?: () => void }> = function ({ 
             // Rendered as already-completed tool-style steps (✓ prefix) so they
             // visually match the rest of the agent's tool-call timeline.
             if (result.type === "context_info") {
+                contextItemAccumulator.add(result.context_items);
                 const rules: string[] = result.rules_injected || [];
                 const knowledge: Array<{category: string; title: string}> = result.knowledge_injected || [];
                 let added = false;
@@ -1314,6 +1332,7 @@ export const SimpleChartRecBox: FC<{ onInputFocus?: () => void }> = function ({ 
                     const tbl = tables.find(t2 => t2.id === id);
                     return tbl?.displayId || tbl?.virtual?.tableId || id.replace(/\.[^/.]+$/, "");
                 });
+                const interactionContextItems = contextItemAccumulator.all();
                 candidateTable.derive = {
                     code: code || t('chartRec.explorationStepCodeComment', { step: createdTables.length + 1 }),
                     codeSignature: result.content?.result?.code_signature,
@@ -1332,6 +1351,9 @@ export const SimpleChartRecBox: FC<{ onInputFocus?: () => void }> = function ({ 
                                 content: question || displayInstruction,
                                 displayContent: displayInstruction,
                                 inputTableNames: resolvedSourceNames,
+                                ...(interactionContextItems.length > 0
+                                    ? { contextItems: interactionContextItems }
+                                    : {}),
                                 timestamp: Date.now(),
                             },
                         ],
@@ -1498,6 +1520,7 @@ export const SimpleChartRecBox: FC<{ onInputFocus?: () => void }> = function ({ 
                     // (the asked-from table, or the previous node in the run).
                     const parentNodeId = runLastNodeRef.current || askedFromTable || focusedTableId || ROOTLESS_THREAD_ID;
                     if (parentNodeId) {
+                        const turnContextItems = contextItemAccumulator.all();
                         dispatch(dfActions.addTextTurn({
                             kind: 'text',
                             id: turnId,
@@ -1510,6 +1533,7 @@ export const SimpleChartRecBox: FC<{ onInputFocus?: () => void }> = function ({ 
                             parentNodeId,
                             ...(runSourceChartIdRef.current ? { sourceChartId: runSourceChartIdRef.current } : {}),
                             actionId,
+                            ...(turnContextItems.length > 0 ? { contextItems: turnContextItems } : {}),
                             // Resume token (§12): present iff the backend stamped a
                             // trajectory on the event (clarify/interact does today).
                             ...(result.trajectory ? { resume: {
@@ -1560,6 +1584,7 @@ export const SimpleChartRecBox: FC<{ onInputFocus?: () => void }> = function ({ 
                         && !runIsContinuationRef.current
                         && firstEntry?.role === 'prompt';
                     const resumeTraj = result.trajectory || result.content?.trajectory;
+                    const turnContextItems = contextItemAccumulator.all();
                     dispatch(dfActions.addTextTurn({
                         kind: 'text',
                         id: turnId,
@@ -1575,6 +1600,7 @@ export const SimpleChartRecBox: FC<{ onInputFocus?: () => void }> = function ({ 
                             ? { sourceChartId: runSourceChartIdRef.current }
                             : {}),
                         actionId,
+                        ...(turnContextItems.length > 0 ? { contextItems: turnContextItems } : {}),
                         ...(resumeTraj ? { resume: {
                             trajectory: resumeTraj,
                             completedStepCount: result.completed_step_count || result.content?.completed_step_count || 0,
@@ -1833,9 +1859,19 @@ export const SimpleChartRecBox: FC<{ onInputFocus?: () => void }> = function ({ 
     // ExplanationPanel popup above the chat box.
     useEffect(() => {
         const handler = (e: Event) => {
-            const detail = (e as CustomEvent).detail as { content?: string; sourceTableId?: string; timestamps?: number[] } | undefined;
+            const detail = (e as CustomEvent).detail as {
+                content?: string;
+                sourceTableId?: string;
+                timestamps?: number[];
+                contextItems?: ContextItem[];
+            } | undefined;
             if (detail?.content) {
-                setViewingExplanation({ content: detail.content, sourceTableId: detail.sourceTableId, timestamps: detail.timestamps });
+                setViewingExplanation({
+                    content: detail.content,
+                    sourceTableId: detail.sourceTableId,
+                    timestamps: detail.timestamps,
+                    contextItems: detail.contextItems,
+                });
             }
         };
         window.addEventListener('df-view-explanation', handler);
@@ -2163,6 +2199,7 @@ export const SimpleChartRecBox: FC<{ onInputFocus?: () => void }> = function ({ 
                         content={focusedTextTurn.answered && focusedTextTurn.answer
                             ? `${focusedTextTurn.content}\n\n> ↳ ${focusedTextTurn.answer}`
                             : focusedTextTurn.content}
+                        contextItems={focusedTextTurn.contextItems}
                         onClose={() => closeTextTurn()}
                         onDelete={() => dispatch(dfActions.removeTextTurn(focusedTextTurn.id))}
                     />
@@ -2174,6 +2211,7 @@ export const SimpleChartRecBox: FC<{ onInputFocus?: () => void }> = function ({ 
             {viewingExplanation && !pendingClarification && !focusedTextTurn && (
                 <ExplanationPanel
                     content={viewingExplanation.content}
+                    contextItems={viewingExplanation.contextItems}
                     onClose={() => { setViewingExplanation(null); switchFocusToPreviousChart(); }}
                     onDelete={() => {
                         // Remove this resolved explanation block from the thread

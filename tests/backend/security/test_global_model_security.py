@@ -18,6 +18,12 @@ pytestmark = [pytest.mark.backend]
 
 
 SAMPLE_ENV = {
+    # Several tests intentionally clear the environment.  Keep route-module
+    # imports independent of the host's USERPROFILE/HOME discovery.
+    "DATA_FORMULATOR_HOME": os.path.join(
+        os.environ.get("TEMP", os.getcwd()),
+        "data-formulator-test",
+    ),
     "OPENAI_ENABLED": "true",
     "OPENAI_API_KEY": "sk-secret-key-12345",
     "OPENAI_MODELS": "gpt-4o",
@@ -167,6 +173,105 @@ class TestGetClientGlobalResolution:
             })
 
         assert registry.get_config("global-openai-gpt-4o") == before
+
+    @patch.dict(os.environ, {
+        "GITHUB_COPILOT_ENABLED": "true",
+        "GITHUB_COPILOT_MODELS": "gpt-4.1",
+    }, clear=True)
+    def test_copilot_global_model_uses_identity_vault_token_only_after_probe(self):
+        registry = ModelRegistry()
+        service = MagicMock()
+        service.retrieve_access_token.return_value = "identity-a-long-token"
+        capability_store = MagicMock()
+        capability_store.get_qualified.return_value = MagicMock(qualified=True)
+
+        with (
+            patch("data_formulator.routes.agents.model_registry", registry),
+            patch(
+                "data_formulator.routes.agents.get_copilot_device_flow_service",
+                return_value=service,
+                create=True,
+            ),
+            patch(
+                "data_formulator.routes.agents.copilot_capability_store",
+                capability_store,
+                create=True,
+            ),
+        ):
+            from data_formulator.routes.agents import get_client
+
+            client = get_client(
+                {
+                    "id": "global-github_copilot-gpt-4.1",
+                    "endpoint": "github_copilot",
+                    "model": "gpt-4.1",
+                    "is_global": True,
+                },
+                identity_id="browser:identity-a",
+            )
+
+        assert client.endpoint == "github_copilot"
+        assert client.model == "github_copilot/gpt-4.1"
+        assert "api_key" not in client.params
+        assert client._copilot_token_manager.get_access_token() == "identity-a-long-token"
+        capability_store.get_qualified.assert_called_once_with(
+            "browser:identity-a",
+            "global-github_copilot-gpt-4.1",
+        )
+        service.retrieve_access_token.assert_called_once_with("browser:identity-a")
+
+    @patch.dict(os.environ, {
+        "GITHUB_COPILOT_ENABLED": "true",
+        "GITHUB_COPILOT_MODELS": "gpt-4.1",
+    }, clear=True)
+    def test_unqualified_copilot_model_fails_before_vault_access(self):
+        registry = ModelRegistry()
+        service = MagicMock()
+        capability_store = MagicMock()
+        capability_store.get_qualified.return_value = None
+
+        with (
+            patch("data_formulator.routes.agents.model_registry", registry),
+            patch(
+                "data_formulator.routes.agents.get_copilot_device_flow_service",
+                return_value=service,
+                create=True,
+            ),
+            patch(
+                "data_formulator.routes.agents.copilot_capability_store",
+                capability_store,
+                create=True,
+            ),
+        ):
+            from data_formulator.routes.agents import get_client
+
+            with pytest.raises(AppError, match="capability checks") as exc:
+                get_client(
+                    {
+                        "id": "global-github_copilot-gpt-4.1",
+                        "endpoint": "github_copilot",
+                        "model": "gpt-4.1",
+                        "is_global": True,
+                    },
+                    identity_id="browser:identity-a",
+                )
+
+        assert exc.value.code == ErrorCode.SERVICE_UNAVAILABLE
+        service.retrieve_access_token.assert_not_called()
+
+    @patch.dict(os.environ, {"GITHUB_COPILOT_ENABLED": "true"}, clear=True)
+    def test_caller_controlled_copilot_config_is_rejected(self):
+        from data_formulator.routes.agents import get_client
+
+        with pytest.raises(AppError) as exc:
+            get_client({
+                "id": "user-copilot",
+                "endpoint": "github_copilot",
+                "model": "gpt-4.1",
+            })
+
+        assert exc.value.code == ErrorCode.ACCESS_DENIED
+
 
 
 # ---------------------------------------------------------------------------

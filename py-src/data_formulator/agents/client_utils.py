@@ -221,10 +221,53 @@ class Client(object):
     Returns a LiteLLM client configured for the specified endpoint and model.
     Supports OpenAI, Azure, Ollama, and other providers via LiteLLM.
     """
-    def __init__(self, endpoint, model, api_key=None,  api_base=None, api_version=None):
-        
-        self.endpoint = endpoint
-        self.model = model
+    def __init__(
+        self,
+        endpoint,
+        model,
+        api_key=None,
+        api_base=None,
+        api_version=None,
+        *,
+        copilot_token_manager=None,
+    ):
+        # LiteLLM's GitHub Copilot provider owns an interactive Authenticator
+        # that writes shared files and may block an ordinary completion while
+        # it starts OAuth device login.  Copilot remains fail-closed until the
+        # A5 request-local adapter supplies the current identity's vault token.
+        normalized_endpoint = str(endpoint).strip().lower()
+        normalized_model = str(model).strip().lower()
+        copilot_requested = (
+            normalized_endpoint == "github_copilot"
+            or normalized_model.startswith("github_copilot/")
+        )
+        self._copilot_token_manager = None
+        if copilot_requested:
+            from data_formulator.copilot.litellm_adapter import (
+                CopilotTokenManager,
+                install_litellm_copilot_adapter,
+            )
+
+            if not isinstance(copilot_token_manager, CopilotTokenManager):
+                raise ValueError(
+                    "GitHub Copilot requires application-managed authentication"
+                )
+            install_litellm_copilot_adapter()
+            self._copilot_token_manager = copilot_token_manager
+            self.endpoint = "github_copilot"
+            model_name = str(model).strip()
+            if normalized_model.startswith("github_copilot/"):
+                model_name = model_name.split("/", 1)[1].strip()
+            if not model_name:
+                raise ValueError("GitHub Copilot model is required")
+            self.model = f"github_copilot/{model_name}"
+        else:
+            if copilot_token_manager is not None:
+                raise ValueError(
+                    "GitHub Copilot authentication cannot be used with another provider"
+                )
+            self.endpoint = endpoint
+            self.model = model
         self.params = {}
 
         if api_key is not None and api_key != "":
@@ -372,10 +415,46 @@ class Client(object):
         messages = [{"role": "user", "content": "Reply only 'ok'."}]
         params = self.params.copy()
         params["timeout"] = timeout
-        litellm.completion(
+        self._call_completion(
             model=self.model, messages=messages,
             max_tokens=3, drop_params=True, _skip_mcp_handler=True, **params,
         )
+
+    def _call_completion(self, **kwargs):
+        """Dispatch with Copilot credentials scoped to this call only."""
+
+        if self._copilot_token_manager is None:
+            return litellm.completion(**kwargs)
+        with self._copilot_token_manager.activate():
+            response = litellm.completion(**kwargs)
+        if not kwargs.get("stream"):
+            return response
+
+        manager = self._copilot_token_manager
+
+        def scoped_stream():
+            iterator = None
+            try:
+                with manager.activate():
+                    iterator = iter(response)
+                while True:
+                    try:
+                        # Reset before yielding each chunk so application code
+                        # consuming the stream never inherits the credential
+                        # context while the generator is suspended.
+                        with manager.activate():
+                            chunk = next(iterator)
+                    except StopIteration:
+                        return
+                    yield chunk
+            finally:
+                close_target = iterator if iterator is not None else response
+                close = getattr(close_target, "close", None)
+                if callable(close):
+                    with manager.activate():
+                        close()
+
+        return scoped_stream()
 
     def _dispatch(self, *, messages, stream, params, tools=None, extra=None):
         """Issue the LiteLLM call, transparently handling Ollama streaming.
@@ -396,7 +475,7 @@ class Client(object):
                            **params, **(extra or {}))
         if tools is not None:
             call_kwargs["tools"] = tools
-        resp = litellm.completion(**call_kwargs)
+        resp = self._call_completion(**call_kwargs)
         if is_ollama and tools:
             resp = _salvage_tool_calls_from_content(resp, tools)
         if is_ollama and stream:

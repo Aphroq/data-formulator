@@ -32,6 +32,10 @@
   "common": {
     "save": "Save"
   },
+  "contextSources": {
+    "title": "Sources ({{count}})",
+    "open": "Open source: {{title}}"
+  },
   "appBar": {
     "session": "Session",
     "explore": "Explore",
