@@ -221,18 +221,18 @@ SQLite 第一版只保留四张主表：
 
 schema v3 已由 `data_formulator.automation.db.AutomationDatabase` 统一拥有；`RecipeRepository` 和 `AutomationRepository` 都通过它解析绝对路径、打开 WAL/foreign keys/`busy_timeout` 连接并执行 v1 → v2 → v3 顺序 migration。v2 原地升级、重复打开、事务回滚和未知未来版本失败关闭都有合同测试，任何 repository 都不得重新维护自己的 schema version 或 migration 分支。
 
-Schedule v1 持久化规范化的五段 Cron 表达式和 IANA timezone；“每日”只是 UI 对 Cron 的受控简化。`version_id` 创建后不可修改，切换 RecipeVersion 必须新建 Schedule。存在 enabled Schedule 时归档其 RecipeVersion 必须失败关闭，用户需先显式停用 Schedule；已绑定 archived version 的 Schedule 不允许重新启用。`next_run_at` 统一按 UTC 持久化，解析和展示时才使用 Schedule timezone。
+Schedule v1 持久化规范化的五段 Cron 表达式和 IANA timezone；“每日”只是 UI 对 Cron 的受控简化。v1 Cron 只接受数值、列表、升序范围和步长，day-of-month/day-of-week 使用标准 union 语义；春季跳时中不存在的墙上分钟跳过，秋季回拨的重复墙上分钟只执行一次。`version_id` 创建后不可修改，切换 RecipeVersion 必须新建 Schedule。存在 enabled Schedule 时归档其 RecipeVersion 必须失败关闭，用户需先显式停用 Schedule；已绑定 archived version 的 Schedule 不允许重新启用。`next_run_at` 统一按 UTC 持久化，解析和展示时才使用 Schedule timezone；重新启用时从启用时刻之后重算，不补跑显式停用期间的周期。
 
 持久化 Run 使用独立的队列状态，不复用 Recipe Core 的终态制品枚举。Run 至少保存明确 scope、固定 version、触发类型、`scheduled_for`、尝试次数、下一次可领取时间、lease owner/token/expiry、取消请求、最终安全错误和可校验 artifact reference。逻辑 `run_id` 与每次 Executor 尝试的 artifact run id 分开，避免崩溃恢复或重试与已有的不完整/不可变运行目录冲突。SQLite 不保存参数值、连接参数、凭据或绝对 artifact 路径；v1 Schedule 只运行固定 Recipe/default binding。
 
-当前 repository 基础已支持创建/启停 Schedule 和按 `(schedule_id, scheduled_for)` 幂等创建 queued Run；schema 同时预留 lease、取消、错误和最终 artifact reference 字段。到期扫描、推进 `next_run_at`、合法状态转换、claim/fencing、恢复和执行仍属于后续切片，不得用直接 enqueue API 冒充 Scheduler 已完成。
+当前 repository 已支持 Schedule 创建、查询、列表、编辑、启停和按 `(schedule_id, scheduled_for)` 幂等创建 queued Run；单次 Scheduler tick 会在一个 `BEGIN IMMEDIATE` 事务中完成到期扫描、最多一个停机补偿 Run 入队和 `next_run_at` 推进，任一 Schedule 计算失败时整批回滚。Run repository 已实现合法状态转换、claim/renew/fencing、运行中取消请求、最多 3 次总尝试和过期 lease 恢复；它仍不执行 Recipe，也不是常驻 Scheduler/Worker 服务。
 
 ### Scheduler 与 Worker
 
 - Scheduler 以可注入时钟执行单次 tick，扫描到期 Schedule，并在同一事务中创建 queued Run、推进 `next_run_at`。服务停机跨过多个周期时，每个 Schedule 最多合并为一个补偿 Run，再推进到严格晚于当前时刻的下一次，避免重启后无界补跑。
-- Worker 通过带 fencing token 的 lease 领取 Run 并定期续租；过期 lease 可恢复，旧 Worker 失去 token 后不得覆盖新尝试的完成状态。
+- Run repository 通过带随机 fencing token 的 lease 领取和续租 Run；过期 lease 可重新排队或在尝试耗尽/已请求取消时关闭，旧 Worker 失去 token 后不得覆盖新尝试的完成状态。heartbeat 与实际 Worker 循环仍待实现。
 - 初始并发 1，允许显式配置到 2。
-- 只对现有 connector 错误分类明确标记 `retry=true` 的网络/超时失败，以及 SQLite busy 等已列明基础设施瞬时错误自动重试，最多 2 次；schema drift、签名、scope、参数、代码和输出校验错误永不重试。
+- Repository 只接受调用方给出的显式 retryable 决定并强制最多 2 次重试；后续 Worker 只能把现有 connector classifier 标记 `retry=true` 的网络/超时失败和明确列出的 SQLite busy 映射为 retryable。schema drift、签名、scope、参数、代码和输出校验错误永不重试。
 - queued Run 可直接取消；running Run 记录取消请求，Worker 在步骤边界响应。终态不可重新打开。
 - Worker 使用 request-independent opener 打开明确 identity/workspace，不伪造 Flask 请求。
 

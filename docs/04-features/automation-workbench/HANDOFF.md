@@ -4,7 +4,7 @@
 
 ## 一句话状态
 
-M3-A 导航与 Recipe 管理已经完成；M3-B1 也已用唯一 `AutomationDatabase` 把目录库升级到 schema v3，并落地固定 Published RecipeVersion 的 Schedule、归档保护和幂等 queued Run 入队。下一步从 Schedule 到期扫描与 Run 状态机继续，不要重复实现 migration owner，也不要把直接 enqueue 原语当成 Scheduler。Worker、API、Runs Inbox 和后台执行闭环仍未开始。
+M3-A 导航与 Recipe 管理、M3-B1 数据库契约以及 M3-B2/B3 Scheduler/Run 生命周期均已完成：当前已有数值 Cron/timezone/DST、事务型单次 tick、停机补偿、claim/renew/fencing、取消、有限重试和过期 lease 恢复。下一步直接实现 request-independent `worker.run_once()`；常驻入口、API、Runs Inbox 和后台执行闭环仍未开始。
 
 ## Git 与 Worktree 快照
 
@@ -15,8 +15,9 @@ M3-A 导航与 Recipe 管理已经完成；M3-B1 也已用唯一 `AutomationData
 | M3-A tip | `fd1f347c fix: align automation with recipe core` |
 | 开发准备 | `305b188b fix: prepare automation persistence` |
 | M3-B1 tip | `9f3056ef feat: establish automation persistence contracts` |
+| M3-B2/B3 tip | `e8110e27 feat: add automation scheduling lifecycle` |
 | Recipe 基线 | `3cd7ee12 fix: preserve interactive signing fallback` |
-| 实现拓扑 | M3-B1 实现 tip 相对 Recipe 基线线性领先 8 个提交，merge-base 为 `3cd7ee12`；其后的工程记录提交不改变实现基线 |
+| 实现拓扑 | `e8110e27` 是当前实现 tip，相对 Recipe 基线线性领先 10 个提交，merge-base 为 `3cd7ee12`；本工程记录提交不改变实现基线 |
 | 远端 | 当前分支没有 upstream，`origin/feat/automation-workbench` 尚未创建 |
 | Recipe 远端 | 本地 `feat/recipe-core` 领先 `origin/feat/recipe-core` 1 个提交；`3cd7ee12` 尚未推送 |
 
@@ -31,11 +32,13 @@ d82ec07e fix: remove redundant automation app action
 fd1f347c fix: align automation with recipe core
 ```
 
-后续两个提交为：
+后续提交为：
 
 ```text
 305b188b fix: prepare automation persistence
 9f3056ef feat: establish automation persistence contracts
+448a96bc docs: record automation persistence milestone
+e8110e27 feat: add automation scheduling lifecycle
 ```
 
 这是独立 Worktree，不要在 Recipe 目录里来回切分支。进入本分支应使用：
@@ -107,8 +110,8 @@ Workspace / 原有项目概念
 - 所有共享连接统一绝对路径、WAL、foreign keys 和 5000ms `busy_timeout`。
 - [`AutomationRepository`](../../../py-src/data_formulator/automation/repository.py)已支持创建固定 Published RecipeVersion 的 Schedule、显式启停和按 `(schedule_id, scheduled_for)` 幂等创建 queued Run。
 - Schedule 的 scope/version 由复合外键和 trigger 固定；enabled Schedule 会阻止 RecipeVersion 归档，archived version 不得重新启用。
-- 五段 Cron 只做空白规范化，IANA timezone 必须有效；UTC 时间固定保存为六位微秒的 `Z` 格式，保证 SQLite 文本比较等价于时间顺序。
-- 本切片没有注册 route、常驻线程、Cron 依赖、Worker 或 UI。
+- M3-B1 当时只规范化五段 Cron 空白并验证 IANA timezone；后续 M3-B2 已补齐求值。UTC 时间固定保存为六位微秒的 `Z` 格式，保证 SQLite 文本比较等价于时间顺序。
+- M3-B1 没有注册 route、常驻线程、Cron 依赖、Worker 或 UI；这一边界在 B2/B3 继续保持。
 
 关键测试：
 
@@ -118,11 +121,28 @@ Workspace / 原有项目概念
 | [`test_automation_repository.py`](../../../tests/backend/recipes/test_automation_repository.py) | Published/scope、不可变版本、时间输入、唯一入队、归档/重启用保护 |
 | [`test_recipe_repository.py`](../../../tests/backend/recipes/test_recipe_repository.py) | Recipe repository 通过共享 owner 初始化和迁移 |
 
+## 已完成：M3-B2/B3 Scheduler 与 Run 生命周期
+
+- [`cron.py`](../../../py-src/data_formulator/automation/cron.py)实现无第三方依赖的数值五段 Cron：列表、升序范围、步长和 DOM/DOW union；IANA timezone 下春季不存在分钟跳过，秋季重复墙上分钟只执行一次，包括在两个 fold 之间重算的重启场景。
+- [`AutomationScheduler`](../../../py-src/data_formulator/automation/scheduler.py)只暴露可注入时钟的单次 `tick()`，不创建线程或循环。到期扫描、最多一个停机补偿 Run 入队和 `next_run_at > checked_at` 推进处于同一 `BEGIN IMMEDIATE` 事务，任一 Schedule 失败会整批回滚。
+- Schedule repository 已支持 scoped get/list/edit；编辑 Cron/timezone 会重算下一次，重新启用从启用时刻之后排期，不补跑显式停用期间的周期，固定 `version_id` 不可变。
+- Run repository 已支持 scoped get、全局队列 claim、lease renew、随机 fencing token、终态完成、运行中取消请求、`available_at` 延迟重试、最多 3 次总尝试及过期 lease 恢复。旧 Worker 的过期/失效 token 不能覆盖新 attempt。
+- queued 取消直接终结；running 取消只记录请求。显式恢复在 lease 过期时把已请求取消的 Run 关闭为 `cancelled`，避免崩溃后永久卡住；Worker 的正常步骤边界取消与 cancelled artifact 仍待 B4。
+- 逻辑 Run id 与 attempt artifact id 强制不同；终态 artifact reference 必须成套、为安全相对路径且 hash 类型有效。`failed` / `needs_review` 错误必须成对并清洗，`succeeded` / `cancelled` 不保存错误。
+- repository 只执行“是否 retryable”的状态决定和次数上限；connector classifier 与 SQLite busy 的实际分类接线尚未完成，不能把这一层描述成完整自动重试策略。
+
+关键测试：
+
+| 位置 | 覆盖 |
+| --- | --- |
+| [`test_automation_cron.py`](../../../tests/backend/recipes/test_automation_cron.py) | 数值语法、DOM/DOW、timezone、春季缺失分钟和秋季 fold 去重 |
+| [`test_automation_scheduler.py`](../../../tests/backend/recipes/test_automation_scheduler.py) | 停机补偿、重复 tick、禁用/未来 Schedule、编辑/重启用、整批事务回滚 |
+| [`test_automation_run_lifecycle.py`](../../../tests/backend/recipes/test_automation_run_lifecycle.py) | claim/renew/fencing、重领、取消、延迟与次数上限、恢复、scope、安全错误和 artifact reference |
+
 ## 尚未实现
 
-- Schedule 列表/编辑、Cron 求值、DST 合同、到期扫描、停机补偿及在同一事务中推进 `next_run_at`。
-- `queued → running → succeeded / failed / needs_review / cancelled` 的显式 repository 状态转换。
-- lease 领取、续租、过期恢复、步骤边界取消和最多 2 次瞬时错误重试。
+- request-independent `worker.run_once()`、显式 Workspace/connector opener 与 `RecipeExecutor` 的 claim/execute/finish 闭环。
+- connector classifier / SQLite busy → retryable 的白名单接线、heartbeat 和正常步骤边界取消。
 - `data_formulator_worker` 本机入口及 Web/Worker 路径一致性检查。
 - 持久化 Run 查询、events/manifest API 和 Runs Inbox。
 - Schedule 创建、启停、固定 Published RecipeVersion 的 UI。
@@ -180,11 +200,10 @@ git push -u origin feat/automation-workbench
 
 ## 推荐继续顺序
 
-1. 用注入时钟为 Cron/timezone/DST、停机最多一个补偿 Run 和 `next_run_at > now` 写合同测试，再实现单次 `scheduler.tick()`；不要先写常驻循环。
-2. 扩展 Run repository 的合法状态转换、claim/fencing/renew、取消、过期 lease 恢复和有限重试；逻辑 Run id 与 attempt artifact id 继续分离。
-3. 增加 request-independent `worker.run_once()`，复用显式 Workspace/connector opener 与 `RecipeExecutor`，完成单次 claim/execute/finish 闭环。
-4. 在单次路径稳定后增加本机 Worker 入口与 heartbeat，再接 Schedule/Run API。
-5. 最后接 Schedule UI 与 Runs Inbox，并做页面关闭、进程重启、重复 tick、schema drift 的真实闭环验证。
+1. 增加 request-independent `worker.run_once()`，复用显式 Workspace/connector opener 与 `RecipeExecutor`，为每次尝试生成独立 artifact run id，完成单次 claim/execute/finish 闭环。
+2. 把 connector classifier 和明确列出的 SQLite busy 映射到 repository 的 retryable 输入；保持 schema/signature/scope/validation 永不重试。
+3. 在单次路径稳定后增加步骤边界取消、lease heartbeat、本机 Worker 入口和 Web/Worker 数据根一致性检查，再接 Schedule/Run API。
+4. 最后接 Schedule UI 与 Runs Inbox，并做页面关闭、进程重启、重复 tick、schema drift 的真实闭环验证。
 
 实现 M3 时注意：
 
@@ -193,7 +212,7 @@ git push -u origin feat/automation-workbench
 - 逻辑队列 `run_id` 与每次 Executor 尝试的 artifact run id 分开；崩溃恢复或重试不得覆盖、复用已有不完整/不可变运行目录。
 - Schedule 只接受 Published RecipeVersion，并固定 version id；新版本发布不得静默迁移已有 Schedule。
 - enabled Schedule 引用的 RecipeVersion 不得归档；先显式停用，且 archived version 的 Schedule 不得重新启用。
-- v1 持久化规范化五段 Cron + IANA timezone，“每日”只是受控 UI 简化；所有 `next_run_at` / `scheduled_for` 以 UTC 保存。
+- v1 使用数值五段 Cron + IANA timezone，“每日”只是受控 UI 简化；所有 `next_run_at` / `scheduled_for` 以 UTC 保存。不要改变已锁定的 DST 语义：春季缺失分钟跳过、秋季重复墙上分钟一次。
 - Web 与 Worker 必须用显式 identity/workspace 打开器和同一绝对数据根目录，不能伪造 Flask request。
 - 先做单 Worker、并发 1；只有显式配置时允许到 2。
 - 自动重试只认可现有 connector classifier 的 `retry=true` 和明确列出的 SQLite busy，最多 2 次；schema/signature/scope/validation 错误不重试。
@@ -237,7 +256,15 @@ yarn run start --host 127.0.0.1 --port 5176 --strictPort
 
 ## 最近一次验证
 
-M3-B1 `9f3056ef` 当前验证为：
+M3-B2/B3 `e8110e27` 当前已完成的聚焦验证为：
+
+- Cron/Scheduler/Run 生命周期及共享 repository：58 passed。
+- Recipe/Automation 后端目录：155 passed、2 skipped。
+- 后端全量：2298 passed、16 skipped、1 xfailed（2315 collected）。
+- 前端全量：49 files / 405 tests passed。
+- `yarn build` 与 `uv build --wheel` 通过；wheel 明确包含 `automation/cron.py`、`scheduler.py` 及扩展后的 repository/models。
+
+M3-B1 `9f3056ef` 的历史验证为：
 
 - 共享迁移/Automation/Recipe repository 聚焦：22 passed。
 - Recipe/Automation 后端目录：119 passed、2 skipped。
@@ -283,7 +310,8 @@ yarn build
 - [x] Automation 已 rebase 到新的 Recipe HEAD，merge-base 为 `3cd7ee12`。
 - [x] “自动化项目”术语已经收口为 Recipe/配方，未新增 Project 数据模型。
 - [x] 新 migration 能从现有 schema v2 原地升级，也能重复初始化并在失败时整体回滚。
-- [x] Schedule 固定 Published RecipeVersion；相同 Schedule/计划时间的直接入队幂等。重复 tick 仍待 Scheduler 测试。
+- [x] Schedule 固定 Published RecipeVersion；相同 Schedule/计划时间唯一，重复 tick 幂等，停机周期合并为一个补偿 Run。
+- [x] Run repository 覆盖 claim/renew/fencing、取消、有限/延迟重试和过期 lease 恢复；真实 Worker 进程重启仍待闭环。
 - [ ] Worker、Web 和 SQLite 解析到同一绝对数据根目录。
 - [ ] Automation flag 关闭时 Scheduler、Worker、API 和 UI 都不可用。
 - [ ] 正常 Run 路径没有 LLM、TrustGraph 或 Workflow Replay 调用。
