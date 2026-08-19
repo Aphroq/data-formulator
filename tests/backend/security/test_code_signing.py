@@ -13,6 +13,7 @@ from flask import Flask
 
 from data_formulator.security.code_signing import (
     CodeSigningConfigurationError,
+    require_stable_code_signing,
     sign_code,
     sign_result,
     verify_code,
@@ -93,17 +94,49 @@ class TestStableSecretResolution:
         with pytest.raises(CodeSigningConfigurationError, match="stable"):
             sign_code("output_df = source.copy()")
 
-    def test_production_web_signing_fails_without_stable_secret(self, monkeypatch):
+    def test_process_local_flask_secret_supports_interactive_web(self, monkeypatch):
         monkeypatch.delenv("DF_CODE_SIGNING_SECRET", raising=False)
         monkeypatch.delenv("FLASK_SECRET_KEY", raising=False)
         app = Flask(__name__)
         app.secret_key = "process-local-random-secret"
+        code = "output_df = source.copy()"
+
+        with app.app_context():
+            signature = sign_code(code)
+            assert verify_code(code, signature)
+
+        other_app = Flask("other")
+        other_app.secret_key = "different-process-secret"
+        with other_app.app_context():
+            assert not verify_code(code, signature)
+
+    @pytest.mark.parametrize("dev", [False, True])
+    def test_stable_mode_rejects_process_local_and_dev_secrets(
+        self,
+        monkeypatch,
+        dev,
+    ):
+        monkeypatch.delenv("DF_CODE_SIGNING_SECRET", raising=False)
+        monkeypatch.delenv("FLASK_SECRET_KEY", raising=False)
+        app = Flask(__name__)
+        app.secret_key = "process-local-random-secret"
+        app.config["CLI_ARGS"] = {"dev": dev}
 
         with app.app_context(), pytest.raises(
             CodeSigningConfigurationError,
             match="stable",
         ):
-            sign_code("output_df = source.copy()")
+            require_stable_code_signing()
+
+        with app.app_context(), pytest.raises(
+            CodeSigningConfigurationError,
+            match="stable",
+        ):
+            verify_code(
+                "output_df = source.copy()",
+                "0" * 64,
+                require_stable=True,
+            )
 
 
 # ===================================================================

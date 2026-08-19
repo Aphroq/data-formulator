@@ -32,7 +32,10 @@ from data_formulator.recipes.spec import (
     RecipeStepKind,
 )
 from data_formulator.recipes.visualize import record_visualize_artifacts
-from data_formulator.security.code_signing import sign_code
+from data_formulator.security.code_signing import (
+    CodeSigningConfigurationError,
+    sign_code,
+)
 
 
 pytestmark = [pytest.mark.backend]
@@ -157,6 +160,27 @@ def test_compiler_walks_ancestors_and_builds_stable_recipe(graph: _Graph) -> Non
     assert first.spec.has_unresolved_inputs is False
     assert "## Steps" in first.workflow_markdown
     assert "Regional totals" in first.workflow_markdown
+
+
+def test_compiler_requires_stable_signing_before_reading_lineage(
+    graph: _Graph,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("DF_CODE_SIGNING_SECRET", raising=False)
+    monkeypatch.delenv("FLASK_SECRET_KEY", raising=False)
+    monkeypatch.setattr(
+        graph.ledger,
+        "ancestry",
+        lambda _targets: pytest.fail(
+            "missing signing configuration read Artifact Lineage"
+        ),
+    )
+
+    with pytest.raises(CodeSigningConfigurationError, match="stable"):
+        RecipeCompiler(graph.workspace, graph.ledger).compile(
+            target_artifact_ids=(graph.target_artifact_id,),
+            name="Regional totals",
+        )
 
 
 def test_compiler_is_independent_of_ledger_serialization_order(graph: _Graph) -> None:

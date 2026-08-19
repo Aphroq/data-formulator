@@ -13,6 +13,7 @@ from data_formulator.recipes.repository import (
 )
 from data_formulator.recipes.run_store import RecipeRunStatus
 from data_formulator.recipes.service import RecipeService
+from data_formulator.security.code_signing import CodeSigningConfigurationError
 
 
 pytestmark = [pytest.mark.backend]
@@ -75,3 +76,36 @@ def test_service_dry_runs_saved_version_and_manual_runs_only_after_publish(
     assert published.status is RecipeVersionStatus.PUBLISHED
     assert manual.status is RecipeRunStatus.SUCCEEDED
     assert manual.reference.version_id == draft.version_id
+
+
+@pytest.mark.parametrize("action", ["dry_run", "publish", "run_manual"])
+def test_service_requires_stable_signing_before_lifecycle_actions(
+    tmp_path,
+    monkeypatch,
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+    action: str,
+) -> None:
+    repository = RecipeRepository(tmp_path / "automation.db")
+    draft = repository.save_draft(recipe_workspace, executable_recipe)
+    service = RecipeService(repository)
+    monkeypatch.delenv("DF_CODE_SIGNING_SECRET", raising=False)
+    monkeypatch.delenv("FLASK_SECRET_KEY", raising=False)
+
+    with pytest.raises(CodeSigningConfigurationError, match="stable"):
+        if action == "dry_run":
+            service.dry_run(
+                recipe_workspace,
+                draft.version_id,
+                parameter_values={},
+                loader_resolver=lambda _source_id: _ServiceLoader(),
+            )
+        elif action == "publish":
+            service.publish(recipe_workspace, draft.version_id)
+        else:
+            service.run_manual(
+                recipe_workspace,
+                draft.version_id,
+                parameter_values={},
+                loader_resolver=lambda _source_id: _ServiceLoader(),
+            )

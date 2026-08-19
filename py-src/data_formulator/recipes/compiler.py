@@ -25,7 +25,10 @@ from data_formulator.recipes.spec import (
     RecipeStepKind,
 )
 from data_formulator.recipes.table_artifacts import parquet_artifact_hashes
-from data_formulator.security.code_signing import verify_code
+from data_formulator.security.code_signing import (
+    require_stable_code_signing,
+    verify_code,
+)
 
 
 class RecipeCompileError(ValueError):
@@ -85,6 +88,7 @@ class RecipeCompiler:
         parameters: Sequence[RecipeParameter] = (),
         bindings: Sequence[ParameterBinding] = (),
     ) -> CompiledRecipe:
+        require_stable_code_signing()
         if isinstance(target_artifact_ids, (str, bytes)):
             raise TypeError("target_artifact_ids must be a sequence of artifact ids")
         targets = tuple(sorted(set(target_artifact_ids)))
@@ -212,7 +216,7 @@ class RecipeCompiler:
         signature = execution.get("code_signature")
         if not isinstance(code, str) or not isinstance(signature, str):
             raise RecipeCompileError("Transform artifact is missing signed code")
-        if not verify_code(code, signature):
+        if not verify_code(code, signature, require_stable=True):
             raise RecipeCompileError("Transform code signature is invalid")
         declared_inputs = execution.get("input_tables")
         if not isinstance(declared_inputs, list):

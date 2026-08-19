@@ -28,6 +28,7 @@ from data_formulator.recipes.spec import (
     RecipeStepKind,
 )
 from data_formulator.sandbox import LocalSandbox
+from data_formulator.security.code_signing import CodeSigningConfigurationError
 
 
 pytestmark = [pytest.mark.backend]
@@ -119,6 +120,30 @@ def test_dry_run_executes_three_steps_without_llm_and_isolates_outputs(
     )
     assert chart["title"] == "Regional totals"
     assert "scratch" not in result.reference.artifact_path
+
+
+def test_executor_requires_stable_signing_before_opening_inputs(
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("DF_CODE_SIGNING_SECRET", raising=False)
+    monkeypatch.delenv("FLASK_SECRET_KEY", raising=False)
+    resolver = Mock(
+        side_effect=lambda _source_id: pytest.fail(
+            "missing signing configuration opened a connector"
+        )
+    )
+    executor = RecipeExecutor(recipe_workspace, loader_resolver=resolver)
+
+    with pytest.raises(CodeSigningConfigurationError, match="stable"):
+        executor.execute(
+            executable_recipe.spec,
+            parameter_values={},
+            kind=RecipeRunKind.DRY_RUN,
+        )
+
+    resolver.assert_not_called()
 
 
 def test_schema_drift_stops_run_and_requires_review(

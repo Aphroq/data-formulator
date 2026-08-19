@@ -249,6 +249,7 @@ M2-D 实施结果：
 | 2026-08-18 | M2-C | 注册 default-off Recipe API；新增 Save as Recipe、artifact 编辑失效契约、Recipes 版本/输入/步骤与生命周期页面 | Recipe 82 passed；全量后端 2220 passed、13 skipped、1 xfailed、1 deselected；前端 48 files、396 tests；生产构建成功 | `feat: expose recipe lifecycle in the app` |
 | 2026-08-18 | M2-D 规划 | 复核 Recipe 分支的完整性、API/UI 和分支边界；将 report/参数编辑明确延期，形成不增加依赖、表或状态系统的最小收口计划 | Recipe 聚焦后端 93 passed；聚焦前端 5 passed；前端全量与生产构建通过；全量后端环境差异已记录 | `fix: harden recipe core before integration` |
 | 2026-08-18 | M2-D | 统一稳定签名密钥与父表新鲜度校验；用 `ConfinedDir` 收口 Recipe/Run/opener 路径；严格处理 JSON、artifact id 和安全数值边界；修复 Recipes 旧响应覆盖、动作结果误报并补即时 Run 摘要 | Recipe/签名/Agent 聚焦后端 116 passed、2 skipped；全量后端 2239 passed、16 skipped、1 xfailed；Recipes UI 4 passed；前端全量 48 files / 399 tests；生产构建和 Recipes ESLint 通过 | `fix: harden recipe core before integration` |
+| 2026-08-19 | M2-D 签名回归修复 | 恢复原有交互 Web 的当前 Flask secret fallback；Recipe compile/dry-run/publish/manual-run、Service、Compiler 和无请求 Executor 仍强制稳定 key，并将 API 配置错误清洗为 `SERVICE_UNAVAILABLE` | 聚焦后端 67 passed、1 skipped；全量后端 2251 passed、16 skipped、1 xfailed；前端 48 files / 399 tests；生产构建通过 | `fix: preserve interactive signing fallback` |
 
 ## 已确认决策
 
@@ -267,7 +268,7 @@ M2-D 实施结果：
 - Azure Blob 首发支持取决于正式 artifact store 接口；不能使用 scratch。
 - 数据库纵向切片使用已有环境或测试替身，不建立 Docker 测试依赖。
 - Worker 调度、lease 与 Run catalog 属于 Automation Workbench；Recipe Core 已提供无 request opener 和确定性 service，但尚未接 Worker 生命周期。
-- 生产 Web 和后续 Worker 必须显式共享 `DF_CODE_SIGNING_SECRET` 或 `FLASK_SECRET_KEY`；缺少稳定配置会按设计拒绝签名/验证，部署入口仍需在 Automation Workbench 集成时传递同一环境配置。
+- 原有交互 Web 未配置稳定 key 时只在当前 Flask 进程内签名和验证，重启后不承诺复用；Recipe 生命周期和后续 Worker 必须显式共享 `DF_CODE_SIGNING_SECRET` 或 `FLASK_SECRET_KEY`，缺少时安全拒绝且不打开 Workspace/connector。
 - Recipes 目前只显示本次请求返回的 Run 摘要；持久历史、筛选和处置仍归 Automation Workbench 的 Runs Inbox。
 - Run 目录以最终 manifest 作为完成标记；进程崩溃留下的无 manifest 目录安全地不可读取，但自动回收策略留给 Automation Workbench 的维护任务。
 - 当前 sandbox 的文件访问边界仍是整个 workspace；M0-C 将声明输入作为可验证的 provenance/Compiler 契约，但不声称已动态追踪 Python 的每次文件读取。若发布威胁模型要求抵御恶意已签名代码，需增加只挂载声明文件的 sandbox view。
@@ -281,7 +282,7 @@ M2-D 实施结果：
 - [x] dry run 成功后才能发布。
 - [x] Published RecipeVersion 不可修改。
 - [x] 正常 manual run 不调用 LLM/TrustGraph。
-- [x] Web 与无请求 Executor 使用同一稳定签名密钥，缺失生产密钥时失败关闭。
+- [x] 原有交互 Web 可使用当前 Flask secret；Recipe 与无请求 Executor 只接受同一稳定签名密钥，缺失时失败关闭。
 - [x] 父 Artifact content/schema 在记录 transform/chart 前复核，篡改时不写 lineage。
 - [x] Recipe/Run/opener 路径统一使用 `ConfinedDir` 并覆盖 symlink escape。
 - [x] malformed JSON、非法 artifact id 和极端数值返回稳定 4xx。

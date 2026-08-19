@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+from flask import Flask
 
 from data_formulator.analyst.skills import build_registry
 from data_formulator.analyst.skills.base import SkillContext
@@ -54,7 +55,9 @@ def test_visualize_handler_forwards_title_and_subtitle():
     assert kwargs["input_tables"] == ["source"]
 
 
-def test_visualize_records_signed_artifact_ids_before_emitting_result():
+def test_visualize_records_signed_artifact_ids_before_emitting_result(monkeypatch):
+    monkeypatch.delenv("DF_CODE_SIGNING_SECRET", raising=False)
+    monkeypatch.delenv("FLASK_SECRET_KEY", raising=False)
     runtime = MagicMock()
     runtime.run_visualize_code.return_value = {
         "status": "ok",
@@ -88,7 +91,11 @@ def test_visualize_records_signed_artifact_ids_before_emitting_result():
         "field_display_names": {},
     }
 
-    events = list(CoreSkill()._handle_visualize(action, ctx))
+    app = Flask(__name__)
+    app.secret_key = "process-local-interactive-secret"
+    app.config["AUTOMATION_ENABLED"] = False
+    with app.app_context():
+        events = list(CoreSkill()._handle_visualize(action, ctx))
 
     record_kwargs = runtime.record_visualize_artifacts.call_args.kwargs
     assert record_kwargs["transform_result"]["code_signature"]

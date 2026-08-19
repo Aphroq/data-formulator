@@ -117,7 +117,9 @@ M0 在当前锁定的 LiteLLM `1.91.3` 上验证真实登录、普通对话、�
 - `chart`：图表成功生成时，记录规范化 chart spec、table artifact 和 hash。
 - `report`：v1 暂不记录。现有报告只保存在前端会话状态，没有可复用的后端持久化保存点；后续若补齐，只允许作为引用 chart artifact 的只读输出包装，不能成为 Recipe 执行步骤。
 
-现有 HMAC `codeSignature` 用于验证代码未被篡改。Recipe 另外保存稳定 SHA-256，用于版本和可重复性比较。Web 与无请求 Worker 必须从同一个 `DF_CODE_SIGNING_SECRET` 或 `FLASK_SECRET_KEY` 解析签名密钥；生产或后台模式缺少稳定密钥时，签名/验证失败关闭，不能回退到开发密钥或进程内随机 Flask secret。
+现有 HMAC `codeSignature` 用于验证代码未被篡改。Recipe 另外保存稳定 SHA-256，用于版本和可重复性比较。原有交互式 Web 分析为保持向后兼容，可以继续从当前 Flask `app.secret_key` 派生进程内签名；未显式配置 `FLASK_SECRET_KEY` 时，这类签名不保证跨重启有效，但不得因此让 `AUTOMATION_ENABLED=false` 的原有 `visualize` 路径失效。
+
+Recipe 与后台执行使用更严格的边界：compile、dry run、publish、Recipe manual run 和 Worker 启动前都必须显式验证存在可跨进程复用的 `DF_CODE_SIGNING_SECRET` 或 `FLASK_SECRET_KEY`。Web 与 Worker 必须解析到同一份稳定材料；缺失时返回安全的 `SERVICE_UNAVAILABLE` 或拒绝启动，不得使用开发密钥、进程内随机 Flask secret，也不得把配置异常泄露给客户端。
 
 Artifact 在成为 transform/chart 父节点前，必须重新读取当前物化表并比对完整 content hash 与 schema fingerprint。metadata 中的 `artifact_id` 只是定位加速器，不能替代完整性校验。
 

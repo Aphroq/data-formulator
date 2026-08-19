@@ -32,6 +32,10 @@ from data_formulator.recipes.repository import (
 )
 from data_formulator.recipes.run_store import RecipeRunArtifactError
 from data_formulator.recipes.service import RecipeService
+from data_formulator.security.code_signing import (
+    CodeSigningConfigurationError,
+    require_stable_code_signing,
+)
 from data_formulator.workspace_factory import get_workspace
 
 
@@ -54,6 +58,11 @@ def _recipe_errors(view: _View) -> _View:
             raise AppError(
                 ErrorCode.ACCESS_DENIED,
                 "Recipe does not belong to the active Workspace.",
+            ) from exc
+        except CodeSigningConfigurationError as exc:
+            raise AppError(
+                ErrorCode.SERVICE_UNAVAILABLE,
+                "Recipe code signing is not configured on this server.",
             ) from exc
         except (
             RecipeCompileError,
@@ -216,6 +225,7 @@ def _loader_resolver(identity_id: str):
 @recipes_bp.route("/compile", methods=["POST"])
 @_recipe_errors
 def compile_recipe():
+    require_stable_code_signing()
     identity_id, workspace, repository = _context()
     data = _json_object()
     targets = data.get("target_artifact_ids")
@@ -304,6 +314,7 @@ def get_recipe_version(version_id: str):
 @recipes_bp.route("/versions/<version_id>/dry-run", methods=["POST"])
 @_recipe_errors
 def dry_run_recipe(version_id: str):
+    require_stable_code_signing()
     identity_id, workspace, repository = _context()
     data = _json_object(optional=True)
     result = RecipeService(repository).dry_run(
@@ -326,6 +337,7 @@ def dry_run_recipe(version_id: str):
 @recipes_bp.route("/versions/<version_id>/publish", methods=["POST"])
 @_recipe_errors
 def publish_recipe(version_id: str):
+    require_stable_code_signing()
     _identity_id, workspace, repository = _context()
     version = RecipeService(repository).publish(workspace, version_id)
     return json_ok({"version": _stored_version(version)})
@@ -334,6 +346,7 @@ def publish_recipe(version_id: str):
 @recipes_bp.route("/versions/<version_id>/run", methods=["POST"])
 @_recipe_errors
 def run_recipe(version_id: str):
+    require_stable_code_signing()
     identity_id, workspace, repository = _context()
     data = _json_object(optional=True)
     result = RecipeService(repository).run_manual(

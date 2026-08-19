@@ -21,6 +21,7 @@ from data_formulator.recipes.repository import (
 )
 from data_formulator.recipes.run_store import RecipeRunKind, RecipeRunStatus
 from data_formulator.sandbox.local_sandbox import LocalSandbox
+from data_formulator.security.code_signing import require_stable_code_signing
 
 
 class RecipeService:
@@ -38,6 +39,7 @@ class RecipeService:
         loader_resolver: LoaderResolver,
         sandbox: LocalSandbox | None = None,
     ) -> RecipeExecutionResult:
+        require_stable_code_signing()
         loaded = self._repository.load_version(workspace, version_id)
         if loaded.version.status is not RecipeVersionStatus.DRAFT:
             raise RecipeStateError(
@@ -65,6 +67,7 @@ class RecipeService:
         return result
 
     def publish(self, workspace, version_id: str) -> StoredRecipeVersion:
+        require_stable_code_signing()
         return self._repository.publish_version(workspace, version_id)
 
     def run_manual(
@@ -76,6 +79,7 @@ class RecipeService:
         loader_resolver: LoaderResolver,
         sandbox: LocalSandbox | None = None,
     ) -> RecipeExecutionResult:
+        require_stable_code_signing()
         loaded = self._repository.load_version(workspace, version_id)
         if loaded.version.status is not RecipeVersionStatus.PUBLISHED:
             raise RecipeStateError(

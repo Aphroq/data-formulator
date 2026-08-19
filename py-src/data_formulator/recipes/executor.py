@@ -30,7 +30,11 @@ from data_formulator.recipes.run_store import (
 from data_formulator.recipes.spec import InputMode, RecipeSpec, RecipeStep, RecipeStepKind
 from data_formulator.recipes.table_artifacts import parquet_file_hashes
 from data_formulator.sandbox.local_sandbox import LocalSandbox
-from data_formulator.security.code_signing import MAX_CODE_SIZE, verify_code
+from data_formulator.security.code_signing import (
+    MAX_CODE_SIZE,
+    require_stable_code_signing,
+    verify_code,
+)
 
 
 LoaderResolver = Callable[[str], Any]
@@ -188,6 +192,7 @@ class RecipeExecutor:
         kind: RecipeRunKind,
         run_id: str | None = None,
     ) -> RecipeExecutionResult:
+        require_stable_code_signing()
         try:
             self._validate_spec(spec)
             bound = bind_recipe_parameters(spec, parameter_values)
@@ -424,7 +429,11 @@ class RecipeExecutor:
                 raise ValueError("Transform execution fields are invalid")
         except (KeyError, TypeError, ValueError):
             raise RecipeExecutionValidationError() from None
-        if len(code.encode("utf-8")) > MAX_CODE_SIZE or not verify_code(code, signature):
+        if len(code.encode("utf-8")) > MAX_CODE_SIZE or not verify_code(
+            code,
+            signature,
+            require_stable=True,
+        ):
             raise RecipeCodeSignatureError()
 
         sandbox_result = self._sandbox.run_python_code(

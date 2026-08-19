@@ -14,10 +14,15 @@ executed by the sandbox.
 
 Secret lifecycle
 ~~~~~~~~~~~~~~~~
-- **Stable application key**: derives from ``FLASK_SECRET_KEY`` so Web and
-  request-independent workers resolve the same signing material.
+- **Stable application key**: derives from ``FLASK_SECRET_KEY`` so Recipe
+  lifecycle actions and request-independent workers resolve the same signing
+  material.
 - **Dev mode** (``--dev``): uses a fixed, deterministic key only while a
   Flask development app context is active.  This is not secure for production.
+- **Interactive Web fallback**: when no stable key is configured, an active
+  Flask app may use its current process-local ``app.secret_key``.  This keeps
+  legacy interactive analysis working but is never accepted by Recipe or
+  background execution boundaries.
 - **Explicit override**: set ``DF_CODE_SIGNING_SECRET`` env-var — this
   takes priority over everything (useful for multi-instance deploys
   behind a load balancer).
@@ -69,26 +74,54 @@ def _is_dev_mode() -> bool:
         return False
 
 
-def _get_secret() -> bytes:
+def _active_flask_secret() -> bytes | None:
+    """Resolve the current process-local Flask secret when an app is active."""
+    try:
+        from flask import current_app
+        secret = current_app.secret_key
+    except (ImportError, RuntimeError):
+        return None
+    if not secret:
+        return None
+    return _derive_flask_secret(secret)
+
+
+def _configuration_error() -> CodeSigningConfigurationError:
+    return CodeSigningConfigurationError(
+        "A stable code-signing secret is required; set "
+        "DF_CODE_SIGNING_SECRET or FLASK_SECRET_KEY."
+    )
+
+
+def _get_secret(*, require_stable: bool = False) -> bytes:
     """Return the signing secret.
 
     Priority:
     1. Stable env config (``DF_CODE_SIGNING_SECRET`` / ``FLASK_SECRET_KEY``)
-    2. Dev mode → fixed deterministic key (survives reloader restarts)
-    3. Every other caller without stable config fails closed
+    2. Explicit dev mode → fixed deterministic key (survives reloader restarts)
+    3. Active Flask app → current process-local application secret
+    4. Every other caller without stable config fails closed
+
+    ``require_stable=True`` stops after step 1.  Recipe lifecycle actions and
+    request-independent workers use that mode so process-local or development
+    material can never make a persisted Recipe appear portable.
     """
     configured = _stable_configured_secret()
     if configured is not None:
         return configured
 
+    if require_stable:
+        raise _configuration_error()
+
     # In dev mode use a fixed key so the reloader doesn't break sigs.
     if _is_dev_mode():
         return _DEV_SECRET
 
-    raise CodeSigningConfigurationError(
-        "A stable code-signing secret is required outside explicit dev mode; set "
-        "DF_CODE_SIGNING_SECRET or FLASK_SECRET_KEY."
-    )
+    flask_secret = _active_flask_secret()
+    if flask_secret is not None:
+        return flask_secret
+
+    raise _configuration_error()
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +132,12 @@ def _get_secret() -> bytes:
 MAX_CODE_SIZE = 256 * 1024
 
 
-def sign_code(code: str) -> str:
+def require_stable_code_signing() -> None:
+    """Fail unless process-independent signing material is configured."""
+    _get_secret(require_stable=True)
+
+
+def sign_code(code: str, *, require_stable: bool = False) -> str:
     """Compute an HMAC-SHA256 signature over *code*.
 
     Returns the hex-encoded signature string.  The signature covers
@@ -108,20 +146,25 @@ def sign_code(code: str) -> str:
     if not code:
         return ""
     return hmac.new(
-        _get_secret(),
+        _get_secret(require_stable=require_stable),
         code.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
 
 
-def verify_code(code: str, signature: str) -> bool:
+def verify_code(
+    code: str,
+    signature: str,
+    *,
+    require_stable: bool = False,
+) -> bool:
     """Return ``True`` if *signature* is a valid HMAC for *code*.
 
     Uses constant-time comparison to prevent timing attacks.
     """
     if not code or not signature:
         return False
-    expected = sign_code(code)
+    expected = sign_code(code, require_stable=require_stable)
     return hmac.compare_digest(expected, signature)
 
 

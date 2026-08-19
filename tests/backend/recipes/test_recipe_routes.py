@@ -149,6 +149,65 @@ def test_recipe_api_is_unavailable_when_feature_flag_is_off(
 
 
 @pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        (
+            "/api/recipes/compile",
+            {
+                "target_artifact_ids": ["art_" + "a" * 64],
+                "name": "Recipe",
+            },
+        ),
+        ("/api/recipes/versions/ver_missing/dry-run", {}),
+        ("/api/recipes/versions/ver_missing/publish", {}),
+        ("/api/recipes/versions/ver_missing/run", {}),
+    ],
+)
+def test_recipe_lifecycle_requires_stable_signing_before_workspace_access(
+    recipe_api,
+    monkeypatch,
+    path,
+    payload,
+) -> None:
+    _app, client, _repository = recipe_api
+    monkeypatch.delenv("DF_CODE_SIGNING_SECRET", raising=False)
+    monkeypatch.delenv("FLASK_SECRET_KEY", raising=False)
+    monkeypatch.setattr(
+        recipe_routes,
+        "get_workspace",
+        lambda _identity_id: pytest.fail(
+            "missing signing configuration opened a Workspace"
+        ),
+    )
+
+    response = client.post(path, json=payload)
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "SERVICE_UNAVAILABLE"
+    assert body["error"]["message"] == (
+        "Recipe code signing is not configured on this server."
+    )
+    assert body["error"]["retry"] is False
+    assert body["error"]["request_id"]
+
+
+def test_recipe_catalog_remains_readable_without_stable_signing(
+    recipe_api,
+    monkeypatch,
+) -> None:
+    _app, client, _repository = recipe_api
+    monkeypatch.delenv("DF_CODE_SIGNING_SECRET", raising=False)
+    monkeypatch.delenv("FLASK_SECRET_KEY", raising=False)
+
+    body = client.get("/api/recipes").get_json()
+
+    assert body["status"] == "success"
+    assert body["data"]["recipes"] == []
+
+
+@pytest.mark.parametrize(
     "payload",
     [
         {},
