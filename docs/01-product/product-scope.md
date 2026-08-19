@@ -26,6 +26,8 @@
 
 Workflow Replay 保留为灵活的“分析方法复用”；Recipe 是严格的“已确认结果重放”。两者互补，不能互相冒充。
 
+`Automation` 是 Recipe、Schedule 和 Run / Runs Inbox 的统一管理入口，不是新的 Project 实体，也不替代现有 Workspace、会话或项目概念。一个 Recipe identity 直接对应一个配方，版本保留在该 Recipe 内；Schedule 直接固定 Published RecipeVersion。
+
 ## 第一版必须完成
 
 - 在现有 AnalystAgent 中按需查询 TrustGraph，只读获取业务上下文和来源。

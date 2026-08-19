@@ -1,35 +1,38 @@
 # 当前状态
 
-更新时间：2026-08-18
+更新时间：2026-08-19
 
 ## 阶段
 
-需求、上游源码和补充参考材料已核对。项目尚未进入编码阶段；`D:\projects\dfm-main` 已初始化为 Git 仓库，固定基线为 `5477f0e`，并配置 Microsoft 仓库为 `upstream`。
+Recipe Core 已在本地提交 `3cd7ee12` 关闭稳定签名 P0；Automation Workbench 已线性同步该基线，完成 M3-A 导航、Recipe 生命周期界面和 Recipe/配方术语收口。Schedule、持久化 Run、Scheduler 与 Worker 尚未开始。Analysis Integrations 仍停留在共享准备基线，尚未进入 M1 实现。
 
-## 本轮确认
+| 分支 | 已验证基线 | 状态 |
+| --- | --- | --- |
+| `feat/analysis-integrations` | `b08069bc` | 仅共享准备文档 |
+| `feat/recipe-core` | `3cd7ee12` | 签名 P0 已修复并完整验证；本地领先 `origin/feat/recipe-core` 1 个提交，尚未推送 |
+| `feat/automation-workbench` | `fd1f347c` | M3-A tip；相对新 Recipe 基线线性领先 6 个提交，尚无远端分支 |
 
-- 补充参考材料可作为现状基线，核心判断已纳入 `01-product/current-capabilities.md`。
-- 明确区分继续会话、语义重放、数据刷新、Recipe Run 和定时运行。
-- 现有前端刷新链可复用底层能力，但不能直接充当后台 RecipeExecutor。
-- 不重复实现 Workspace 导入导出、数据导入和已有结果导出。
-- Agent 不生成最终机器 Recipe，也不在定时 Run 中自动修复。
-- 文档已按产品、架构、交付三层拆分，不再保留重复单体计划。
-- `docs/04-features` 已按三个 Feature 拆分子目录，每个目录先用一个 `README.md` 维护范围和工程记录。
-- `feat/analysis-integrations` 和 `feat/recipe-core` 已各自准备独立 Worktree。
-- Git 提交身份使用仓库本地配置 `aphroq <shi1490672988@qq.com>`。
-- `origin` 已配置为 `https://github.com/Aphroq/data-formulator.git`，`upstream` 保持 Microsoft 官方仓库。
-- 根目录中文 `AGENTS.md` 已建立，约束后续 Agent 的文档入口、分支边界、架构红线和验证门槛。
-- 项目增量文档明确为上游资料的覆盖层；实现前仍需检索根文档、`docs/dev-guides`、`docs/docs-cn` 和相关测试说明。
-- 项目开发、测试和运行不使用 Docker；上游已有容器资产保持原样且不进入默认验收路径。
-- 同机多 Worktree 固定使用 `main`、`analysis`、`recipe`、`automation` 实例槽位，分别隔离后端/Vite 端口、数据目录、桌面协调端口和外部资源命名空间。
-- 当前 Session Cookie 仍可能跨 `localhost` 端口覆盖；实例化 Cookie 名落地前，并行交互测试使用独立浏览器 Profile。
+## 已确认事实
+
+- Automation 最终只使用工作区 rail 上的单一 `/automation` 入口；`/recipes` 是保留 query/hash 的兼容重定向。
+- 页面列表对象是 Recipe，详情内切换不可变 RecipeVersion；`Automation` 不是新的 Project 实体。
+- Recipe Core 已在 `DATA_FORMULATOR_HOME/automation/automation.db` 建立 schema v1/v2 和 `recipes` / `recipe_versions`。M3 不能创建第二个数据库。
+- 当前 `RecipeRepository` 会拒绝未知的更高 migration。新增 schema v3 前必须先抽出 Recipe、Schedule、Run 共用的连接与 migration owner。
+- 当前同步 dry run/manual run 已产生可校验的不可变制品，但没有持久化队列状态或 Runs Inbox 索引；页面的最近运行结果仍是易失状态。
+- Worker 可复用 `LocalWorkspaceOpener`、`ExplicitConnectorOpener` 和 `RecipeExecutor.execute(..., run_id=...)`，不需要 Flask request 或第二套 Executor。
+- 签名回归已增加显式删除 `DF_CODE_SIGNING_SECRET` / `FLASK_SECRET_KEY` 的测试：原有交互 Web 使用当前 Flask secret；Recipe 写操作、Service、Compiler 和无请求 Executor 在任何 Workspace/connector 访问前失败关闭。
+
+## 开发前门槛状态
+
+1. [x] `feat/recipe-core` 以 `3cd7ee12` 修复签名回归；三项交付验证通过。
+2. [x] Automation 线性同步到新 Recipe HEAD；merge-base 为 `3cd7ee12`。
+3. [x] “Automation projects / 自动化项目”源码文案和测试术语已收口为 Recipe/配方；聚焦前端 11 passed。
+4. [ ] 从 schema v2 → v3 的失败测试开始 M3-B，再实现共享 DB migration、Schedule/Run repository 和唯一入队。
 
 ## 下一步
 
-1. 编码开始前增加轻量 `DF_INSTANCE_ID` Cookie 命名和 PowerShell 实例启动入口，不引入常驻进程管理器。
-2. 在 Analysis 和 Recipe 两个分支分别落 M0 探针、最小契约和失败测试。
-3. Recipe 基础契约提交后创建 `feat/automation-workbench`。
+第一段可交付实现是 M3-B1：共享 `automation.db` 连接/migration owner、v2 → v3 原地升级、Schedule 固定 Published RecipeVersion、scope 校验和 `(schedule_id, scheduled_for)` 唯一入队。该节点不启动常驻 Worker，不接 UI，也不新增依赖。
 
 ## 阻塞
 
-当前没有已知阻塞。共享准备提交尚未推送到 `origin`。
+当前没有已知代码阻塞。Recipe 修复提交尚未推送，Automation 分支也尚无远端；本轮继续保留为本地开发状态，不把推送作为 M3-B 编码前置条件。

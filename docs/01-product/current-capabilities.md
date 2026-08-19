@@ -28,7 +28,7 @@ TrustGraph 的 `release/v2.8` 是移动分支。开发、测试和问题复现�
 3. HMAC 签名证明代码未被篡改，不锁定输入、参数、环境和输出，因此不等于可复现。
 4. Agent 可以生成解释、Workflow 和人工修复建议；机器 Recipe 必须由确定性 Compiler 从 Artifact Lineage 生成。
 5. Agent 不得在定时 Run 中自动修复和继续。异常进入 Needs Review，由用户确认后产生新 RecipeVersion。
-6. Workspace ZIP 不含自动化 SQLite 中的 Recipe/Run 元数据，因此不能默认宣称会迁移完整自动化项目。
+6. Workspace ZIP 不含自动化 SQLite 中的 Recipe/Schedule/Run 元数据，因此不能默认宣称会迁移完整自动化状态。
 
 ## 能力矩阵
 

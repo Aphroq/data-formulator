@@ -68,16 +68,16 @@
   },
   "automation": {
     "title": "Automation",
-    "subtitle": "管理从分析制品创建的确定性自动化项目。",
+    "subtitle": "管理从分析制品创建的确定性配方。",
     "unavailable": "此服务器未启用自动化功能。",
-    "openWorkspace": "请先打开一个工作区，再管理其中的自动化项目。",
-    "projects": "项目",
+    "openWorkspace": "请先打开一个工作区，再管理其中的配方。",
+    "recipes": "配方",
     "versionsCount": "{{count}} 个版本",
     "updated": "更新于 {{date}}",
     "versionPicker": "版本",
     "versionOption": "版本 {{number}} · {{status}}",
-    "emptyTitle": "还没有自动化项目",
-    "emptyDescription": "请先从分析结果使用“保存为配方”，把确定性项目添加到这里。",
+    "emptyTitle": "还没有配方",
+    "emptyDescription": "请先从分析结果使用“保存为配方”，把确定性配方添加到这里。",
     "runResult": {
       "title": "最近运行结果",
       "status": {

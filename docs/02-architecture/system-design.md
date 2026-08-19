@@ -219,20 +219,28 @@ SQLite 第一版只保留四张主表：
 
 `runs` 对 `(schedule_id, scheduled_for)` 建唯一约束，防止重复入队。
 
+Recipe Core 当前已经拥有 schema v1/v2。M3 增加 schema v3 前，必须把连接配置和顺序 migration 收口为一个共享数据库入口，供 Recipe、Schedule 和 Run repository 共同使用；不能让两个 repository 分别判断 schema 版本，否则旧的 Recipe repository 会把合法的新版本视为未知 migration。
+
+Schedule v1 持久化规范化的五段 Cron 表达式和 IANA timezone；“每日”只是 UI 对 Cron 的受控简化。`version_id` 创建后不可修改，切换 RecipeVersion 必须新建 Schedule。存在 enabled Schedule 时归档其 RecipeVersion 必须失败关闭，用户需先显式停用 Schedule；已绑定 archived version 的 Schedule 不允许重新启用。`next_run_at` 统一按 UTC 持久化，解析和展示时才使用 Schedule timezone。
+
+持久化 Run 使用独立的队列状态，不复用 Recipe Core 的终态制品枚举。Run 至少保存明确 scope、固定 version、触发类型、`scheduled_for`、尝试次数、下一次可领取时间、lease owner/token/expiry、取消请求、最终安全错误和可校验 artifact reference。逻辑 `run_id` 与每次 Executor 尝试的 artifact run id 分开，避免崩溃恢复或重试与已有的不完整/不可变运行目录冲突。SQLite 不保存参数值、连接参数、凭据或绝对 artifact 路径；v1 Schedule 只运行固定 Recipe/default binding。
+
 ### Scheduler 与 Worker
 
-- Scheduler 扫描到期 Schedule，事务性创建 queued Run。
-- Worker 通过 lease 领取 Run 并定期续租；过期 lease 可恢复。
+- Scheduler 以可注入时钟执行单次 tick，扫描到期 Schedule，并在同一事务中创建 queued Run、推进 `next_run_at`。服务停机跨过多个周期时，每个 Schedule 最多合并为一个补偿 Run，再推进到严格晚于当前时刻的下一次，避免重启后无界补跑。
+- Worker 通过带 fencing token 的 lease 领取 Run 并定期续租；过期 lease 可恢复，旧 Worker 失去 token 后不得覆盖新尝试的完成状态。
 - 初始并发 1，允许显式配置到 2。
-- 只对明确瞬时错误自动重试，最多 2 次。
-- queued/running 可取消，运行中按步骤边界响应。
+- 只对现有 connector 错误分类明确标记 `retry=true` 的网络/超时失败，以及 SQLite busy 等已列明基础设施瞬时错误自动重试，最多 2 次；schema drift、签名、scope、参数、代码和输出校验错误永不重试。
+- queued Run 可直接取消；running Run 记录取消请求，Worker 在步骤边界响应。终态不可重新打开。
 - Worker 使用 request-independent opener 打开明确 identity/workspace，不伪造 Flask 请求。
 
-Run 状态：
+队列 Run 状态：
 
 ```text
 queued | running | succeeded | failed | needs_review | cancelled
 ```
+
+允许的状态迁移只有：`queued → running / cancelled`，`running → succeeded / failed / needs_review / cancelled`，以及 retryable failure 或过期 lease 下受尝试上限约束的 `running → queued`。Recipe Run artifact 只记录 `succeeded / failed / needs_review / cancelled` 等终态，不承载 queued/running。
 
 ## 持久化边界
 
@@ -257,13 +265,13 @@ Recipe 和 Run 的所有持久化路径都通过现有 `ConfinedDir` 解析；�
 - Schedule：create/update、enable/disable、list。
 - Run：manual enqueue、list/get、cancel、manifest/events。
 
-三个新增 UI 入口：
+三个新增产品触点：
 
 1. Data Thread 中统一的 Artifact action：`Save as Recipe`。
-2. Recipes 页面：版本、输入、步骤、dry run、发布、手动运行和本次运行摘要。
-3. Automation 页面：Schedule 设置与 Runs Inbox，包括状态、Needs Review、错误、日志和输出链接。
+2. 单一 `/automation` 页面中的 Recipes 区域：版本、输入、步骤、dry run、发布、手动运行和本次运行摘要。
+3. 同一页面中的 Schedule 与 Runs Inbox 区域：调度设置、状态、Needs Review、错误、日志和输出链接。
 
-Recipes 与 Automation 在最终集成时作为现有导航层的同级入口，不新增“应用 → 自动化”包装层，也不改变原有项目/Workspace 概念。Recipe Core 不实现 Schedule 或持久化 Run 历史页面。
+最终导航只保留现有工作区 rail 上的 `Automation` 入口；`/recipes` 仅作为保留 query/hash 的兼容重定向。不要恢复独立 Recipes 导航，不新增“应用 → 自动化”包装层，也不改变原有项目/Workspace 概念。Recipe Core 提供的生命周期视图在 M3 中被纳入该统一页面，但仍不负责 Schedule repository、Worker 或持久化 Run 历史。
 
 现有 Workflow Replay 保持原入口和名称。Save as Recipe 与 Replay 不共用一个动作。
 
@@ -306,15 +314,19 @@ py-src/data_formulator/
     executor.py
   automation/
     db.py
+    models.py
+    repository.py
     scheduler.py
     worker.py
+    cli.py
   routes/
     recipes.py
     schedules.py
     runs.py
 
 src/
-  api/recipes.ts
+  app/recipeApi.ts
+  app/automationApi.ts
   components/ArtifactActionsMenu.tsx
   views/Recipes.tsx
   views/RunsInbox.tsx

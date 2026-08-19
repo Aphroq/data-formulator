@@ -36,10 +36,10 @@ vi.mock('react-i18next', () => ({
     useTranslation: () => ({
         t: (key: string, values?: Record<string, unknown>) => ({
             'automation.title': 'Automation',
-            'automation.subtitle': 'Manage deterministic projects',
+            'automation.subtitle': 'Manage deterministic recipes',
             'automation.openApp': 'Open App',
             'automation.unavailable': 'Automation is unavailable',
-            'automation.projects': 'Projects',
+            'automation.recipes': 'Recipes',
             'automation.versionsCount': `${values?.count} versions`,
             'automation.updated': `Updated ${values?.date}`,
             'automation.versionPicker': 'Version',
@@ -203,11 +203,11 @@ beforeEach(() => {
 
 
 describe('Automation page', () => {
-    it('groups versions into one project and starts validation through the API', async () => {
+    it('groups versions into one recipe and starts validation through the API', async () => {
         render(<MemoryRouter initialEntries={['/automation']}><Automation /></MemoryRouter>);
 
         expect(await screen.findByRole('heading', { name: 'Regional totals' })).toBeInTheDocument();
-        expect(within(screen.getByRole('list', { name: 'Projects' })).getAllByRole('button')).toHaveLength(1);
+        expect(within(screen.getByRole('list', { name: 'Recipes' })).getAllByRole('button')).toHaveLength(1);
         expect(screen.getByText('2 versions')).toBeInTheDocument();
         expect(screen.getByText('warehouse')).toBeInTheDocument();
         expect(screen.getByText('Load data')).toBeInTheDocument();
@@ -250,7 +250,7 @@ describe('Automation page', () => {
         expect(within(resultPanel).getByText('No step result')).toBeInTheDocument();
     });
 
-    it('switches versions inside the selected project', async () => {
+    it('switches versions inside the selected recipe', async () => {
         render(<MemoryRouter initialEntries={['/automation']}><Automation /></MemoryRouter>);
 
         await screen.findByRole('heading', { name: 'Regional totals' });
@@ -275,7 +275,7 @@ describe('Automation page', () => {
         expect(screen.queryByRole('heading', { name: 'Renamed catalog entry' })).not.toBeInTheDocument();
     });
 
-    it('ignores a stale detail response after another project is selected', async () => {
+    it('ignores a stale detail response after another recipe is selected', async () => {
         const firstDetail = deferred<typeof detail>();
         const secondVersion = {
             ...version,
@@ -329,7 +329,7 @@ describe('Automation page', () => {
         expect(screen.queryByText('recipes.actionFailed')).not.toBeInTheDocument();
     });
 
-    it('fails closed without loading projects when Automation is disabled', () => {
+    it('fails closed without loading recipes when Automation is disabled', () => {
         state.serverConfig.AUTOMATION_ENABLED = false;
 
         render(<MemoryRouter initialEntries={['/automation']}><Automation /></MemoryRouter>);

@@ -438,11 +438,11 @@ export const Automation: FC = () => {
                 <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexDirection: { xs: 'column', md: 'row' } }}>
                     <Paper variant="outlined" sx={{ width: { xs: '100%', md: 340 }, flexShrink: 0, overflow: 'hidden' }}>
                         <Box sx={{ px: 2, py: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
-                            <Typography fontWeight={600} sx={{ flex: 1 }}>{t('automation.projects')}</Typography>
+                            <Typography fontWeight={600} sx={{ flex: 1 }}>{t('automation.recipes')}</Typography>
                             <Chip size="small" label={recipes.length} />
                         </Box>
                         <Divider />
-                        <List disablePadding aria-label={t('automation.projects')}>
+                        <List disablePadding aria-label={t('automation.recipes')}>
                                 {recipes.map(recipe => {
                                     const latestVersion = recipe.versions[0];
                                     if (!latestVersion) return null;

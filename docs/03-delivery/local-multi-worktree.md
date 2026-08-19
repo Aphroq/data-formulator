@@ -11,7 +11,7 @@
 | `main` | `D:\projects\dfm-main` | 5567 | 5173 | `D:\projects\dfm-runtime\main` | 49731 |
 | `analysis` | `D:\projects\dfm-wt-analysis` | 5568 | 5174 | `D:\projects\dfm-runtime\analysis` | 49732 |
 | `recipe` | `D:\projects\dfm-wt-recipe` | 5569 | 5175 | `D:\projects\dfm-runtime\recipe` | 49733 |
-| `automation` | `D:\projects\dfm-wt-automation`，创建后启用 | 5570 | 5176 | `D:\projects\dfm-runtime\automation` | 49734 |
+| `automation` | `D:\projects\dfm-wt-automation` | 5570 | 5176 | `D:\projects\dfm-runtime\automation` | 49734 |
 
 端口采用固定槽位，不在每次启动时随机选择。新增长期运行的 Worktree 时再分配下一组端口，并同步修改本表和对应 Feature 工程记录。
 

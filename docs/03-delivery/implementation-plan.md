@@ -62,21 +62,25 @@ M0 不启动 Docker。数据库和 TrustGraph 合同验证使用已有可访问�
 - canonical hash、Recipe 模型、Compiler 和 repository。
 - durable artifact store。
 - dry run、publish、manual run。
-- Save as Recipe 与 Recipes 页面。
+- Save as Recipe 与 Recipe 生命周期视图；M3 最终把该视图纳入单一 `/automation` 页面。
 
 M2 合并前只做一轮最小收口：
 
-1. Web/Worker 使用同一稳定代码签名密钥，父 Artifact 在记录新血缘前复核当前 content/schema。
+1. Recipe 生命周期 Web 边界与 Worker 使用同一稳定代码签名密钥；原有交互 Web 保留当前 app-secret fallback。父 Artifact 在记录新血缘前复核当前 content/schema。
 2. Recipe/Run 路径统一复用 `ConfinedDir`，API 严格拒绝 malformed JSON、非法 artifact id 和越界数值。
-3. Recipes 页面避免跨 Workspace/版本的旧请求覆盖，区分“动作已成功、刷新失败”，并显示本次 Run 的最小摘要。
+3. Recipe 生命周期视图避免跨 Workspace/版本的旧请求覆盖，区分“动作已成功、刷新失败”，并显示本次 Run 的最小摘要。
 4. v1 不增加 report 执行步骤、参数编辑器、Schedule、Runs Inbox、队列或新状态库。
 
 ### M3：Automation Workbench
 
-- SQLite migration、Schedule/Run repository。
-- Scheduler、lease Worker、取消和有限重试。
-- Schedule 设置和 Runs Inbox。
-- schema drift → Needs Review 闭环。
+Recipe Core 的签名配置回归已由 `3cd7ee12` 关闭并完整验证：未配置稳定 key 且 Automation 关闭时，原有交互 `visualize` 继续可用；Recipe/Worker 需要稳定 key 的边界返回 `SERVICE_UNAVAILABLE` 或拒绝启动。Automation 已线性同步该基线，可以进入 M3 持久化开发。
+
+- M3-A（已完成）：在现有工作区 rail 增加单一 `Automation` 入口，按 Recipe identity 聚合版本并复用 Recipe Core 生命周期 UI；`/recipes` 只保留兼容重定向。
+- M3-B：抽取同一 `automation.db` 的共享连接/migration owner，以 schema v3 增加 Schedule、持久化 Run、唯一入队和显式状态转换。
+- M3-C：实现可单测的 scheduler tick、lease/fencing、续租、过期恢复、步骤边界取消和最多 2 次明确瞬时错误重试，再增加无 Flask request 的 `data_formulator_worker` 入口。
+- M3-D：在单一 `/automation` 页面增加 Schedule 设置和 Runs Inbox，并把后台 Run 的 events/manifest、schema drift → Needs Review 闭环接入 UI。
+
+M3 不增加 Automation Project 容器；列表对象始终是 Recipe，Schedule 直接固定 Published RecipeVersion。逻辑队列 Run 与 Executor attempt artifact 使用不同 id，保证崩溃恢复和重试不覆盖不可变制品。
 
 ### M4：稳定化
 
@@ -153,6 +157,8 @@ yarn build
 - malformed JSON、非法 artifact id、极端数值、路径与 symlink 越界拒绝。
 - Workspace/版本快速切换、动作成功后刷新失败和即时 Run 摘要的前端回归。
 - SQLite migration、唯一入队、lease、重试、取消和恢复。
+- schema v2 → v3 原地升级、重复初始化和未知未来 migration 失败关闭。
+- 未配置稳定签名 key 且 Automation 关闭时原有交互分析可用；Recipe/Worker 边界缺 key 时安全失败。
 - Worker 与 Web 的 Workspace/数据库路径一致性。
 - Feature flag 关闭时的 API 和 UI 行为。
 

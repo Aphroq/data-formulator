@@ -25,6 +25,7 @@ docs/
       README.md
     automation-workbench/
       README.md
+      HANDOFF.md             # 当前分支继续开发快照，不是新的事实来源
   ...                     # Data Formulator 上游文档，未重组
 ```
 
@@ -36,10 +37,11 @@ docs/
 4. [实施计划](./03-delivery/implementation-plan.md)：里程碑、分支、纵向切片和验收。
 5. [本机多 Worktree 开发约定](./03-delivery/local-multi-worktree.md)：固定端口、数据目录、浏览器状态和进程隔离。
 6. [当前状态](./03-delivery/status.md)：现在做到哪里、下一步是什么。
-7. Feature 开发时只维护对应工程记录：
+7. Feature 工程记录只维护对应目录；跨层事实变化仍同步上述事实来源：
    - [Analysis Integrations](./04-features/analysis-integrations/README.md)
    - [Recipe Core](./04-features/recipe-core/README.md)
    - [Automation Workbench](./04-features/automation-workbench/README.md)
+     - [当前分支交接快照](./04-features/automation-workbench/HANDOFF.md)
 
 ## 上游文档入口
 
@@ -66,6 +68,8 @@ docs/
 | 当前进度 | `03-delivery/status.md` |
 | Feature 内的实现、验证和交接 | `04-features/<feature>/README.md` |
 
+`automation-workbench/HANDOFF.md` 是当前未集成分支的临时继续开发快照；发生新提交或基线变化时必须同步，最终事实仍回写 Automation Workbench 的 `README.md` 和上表对应的跨层文档。
+
 ## 维护规则
 
 1. 新结论修改对应层的正文，不在文件末尾追加“补丁说明”。
@@ -74,3 +78,4 @@ docs/
 4. 类型、接口和存储格式最终由代码与测试约束；文档描述意图和边界，不复制实现。
 5. 暂不增加 ADR、RFC、周报或独立任务文档。只有出现难以逆转的跨层决策时再增加短记录。
 6. 每个 Feature 分支只更新自己的工程记录；表格每个有意义的提交或验证节点增加一行，不记录零散操作。
+7. 临时 `HANDOFF.md` 只允许记录一个分支的可复现接手状态，不复制长期设计；分支集成后应删除或明确归档，避免与工程记录并行漂移。
