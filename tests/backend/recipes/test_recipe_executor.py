@@ -10,7 +10,7 @@ import pytest
 
 from data_formulator.recipes.compiler import CompiledRecipe
 from data_formulator.recipes.binding import bind_recipe_parameters
-from data_formulator.recipes.executor import RecipeExecutor
+from data_formulator.recipes.executor import RecipeExecutionAborted, RecipeExecutor
 from data_formulator.recipes.run_store import (
     RecipeRunArtifactStore,
     RecipeRunCorruptError,
@@ -59,6 +59,11 @@ class _RunLoader:
 class _FailingLoader(_RunLoader):
     def fetch_data_as_arrow(self, source_table: str, import_options: dict):
         raise RuntimeError("password=do-not-persist connector failure")
+
+
+class _TimeoutLoader(_RunLoader):
+    def fetch_data_as_arrow(self, source_table: str, import_options: dict):
+        raise TimeoutError("password=do-not-persist connection timed out")
 
 
 def test_dry_run_executes_three_steps_without_llm_and_isolates_outputs(
@@ -371,3 +376,114 @@ def test_run_artifacts_do_not_persist_bound_values_or_connector_errors(
         assert b"bound-value-do-not-persist" not in persisted
         assert b"password=do-not-persist" not in persisted
     assert "password=do-not-persist" not in caplog.text
+
+
+def test_connector_retry_classification_stays_out_of_the_artifact_contract(
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+) -> None:
+    result = RecipeExecutor(
+        recipe_workspace,
+        loader_resolver=lambda _source_id: _TimeoutLoader(),
+    ).execute(
+        executable_recipe.spec,
+        parameter_values={},
+        kind=RecipeRunKind.AUTOMATION,
+    )
+
+    assert result.status is RecipeRunStatus.FAILED
+    assert result.error is not None
+    assert result.error.code == "connector_error"
+    assert result.error.retryable is True
+    assert result.error.automation_code == "DB_CONNECTION_FAILED"
+    assert result.error.automation_message == "Data source connection timed out"
+    assert result.error.to_dict() == {
+        "code": "connector_error",
+        "exception_type": "RecipeConnectorError",
+        "message": "A Recipe input could not be loaded.",
+    }
+    stored = RecipeRunArtifactStore.for_workspace(recipe_workspace).load(
+        result.reference
+    )
+    assert stored.manifest["error"] == result.error.to_dict()
+
+
+def test_executor_cancels_at_a_completed_step_boundary(
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+) -> None:
+    checkpoints = iter((False, True))
+    result = RecipeExecutor(
+        recipe_workspace,
+        loader_resolver=lambda _source_id: _RunLoader(),
+    ).execute(
+        executable_recipe.spec,
+        parameter_values={},
+        kind=RecipeRunKind.AUTOMATION,
+        checkpoint=lambda: next(checkpoints),
+    )
+
+    assert result.status is RecipeRunStatus.CANCELLED
+    assert result.error is None
+    assert [item.kind for item in result.step_results] == [RecipeStepKind.LOAD]
+    stored = RecipeRunArtifactStore.for_workspace(recipe_workspace).load(
+        result.reference
+    )
+    assert stored.manifest["status"] == "cancelled"
+    assert stored.manifest["error"] is None
+    assert [event["status"] for event in stored.events] == [
+        "started",
+        "succeeded",
+    ]
+
+
+def test_executor_cancellation_wins_at_a_failed_step_boundary(
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+) -> None:
+    checkpoints = iter((False, True))
+    result = RecipeExecutor(
+        recipe_workspace,
+        loader_resolver=lambda _source_id: _TimeoutLoader(),
+    ).execute(
+        executable_recipe.spec,
+        parameter_values={},
+        kind=RecipeRunKind.AUTOMATION,
+        checkpoint=lambda: next(checkpoints),
+    )
+
+    assert result.status is RecipeRunStatus.CANCELLED
+    assert result.error is None
+    assert result.step_results == ()
+    stored = RecipeRunArtifactStore.for_workspace(recipe_workspace).load(
+        result.reference
+    )
+    assert stored.manifest["status"] == "cancelled"
+    assert stored.manifest["error"] is None
+
+
+def test_executor_does_not_finalize_after_checkpoint_fencing_loss(
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+) -> None:
+    attempt_run_id = "run_" + "f" * 32
+
+    with pytest.raises(RecipeExecutionAborted, match="lease"):
+        RecipeExecutor(
+            recipe_workspace,
+            loader_resolver=lambda _source_id: _RunLoader(),
+        ).execute(
+            executable_recipe.spec,
+            parameter_values={},
+            kind=RecipeRunKind.AUTOMATION,
+            run_id=attempt_run_id,
+            checkpoint=lambda: (_ for _ in ()).throw(
+                RecipeExecutionAborted("Worker lease was lost")
+            ),
+        )
+
+    run_dir = recipe_workspace.confined_root.resolve(
+        f"artifacts/recipe-runs/{attempt_run_id}"
+    )
+    assert run_dir.is_dir()
+    assert not (run_dir / "manifest.json").exists()

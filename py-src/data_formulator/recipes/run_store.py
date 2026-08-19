@@ -34,12 +34,14 @@ _RUN_ID_PATTERN = re.compile(r"^run_[0-9a-f]{32}$")
 class RecipeRunKind(StrEnum):
     DRY_RUN = "dry_run"
     MANUAL = "manual"
+    AUTOMATION = "automation"
 
 
 class RecipeRunStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     NEEDS_REVIEW = "needs_review"
+    CANCELLED = "cancelled"
 
 
 class RecipeRunArtifactError(ValueError):
@@ -444,9 +446,14 @@ class RecipeRunArtifactStore:
         if not isinstance(manifest.get("files"), Mapping):
             raise ValueError("Recipe run manifest files are invalid")
         error = manifest.get("error")
-        if reference.status is RecipeRunStatus.SUCCEEDED:
+        if reference.status in {
+            RecipeRunStatus.SUCCEEDED,
+            RecipeRunStatus.CANCELLED,
+        }:
             if error is not None:
-                raise ValueError("Successful Recipe run cannot contain an error")
+                raise ValueError(
+                    "Successful or cancelled Recipe run cannot contain an error"
+                )
         elif (
             not isinstance(error, Mapping)
             or set(error) != {"code", "exception_type", "message"}

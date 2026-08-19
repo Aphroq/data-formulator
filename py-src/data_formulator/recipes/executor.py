@@ -10,6 +10,10 @@ from dataclasses import dataclass, replace
 from time import perf_counter
 from typing import Any
 
+from data_formulator.data_loader.connector_errors import (
+    ConnectorErrorInfo,
+    classify_connector_error,
+)
 from data_formulator.data_operations import (
     ConnectorQueryStep,
     DataOperation,
@@ -38,13 +42,19 @@ from data_formulator.security.code_signing import (
 
 
 LoaderResolver = Callable[[str], Any]
+ExecutionCheckpoint = Callable[[], bool]
 
 
 class _SanitizedLoaderProxy:
     """Keep connector exceptions and configuration out of Recipe run logs."""
 
-    def __init__(self, loader: Any) -> None:
+    def __init__(
+        self,
+        loader: Any,
+        error_sink: Callable[[ConnectorErrorInfo], None],
+    ) -> None:
         self._loader = loader
+        self._error_sink = error_sink
 
     def fetch_data_as_arrow(self, *, source_table: str, import_options: dict):
         try:
@@ -52,7 +62,10 @@ class _SanitizedLoaderProxy:
                 source_table=source_table,
                 import_options=import_options,
             )
-        except Exception:
+        except Exception as exc:
+            self._error_sink(
+                classify_connector_error(exc, operation="refresh")
+            )
             raise RuntimeError("Recipe connector fetch failed") from None
 
     @staticmethod
@@ -71,6 +84,9 @@ class RecipeExecutionError:
     code: str
     exception_type: str
     message: str
+    retryable: bool = False
+    automation_code: str | None = None
+    automation_message: str | None = None
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -123,6 +139,14 @@ class RecipeExecutionFailure(RuntimeError):
         )
 
 
+class RecipeExecutionAborted(RuntimeError):
+    """Stop an attempt without committing a terminal immutable manifest."""
+
+
+class _RecipeExecutionCancelled(RuntimeError):
+    """Internal control flow for a cooperative boundary cancellation."""
+
+
 class RecipeExecutionValidationError(RecipeExecutionFailure):
     code = "invalid_recipe"
     safe_message = "Recipe execution inputs are invalid."
@@ -146,6 +170,24 @@ class RecipeDependencyError(RecipeExecutionFailure):
 class RecipeConnectorError(RecipeExecutionFailure):
     code = "connector_error"
     safe_message = "A Recipe input could not be loaded."
+
+    def __init__(
+        self,
+        connector_error: ConnectorErrorInfo | None = None,
+    ) -> None:
+        super().__init__()
+        self.connector_error = connector_error
+
+    def public_error(self) -> RecipeExecutionError:
+        error = self.connector_error
+        return RecipeExecutionError(
+            code=self.code,
+            exception_type=type(self).__name__,
+            message=self.safe_message,
+            retryable=bool(error and error.retry),
+            automation_code=error.code if error is not None else None,
+            automation_message=error.message if error is not None else None,
+        )
 
 
 class RecipeCodeSignatureError(RecipeExecutionFailure):
@@ -183,6 +225,7 @@ class RecipeExecutor:
         self._loader_resolver = loader_resolver
         self._sandbox = sandbox or LocalSandbox()
         self._run_store = RecipeRunArtifactStore.for_workspace(source_workspace)
+        self._connector_error: ConnectorErrorInfo | None = None
 
     def execute(
         self,
@@ -191,6 +234,7 @@ class RecipeExecutor:
         parameter_values: Mapping[str, Any],
         kind: RecipeRunKind,
         run_id: str | None = None,
+        checkpoint: ExecutionCheckpoint | None = None,
     ) -> RecipeExecutionResult:
         require_stable_code_signing()
         try:
@@ -210,10 +254,12 @@ class RecipeExecutor:
             )
 
         writer = self._run_store.begin(spec, bound, kind, run_id=run_id)
+        self._connector_error = None
         results: list[RecipeStepResult] = []
         current_step: RecipeStep | None = None
         step_started: float | None = None
         try:
+            self._run_checkpoint(checkpoint)
             if spec.has_unresolved_inputs:
                 raise RecipeUnresolvedInputError()
             unsupported = [
@@ -252,7 +298,19 @@ class RecipeExecutor:
                     details=result.event_details(),
                 )
                 completed.add(current_step.id)
+                self._run_checkpoint(checkpoint)
+        except RecipeExecutionAborted:
+            raise
+        except _RecipeExecutionCancelled:
+            return self._cancelled_result(writer, results)
         except RecipeExecutionFailure as exc:
+            cancelled = self._checkpoint_failure_boundary(
+                checkpoint,
+                writer,
+                results,
+            )
+            if cancelled is not None:
+                return cancelled
             if exc.step_result is not None:
                 partial = exc.step_result
                 if step_started is not None:
@@ -286,6 +344,13 @@ class RecipeExecutor:
                 error=error,
             )
         except Exception as exc:
+            cancelled = self._checkpoint_failure_boundary(
+                checkpoint,
+                writer,
+                results,
+            )
+            if cancelled is not None:
+                return cancelled
             error = RecipeExecutionError(
                 code="execution_error",
                 exception_type=type(exc).__name__,
@@ -377,7 +442,7 @@ class RecipeExecutor:
             self._resolve_loader_safely,
         ).execute(operation)
         if result.failed_steps or result.result_table_ids != (table_id,):
-            raise RecipeConnectorError()
+            raise RecipeConnectorError(self._connector_error)
         metadata = writer.workspace.get_table_metadata(table_id)
         if metadata is None or metadata.filename != filename:
             raise RecipeExecutionValidationError()
@@ -402,9 +467,48 @@ class RecipeExecutor:
 
     def _resolve_loader_safely(self, source_id: str) -> _SanitizedLoaderProxy:
         try:
-            return _SanitizedLoaderProxy(self._loader_resolver(source_id))
-        except Exception:
+            return _SanitizedLoaderProxy(
+                self._loader_resolver(source_id),
+                self._record_connector_error,
+            )
+        except Exception as exc:
+            self._record_connector_error(
+                classify_connector_error(exc, operation="refresh")
+            )
             raise RuntimeError("Recipe connector could not be opened") from None
+
+    def _record_connector_error(self, error: ConnectorErrorInfo) -> None:
+        self._connector_error = error
+
+    @staticmethod
+    def _run_checkpoint(checkpoint: ExecutionCheckpoint | None) -> None:
+        if checkpoint is not None and checkpoint():
+            raise _RecipeExecutionCancelled()
+
+    @classmethod
+    def _checkpoint_failure_boundary(
+        cls,
+        checkpoint: ExecutionCheckpoint | None,
+        writer: RecipeRunWriter,
+        results: list[RecipeStepResult],
+    ) -> RecipeExecutionResult | None:
+        try:
+            cls._run_checkpoint(checkpoint)
+        except _RecipeExecutionCancelled:
+            return cls._cancelled_result(writer, results)
+        return None
+
+    @staticmethod
+    def _cancelled_result(
+        writer: RecipeRunWriter,
+        results: list[RecipeStepResult],
+    ) -> RecipeExecutionResult:
+        reference = writer.finalize(RecipeRunStatus.CANCELLED)
+        return RecipeExecutionResult(
+            status=RecipeRunStatus.CANCELLED,
+            reference=reference,
+            step_results=tuple(results),
+        )
 
     def _execute_transform(
         self,

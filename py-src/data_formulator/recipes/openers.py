@@ -47,6 +47,10 @@ class LocalWorkspaceOpener:
             storage_backend=os.getenv("WORKSPACE_BACKEND", "local"),
         )
 
+    @property
+    def data_home(self) -> Path:
+        return self._data_home
+
     def open(self, identity_id: str, workspace_id: str):
         try:
             safe_identity = sanitize_identity_dirname(identity_id)
