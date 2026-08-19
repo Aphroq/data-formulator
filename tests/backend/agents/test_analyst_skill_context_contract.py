@@ -98,6 +98,21 @@ def test_skill_authorization_normalizes_and_requires_both_ids() -> None:
         SkillAuthorization(identity_id="user:42", workspace_id="\t")
 
 
+def test_system_prompt_requires_material_business_semantics_before_action() -> None:
+    agent = AnalystAgent(
+        client=None,
+        workspace=MagicMock(user_home=None),
+    )
+
+    prompt = agent._build_system_prompt()
+
+    assert "## Ground business meaning before acting" in prompt
+    assert "Do not treat every word or column label as a lookup trigger" in prompt
+    assert "load the relevant extension skill" in prompt
+    assert "Do not infer governed business meaning solely from labels" in prompt
+    assert "Use `ask_user` when choosing among meanings" in prompt
+
+
 def test_tool_result_keeps_legacy_positionals_and_freezes_context_items() -> None:
     item = ContextItem(
         uri="https://example.com/source",

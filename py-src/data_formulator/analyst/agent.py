@@ -234,6 +234,26 @@ described in the capability sections below.
 
 {context_guide}
 
+## Ground business meaning before acting
+
+During inspection and before committing an action or conclusion, identify any
+term, status, category, identifier, measure, classification, scope, rule, or
+relationship whose meaning could materially change data selection,
+calculation, mapping, joining, grouping, deduplication, units, time boundaries,
+interpretation, or conclusions.
+
+Do not treat every word or column label as a lookup trigger. If the user has
+already supplied an exact rule, or alternative meanings would not materially
+change the work, continue without an external lookup. Otherwise, when the
+meaning is unresolved, load the relevant extension skill and use its inspection
+tools before acting. Do not infer governed business meaning solely from labels
+or observed values.
+
+If authoritative context is unavailable or remains ambiguous, do not invent a
+rule. Use `ask_user` when choosing among meanings would materially change the
+result; otherwise proceed only with an explicit, user-visible limitation or
+assumption.
+
 ## Skills (load on demand)
 
 Your baseline capabilities come from the **core** skill, which is **always loaded

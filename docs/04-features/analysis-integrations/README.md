@@ -8,7 +8,7 @@
 | Worktree | `D:\projects\dfm-wt-analysis` |
 | 本机实例 | `analysis`：后端 5568、Vite 5174、数据目录 `D:\projects\dfm-runtime\analysis` |
 | 基线 | 共享文档提交，父提交为 Data Formulator `5477f0e` |
-| 当前阶段 | A0-A9 已完成并提交为 `acdfb3c5`；A11 空环境六工具冒烟已完成，真实业务 ontology、rows schema 和实体数据验收待部署方提供；行语义搜索、A10 知识准备和 Data Formulator 内 TrustGraph UI 均已取消 |
+| 当前阶段 | A0-A9 已完成并提交为 `acdfb3c5`；A11 空环境六工具冒烟已完成；交互式分析中的业务语义主动核对指导已优化并提交；真实业务 ontology、rows schema 和实体数据验收待部署方提供；行语义搜索、A10 知识准备和 Data Formulator 内 TrustGraph UI 均已取消 |
 
 ## 目标
 
@@ -77,10 +77,12 @@
 | 2026-08-19 | A11 空环境只读冒烟 | 通过仓库外 WSL2 TrustGraph `2.8.14` 和项目真实 Skill → Provider → 官方 Python SDK 路径逐一调用六个只读工具；发现 rows service 在未装载 GraphQL schema 时返回 `rows-query-error`，新增窄合同把该官方状态从误报的 `unavailable` 修正为 `not_configured`，其他 rows service 错误仍保持 `unavailable` | 真实服务：目录、图实体搜索、knowledge triples、SPARQL `ASK` 四条链路通过，`ASK=true`；rows 与 ontology 均准确返回 `not_configured`，对应当前环境 0 个 ontology 且未装载 rows schema，不伪报业务数据验收完成；TrustGraph Client/Provider/Skill 聚焦 111 项通过 | 待提交 |
 | 2026-08-19 | A10/UI 收口复核 | 确认产品代码没有 `row_embeddings_query()`、摄取/Core 写操作、TrustGraph 页面或导航；既有 `ContextSources` 只展示供应商无关的分析引用，不是 TrustGraph 管理 UI | Windows 项目 Python 环境下 business-context、TrustGraph Client/Provider/Skill 共 144 项通过；检索产品源码与前端依赖未发现取消能力；未启动 WSL、Docker、TrustGraph 服务或 Node 前端门禁 | 待提交 |
 | 2026-08-19 | 分支交付收口 | 完成代码审查和边界检索；将 Copilot 面板最后一处英文兜底错误改为中英文 i18n；实现、测试与依赖统一提交，事实来源文档同步收口 | 聚焦后端 284 项、前端 23 项通过；`uv pip check` 158 个包兼容；UTF-8/TTY 后端全量 2352 项通过、13 项跳过、1 项 xfailed、1 项 deselected（仅既有 Windows 符号链接权限项）；内置 Node `24.19.0` 下 49 个前端文件、406 项测试通过，Vite `7.3.3` 生产构建通过；Python compileall、`uv lock --check`、`git diff --check` 和凭据模式扫描通过 | `acdfb3c5`（实现与测试）；本记录提交（文档） |
+| 2026-08-19 | 业务语义主动核对 | 在供应商无关的 Agent 系统提示中加入实质性语义核对门，并扩展 TrustGraph Skill 的按需触发指导：分析、数据准备、清洗、转换等任务若依赖未决的术语、状态、类别、标识、度量、范围、规则或关系，且不同解释会改变结果，则主动获取权威上下文；不要求用户使用知识图谱术语，不对每个词机械查询，证据不足时澄清或显式说明限制 | AnalystAgent 系统提示与 TrustGraph Skill 聚焦合同 31 项通过；Python compileall、Markdown 代码围栏/占位符和 `git diff --check` 通过 | 本次提交 |
 
 ## 已确认决策
 
 - TrustGraph 是 Skill，不是 Agent。
+- TrustGraph 不只响应直接知识问答。在交互式 `AnalystAgent` 中，未决业务含义若会实质改变数据选择、计算、映射、连接、分组、去重、单位、时间边界、解释或结论，应在执行前按需加载相关 Skill 并迭代取证；规则明确或不影响结果的机械操作不查询。该指导不改变 Recipe/Run 不调用 TrustGraph 的边界。
 - Copilot 继续经过 LiteLLM，不接 Copilot SDK。
 - Copilot M0-B 以目标 Linux Node/npm 环境中的官方 CLI/SDK 真实账号请求和产品自身 device flow → Vault → LiteLLM 链路为证；Linux 前端测试与构建只属于 A7 普通回归。
 - 引用通道是通用 Skill 契约，不在 Agent 中硬编码 TrustGraph。

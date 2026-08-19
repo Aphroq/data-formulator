@@ -219,6 +219,24 @@ def test_registry_exposes_six_read_only_tools_when_enabled() -> None:
         } & set(parameters.get("properties", {}))
 
 
+def test_registry_guidance_triggers_on_material_task_meaning_not_jargon() -> None:
+    registry = build_registry(environment={"TRUSTGRAPH_ENABLED": "true"})
+
+    catalog = registry.render_registry_block()
+    body = registry.load_body("trustgraph")
+    normalized_body = " ".join(body.split())
+
+    assert "analysis, data preparation, cleaning, transformation" in catalog
+    assert "unresolved term, status, category, identifier, measure" in catalog
+    assert "does not need to ask a knowledge question or mention TrustGraph" in catalog
+    assert "semantic checkpoint inside the user's original task" in normalized_body
+    assert "Never require the user to know or supply" in normalized_body
+    assert "Do not query merely because a word or column label appears" in normalized_body
+    assert "After every result, reassess the original evidence gap" in normalized_body
+    assert "do not call all tools mechanically" in normalized_body
+    assert "Apply the supported meaning or rule to the original analysis" in normalized_body
+
+
 def test_skill_inspects_bound_knowledge_catalog_without_arguments() -> None:
     provider = _Provider(BusinessContextResult(
         text=json.dumps({
