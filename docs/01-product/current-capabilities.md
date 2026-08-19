@@ -41,13 +41,15 @@ TrustGraph 的 `release/v2.8` 是移动分支。开发、测试和问题复现�
 | Workspace 导入导出 | ZIP 保存清洗后的状态和 Workspace snapshot | 直接复用，暂不承载 Recipe/Run |
 | 数据导入 | 上传 CSV/TSV/JSON/Excel；Local Folder 另支持 Parquet/JSONL | 直接复用 |
 | 结果导出 | 表格 CSV/TSV；报告 PNG、打印 PDF、HTML/文本复制 | 直接复用 |
-| 后台 Cron | 已有固定 Published RecipeVersion 的 Schedule、Cron/timezone/DST、长步骤 lease heartbeat，以及正式 `data_formulator_worker` 常驻本机入口 | 继续接 Schedule/Run API 与 UI |
+| 后台 Cron | 已有固定 Published RecipeVersion 的 Schedule、Cron/timezone/DST、Schedule API/UI、长步骤 lease heartbeat，以及正式 `data_formulator_worker` 常驻本机入口 | 继续做真实双进程产品闭环与稳定化验证 |
 | Recipe 版本 | 已实现 Artifact Lineage、确定性编译、dry run、发布和手动运行 | 直接复用 |
-| Run 审计 | 已有 Recipe 终态制品、Automation 逻辑 Run 状态机、常驻 claim/execute/finish、有限重试、长步骤续租、步骤边界取消和 schema drift → Needs Review；尚无查询 API / Runs Inbox | 继续实现 API 与 UI |
+| Run 审计 | 已有 Recipe 终态制品、Automation 逻辑 Run 状态机、持久化 manual enqueue/cancel、scoped 查询与校验后 artifact API、Runs Inbox、有限重试、长步骤续租和 schema drift → Needs Review | 继续做真实进程、页面关闭和异常恢复验收 |
 
 截至 2026-08-19，Automation 分支已经把共享目录数据库升级到 schema v3，并落地固定版本 Schedule、Cron/timezone/DST、逻辑 Run 的 claim/renew/fencing、取消、有限重试和过期 lease 恢复。`AutomationWorker.run_once()` 可在无 Flask request 的路径中打开明确 identity/Workspace、验证固定 RecipeVersion、使用 default binding 执行 `RecipeExecutor`，并把安全的成功、失败、Needs Review、取消或延迟重试结果写回逻辑 Run；connector classifier 的 `retry=true` 和明确的 SQLite busy 是仅有的自动重试来源。
 
-提交 `61eba9eb` 又增加了长步骤定时 heartbeat 和正式 `data_formulator_worker`：常驻进程每个周期先执行事务型 Scheduler tick，再最多执行一个 queued Run；heartbeat 在同步步骤运行期间持续续租，取消请求也会保持 lease 到下一个安全步骤边界。步骤期间观察到 heartbeat/fencing 失败会阻止终态 manifest，任何 lease 失败都阻止旧 Worker 写逻辑 Run 终态；若失败恰好发生在 Executor 已原子完成 artifact 之后，可能留下未被 Run row 引用的 attempt artifact，后续稳定化阶段负责回收。入口在创建 SQLite、Workspace opener 或 connector registry 前检查 `AUTOMATION_ENABLED=true`、稳定签名和 local Workspace，并与 Web 使用同一绝对 `DATA_FORMULATOR_HOME`；SIGINT/SIGTERM 会在当前同步周期后停止。重新构造 repository/runtime 后消费前一进程已持久化 Run 的合同测试已经通过。因此，显式运行该独立进程时，浏览器页面关闭不再中断 Scheduler/Worker；但 Web/桌面应用不会自动拉起或监督它，Schedule/Run API、Runs Inbox 和完整产品端到端闭环仍未实现。
+提交 `61eba9eb` 又增加了长步骤定时 heartbeat 和正式 `data_formulator_worker`：常驻进程每个周期先执行事务型 Scheduler tick，再最多执行一个 queued Run；heartbeat 在同步步骤运行期间持续续租，取消请求也会保持 lease 到下一个安全步骤边界。步骤期间观察到 heartbeat/fencing 失败会阻止终态 manifest，任何 lease 失败都阻止旧 Worker 写逻辑 Run 终态；若失败恰好发生在 Executor 已原子完成 artifact 之后，可能留下未被 Run row 引用的 attempt artifact，后续稳定化阶段负责回收。入口在创建 SQLite、Workspace opener 或 connector registry 前检查 `AUTOMATION_ENABLED=true`、稳定签名和 local Workspace，并与 Web 使用同一绝对 `DATA_FORMULATOR_HOME`；SIGINT/SIGTERM 会在当前同步周期后停止。重新构造 repository/runtime 后消费前一进程已持久化 Run 的合同测试已经通过。
+
+提交 `1f5f181d` 完成 M3-D API/UI：默认关闭且 Workspace-scoped 的 Automation API 提供 Schedule 创建、列表、编辑、启停，持久化 manual enqueue、Run 列表/详情/取消，以及 manifest/events 只读查询。Schedule 的首个 `next_run_at` 和 manual Run 的排队时间均由服务端产生；客户端不能提交参数、凭据、计划时刻或 Run id。Schedule 与 manual Run 都只接受 Published RecipeVersion 的完整 default binding，并在缺失稳定签名或 durable local Workspace 时失败关闭。Run 列表不暴露 lease owner/token/expiry；artifact 查询会重新校验 scope、相对路径、manifest hash 和文件 hash 后才返回内容。单一 `/automation` 页面现已包含每日时间到 Cron 的受控转换、原始 Cron/IANA timezone 设置、持久化 Runs Inbox、状态过滤、取消、Needs Review 回到固定 RecipeVersion，以及 manifest/events 审计视图；手动运行也改为持久化入队。仍待完成的是使用真实 Web + 独立 Worker 的页面关闭、重启、重复调度和 schema drift 产品端到端验收，以及 Worker 进程监督和孤立 attempt 回收等稳定化工作。
 
 ## 会话恢复不是执行
 

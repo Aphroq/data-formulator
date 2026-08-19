@@ -4,7 +4,7 @@
 
 ## 一句话状态
 
-M3-A 导航与 Recipe 管理、M3-B Schedule/Run 持久化、M3-C 单次执行和常驻 Worker 均已完成：当前已有事务型 `scheduler.tick()`、request-independent `worker.run_once()`、覆盖长步骤的 fenced heartbeat，以及正式 `data_formulator_worker` 本机进程入口。下一步接 Schedule/Run API、artifact 查询和 Runs Inbox；Web/桌面应用当前不自动托管 Worker。
+M3-A 导航与 Recipe 管理、M3-B Schedule/Run 持久化、M3-C 常驻 Worker 和 M3-D API/UI 均已完成：当前已有事务型 Scheduler、覆盖长步骤的 fenced Worker、scoped Schedule/Run API、持久化 manual enqueue/cancel、校验后 artifact 查询、Schedule 管理和 Runs Inbox。下一步是用真实 Web + 独立 `data_formulator_worker` 完成页面关闭、重启、重复调度和 schema drift 产品端到端验收；Web/桌面应用当前不自动托管 Worker。
 
 ## Git 与 Worktree 快照
 
@@ -18,8 +18,9 @@ M3-A 导航与 Recipe 管理、M3-B Schedule/Run 持久化、M3-C 单次执行�
 | M3-B2/B3 tip | `e8110e27 feat: add automation scheduling lifecycle` |
 | M3-B4 tip | `c1181e30 feat: execute queued automation runs` |
 | M3-C runtime tip | `61eba9eb feat: run automation worker service` |
+| M3-D API/UI tip | `1f5f181d feat: complete automation workbench APIs` |
 | Recipe 基线 | `3cd7ee12 fix: preserve interactive signing fallback` |
-| 实现拓扑 | `61eba9eb` 是当前实现 tip，merge-base 为 `3cd7ee12`；后续工程记录提交不改变实现基线 |
+| 实现拓扑 | `1f5f181d` 是当前实现 tip，merge-base 为 `3cd7ee12`；后续工程记录提交不改变实现基线 |
 | 远端 | 当前分支没有 upstream，`origin/feat/automation-workbench` 尚未创建 |
 | Recipe 远端 | 本地 `feat/recipe-core` 领先 `origin/feat/recipe-core` 1 个提交；`3cd7ee12` 尚未推送 |
 
@@ -45,6 +46,7 @@ eb0eaeee docs: record automation scheduling milestone
 c1181e30 feat: execute queued automation runs
 ac66d59e docs: record automation worker milestone
 61eba9eb feat: run automation worker service
+1f5f181d feat: complete automation workbench APIs
 ```
 
 这是独立 Worktree，不要在 Recipe 目录里来回切分支。进入本分支应使用：
@@ -92,8 +94,8 @@ Workspace / 原有项目概念
 - `/automation` 是当前入口；[旧 `/recipes` 路由](../../../src/app/LegacyRecipesRedirect.tsx)保留 query/hash 后重定向。
 - [Automation 页面](../../../src/views/Recipes.tsx)按 Recipe identity 聚合版本，版本在详情内切换，不再把每个版本平铺成一条顶级记录。
 - `Save as Recipe` 继续从真实 Artifact Lineage 创建 Recipe，并跳转到 `/automation?version=...`。
-- 页面复用 Recipe Core API，不复制编译、dry run、发布、手动运行或 typed binding 逻辑。
-- 当前会话会显示最近一次 dry run / manual run 的详细结果；该结果是易失 UI 状态，不冒充持久化运行历史。
+- 页面复用 Recipe Core API，不复制编译、dry run、发布或 typed binding 逻辑；M3-D 的 Run now 只增加持久化入队，不增加第二套 Executor。
+- 当前会话只保留最近一次 dry run 的详细结果；manual Run 已进入持久化 Runs Inbox，不再使用易失 `lastRun` 冒充后台历史。
 - 已继承 Recipe Core 的过期响应丢弃、URL 版本同步、不可变版本元数据，以及“动作成功但刷新失败只告警”的行为。
 - `AUTOMATION_ENABLED=false` 时入口隐藏，页面和 Recipe API 失败关闭。
 
@@ -178,14 +180,30 @@ Workspace / 原有项目概念
 | [`test_automation_runtime.py`](../../../tests/backend/recipes/test_automation_runtime.py) | tick/claim 顺序、可中断等待、优雅停止、SQLite busy 白名单、启动前失败关闭和共享绝对数据根 |
 | [`test_automation_cli.py`](../../../tests/backend/recipes/test_automation_cli.py) | wheel entry、参数、one-shot、signal 安装/恢复、安全错误和 heartbeat/lease 配置 |
 
+## 已完成：M3-D Schedule/Run API 与工作台
+
+- [`AutomationService`](../../../py-src/data_formulator/automation/service.py)把 Automation queue catalog 与不可变 RecipeVersion/artifact store 接在一起，并要求 Automation/Recipe repository 使用同一个绝对数据库。Schedule 创建和 manual enqueue 在持久化前验证稳定签名、Published 状态与完整 default binding。
+- [`automation` route](../../../py-src/data_formulator/routes/automation.py)在 `/api/automation` 提供 Schedule list/create/update/enable/disable、Run manual enqueue/list/get/cancel 和 manifest/events。feature flag 在存储初始化前失败关闭，所有读写都使用当前 identity + durable local Workspace。
+- Schedule 的首个 `next_run_at`、manual Run 的 `scheduled_for`/`available_at` 和逻辑 Run id 均由服务端产生；客户端只能提交版本与 Schedule 可编辑字段，额外执行字段、malformed JSON 和越界数字会被拒绝。
+- Run 公共响应不包含 lease owner、fencing token 或 lease expiry。artifact 查询从逻辑 Run 构造 scoped attempt reference，并通过 `RecipeRunArtifactStore.load()` 校验相对路径、manifest/descriptor/文件 hash 后返回 manifest/events；活动、缺失或损坏制品失败关闭。
+- [`automationApi.ts`](../../../src/app/automationApi.ts)只暴露上述最小管理面，manual enqueue 仅发送 `version_id`，Schedule 创建不发送 `next_run_at`。
+- [`AutomationOperations.tsx`](../../../src/views/AutomationOperations.tsx)增加每日时间 → Cron、原始 Cron、IANA timezone、固定版本 Schedule 编辑/启停，以及持久化 Runs Inbox 的状态过滤、取消、Needs Review 回跳和 artifact 审计对话框。
+- [`Recipes.tsx`](../../../src/views/Recipes.tsx)的 Run now 已从同步 Recipe manual run 改为持久化 enqueue；dry run 仍使用当前结果面板，后台 Run 统一在 Inbox 中恢复和查看。Workspace/版本切换时旧请求不会覆盖新作用域。
+
+关键测试：
+
+| 位置 | 覆盖 |
+| --- | --- |
+| [`test_automation_routes.py`](../../../tests/backend/recipes/test_automation_routes.py) | scoped CRUD/enqueue/cancel、严格请求、签名/default binding、flag/local Workspace、lease 字段隐藏、artifact 校验与篡改拒绝 |
+| [`automationApi.test.ts`](../../../tests/frontend/unit/app/automationApi.test.ts) | API 路径、最小 payload 与服务端时间所有权 |
+| [`AutomationOperations.test.tsx`](../../../tests/frontend/unit/views/AutomationOperations.test.tsx) | 每日 Cron、Schedule 编辑/停用、Run 过滤/取消、Needs Review 审计与 Workspace 竞态 |
+
 ## 尚未实现
 
-- 持久化 Run 查询、events/manifest API 和 Runs Inbox。
-- Schedule 创建、启停、固定 Published RecipeVersion 的 UI。
 - Web/桌面应用自动拉起或监督 Worker、并发 2，以及无 manifest attempt artifact 回收。
 - 页面关闭后运行、真实进程强杀/重启、重复调度和 schema drift 的完整产品端到端验证。
 
-当前 [RecipeRunArtifactStore](../../../py-src/data_formulator/recipes/run_store.py)保存 dry run、manual run 和 automation attempt 的不可变终态制品；队列状态仍只在 `runs` 表中，且尚无持久化 Inbox 查询 API。当前页面的 `lastRun` 也只是内存状态，不能当作后台 Runs Inbox。
+当前 [RecipeRunArtifactStore](../../../py-src/data_formulator/recipes/run_store.py)保存 dry run、Recipe Core 兼容 manual run 和 automation attempt 的不可变终态制品；Automation 队列状态继续只在 `runs` 表中，页面通过 scoped Runs API 查询，不复制到 Redux 或会话状态。Recipe Core 的同步 manual API 暂时保留兼容，但 `/automation` 的 Run now 已使用持久化队列。
 
 ## M3-B 前置问题处理结果
 
@@ -219,7 +237,7 @@ Workspace / 原有项目概念
 - `src/i18n/locales/{zh,en}/recipes.json`、`src/views/Recipes.tsx` 和对应前端测试已同步，聚焦前端 11 passed。
 - 不改原有 Workspace、项目、会话和 Workflow Replay 的名称或行为。
 
-后续 Schedule UI 继续使用这一术语，不得重新引入 Project 包装。
+当前 Schedule UI 已使用这一术语，后续稳定化不得重新引入 Project 包装。
 
 ### 已处理：跨层设计文档的双入口描述
 
@@ -237,10 +255,9 @@ git push -u origin feat/automation-workbench
 
 ## 推荐继续顺序
 
-1. 接 Schedule/Run API：scoped list/get、持久化 manual enqueue、cancel，以及 artifact events/manifest 只读查询。
-2. 在单一 `/automation` 页面增加 Runs Inbox 和 Schedule 创建/启停 UI，不复制当前 Recipe 详情或易失 `lastRun`。
-3. 用正式 `data_formulator_worker` 做页面关闭、真实进程强杀/重启、重复 tick、外部 connector 和 schema drift 处置的完整闭环验证。
-4. 稳定化阶段再决定进程监督、无 manifest attempt 回收和并发 2；不把这些职责塞入 Flask。
+1. 用固定 automation 实例启动真实 Web、Vite 与正式 `data_formulator_worker`，验证创建 Schedule 后关闭页面仍会入队、执行并在重新打开页面后出现在 Runs Inbox。
+2. 补真实进程强杀/重启、重复 tick、持久化 manual Run、queued/running 取消、外部 connector 和 schema drift → Needs Review 的完整闭环验证并记录证据。
+3. 稳定化阶段再决定进程监督、无 manifest attempt 回收和并发 2；不把这些职责塞入 Flask。
 
 实现 M3 时注意：
 
@@ -302,6 +319,14 @@ uv run data_formulator_worker --worker-id "automation-worker-1"
 Worker 与 Web 从当前 Worktree 未跟踪的 `.env` 读取同一个稳定签名密钥。它不监听端口；用 `Ctrl+C` 优雅停止。单周期诊断可加 `--once`，但不能用外部脚本循环 `--once` 冒充正式常驻生命周期。
 
 ## 最近一次验证
+
+M3-D `1f5f181d` 的交付验证为：
+
+- Recipe/Automation 后端目录：208 passed、2 skipped。
+- 后端全量：2351 passed、16 skipped、1 xfailed（2368 collected）。
+- 前端全量：51 files / 412 tests passed。
+- Automation API/UI 相关 ESLint 通过，`yarn build` 通过。
+- Automation/route 模块 compileall 和 `uv build --wheel` 通过；wheel 明确包含 `automation/service.py`、`routes/automation.py`、既有 `automation/cli.py`，且保留 `data_formulator_worker` entry point。
 
 M3-C `61eba9eb` 的交付验证为：
 
@@ -376,7 +401,8 @@ yarn build
 - [x] 新 migration 能从现有 schema v2 原地升级，也能重复初始化并在失败时整体回滚。
 - [x] Schedule 固定 Published RecipeVersion；相同 Schedule/计划时间唯一，重复 tick 幂等，停机周期合并为一个补偿 Run。
 - [x] Run repository 和 Worker 覆盖 claim/renew/fencing、取消、有限/延迟重试、过期 lease 恢复和长步骤 heartbeat；queued Run 已覆盖跨 Runtime 重建执行。
-- [x] Runtime factory 从同一绝对 data home 构造 Workspace 与 SQLite，并拒绝 repository 路径分歧；真实 Web/Worker 双进程产品闭环仍待 API/UI 后验证。
+- [x] Schedule/Run API、持久化 manual enqueue/cancel、校验后 manifest/events、Schedule UI、Runs Inbox 和 Needs Review 回跳已完成；公共响应不暴露 Worker lease/fencing 字段。
+- [x] Runtime factory 从同一绝对 data home 构造 Workspace 与 SQLite，并拒绝 repository 路径分歧；真实 Web/Worker 双进程产品闭环仍待执行验证。
 - [x] Automation flag 关闭时 Worker CLI 在存储初始化前失败关闭，Recipe API 和 UI 都不可用。
 - [x] 正常 Run 路径没有 LLM、TrustGraph 或 Workflow Replay 调用。
 - [x] `uv run pytest`、`yarn test`、`yarn build` 全部通过。

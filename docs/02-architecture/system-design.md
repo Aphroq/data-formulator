@@ -223,9 +223,9 @@ schema v3 已由 `data_formulator.automation.db.AutomationDatabase` 统一拥有
 
 Schedule v1 持久化规范化的五段 Cron 表达式和 IANA timezone；“每日”只是 UI 对 Cron 的受控简化。v1 Cron 只接受数值、列表、升序范围和步长，day-of-month/day-of-week 使用标准 union 语义；春季跳时中不存在的墙上分钟跳过，秋季回拨的重复墙上分钟只执行一次。`version_id` 创建后不可修改，切换 RecipeVersion 必须新建 Schedule。存在 enabled Schedule 时归档其 RecipeVersion 必须失败关闭，用户需先显式停用 Schedule；已绑定 archived version 的 Schedule 不允许重新启用。归档不删除不可变版本字节，归档前已经入队并固定该版本的 Run 仍可完成，避免管理动作静默改写既有执行计划。`next_run_at` 统一按 UTC 持久化，解析和展示时才使用 Schedule timezone；重新启用时从启用时刻之后重算，不补跑显式停用期间的周期。
 
-持久化 Run 使用独立的队列状态，不复用 Recipe Core 的终态制品枚举。Run 至少保存明确 scope、固定 version、触发类型、`scheduled_for`、尝试次数、下一次可领取时间、lease owner/token/expiry、取消请求、最终安全错误和可校验 artifact reference。逻辑 `run_id` 与每次 Executor 尝试的 artifact run id 分开，避免崩溃恢复或重试与已有的不完整/不可变运行目录冲突。SQLite 不保存参数值、连接参数、凭据或绝对 artifact 路径；v1 Schedule 只运行固定 Recipe/default binding。
+持久化 Run 使用独立的队列状态，不复用 Recipe Core 的终态制品枚举。Run 至少保存明确 scope、固定 version、触发类型、`scheduled_for`、尝试次数、下一次可领取时间、lease owner/token/expiry、取消请求、最终安全错误和可校验 artifact reference。逻辑 `run_id` 与每次 Executor 尝试的 artifact run id 分开，避免崩溃恢复或重试与已有的不完整/不可变运行目录冲突。SQLite 不保存参数值、连接参数、凭据或绝对 artifact 路径；v1 Schedule 和持久化 manual Run 都只运行固定 Recipe/default binding。
 
-当前 repository 已支持 Schedule 创建、查询、列表、编辑、启停和按 `(schedule_id, scheduled_for)` 幂等创建 queued Run；单次 Scheduler tick 会在一个 `BEGIN IMMEDIATE` 事务中完成到期扫描、最多一个停机补偿 Run 入队和 `next_run_at` 推进，任一 Schedule 计算失败时整批回滚。Run repository 已实现合法状态转换、claim/renew/fencing、运行中取消请求、最多 3 次总尝试和过期 lease 恢复；`AutomationWorker.run_once()` 把一次 claim、明确 scope 打开、固定版本验证、确定性执行和终态写回接成闭环，`AutomationRuntime` 与 `data_formulator_worker` 则负责正式的常驻本机进程生命周期。
+当前 repository 已支持 Schedule 创建、查询、列表、编辑、启停和按 `(schedule_id, scheduled_for)` 幂等创建 queued Run；单次 Scheduler tick 会在一个 `BEGIN IMMEDIATE` 事务中完成到期扫描、最多一个停机补偿 Run 入队和 `next_run_at` 推进，任一 Schedule 计算失败时整批回滚。Run repository 已实现 scoped list/get、每次调用生成独立逻辑 Run 的持久化 manual enqueue、合法状态转换、claim/renew/fencing、运行中取消请求、最多 3 次总尝试和过期 lease 恢复；`AutomationWorker.run_once()` 把一次 claim、明确 scope 打开、固定版本验证、确定性执行和终态写回接成闭环，`AutomationRuntime` 与 `data_formulator_worker` 则负责正式的常驻本机进程生命周期。
 
 ### Scheduler 与 Worker
 
@@ -269,11 +269,15 @@ Recipe 和 Run 的所有持久化路径都通过现有 `ConfinedDir` 解析；�
 - Schedule：create/update、enable/disable、list。
 - Run：manual enqueue、list/get、cancel、manifest/events。
 
+这些 API 已在 `1f5f181d` 落地。`AUTOMATION_ENABLED=false` 时在存储初始化前失败关闭；所有资源访问都由当前 identity 和 durable local Workspace 限定。Schedule 首次排期、重新启用排期和 manual Run 时间由服务端计算，写请求严格拒绝客户端提供的 `next_run_at`、`scheduled_for`、参数、凭据或 Run id。创建 Schedule、启用 Schedule 和 manual enqueue 要求稳定代码签名及 Published RecipeVersion 的完整 default binding；读取、停用和取消不会被不必要地扩大为签名写入边界。Run 公共表示不返回 lease owner、fencing token 或 lease expiry。manifest/events 端点从逻辑 Run 解析 attempt reference，并在返回内容前校验 Workspace scope、安全相对路径、manifest hash、descriptor 和全部文件 hash；活动 Run 或损坏制品失败关闭。
+
 三个新增产品触点：
 
 1. Data Thread 中统一的 Artifact action：`Save as Recipe`。
-2. 单一 `/automation` 页面中的 Recipes 区域：版本、输入、步骤、dry run、发布、手动运行和本次运行摘要。
+2. 单一 `/automation` 页面中的 Recipes 区域：版本、输入、步骤、dry run、发布、持久化手动入队，以及 dry run 的本次结果摘要。
 3. 同一页面中的 Schedule 与 Runs Inbox 区域：调度设置、状态、Needs Review、错误、日志和输出链接。
+
+M3-D 页面已经实现每日时间到规范化 Cron 的受控转换、原始 Cron/IANA timezone 编辑、固定版本 Schedule 启停，以及按状态筛选的持久化 Runs Inbox。queued/running Run 可请求取消；有最终制品的 Run 可查看已校验的 manifest/events；Needs Review 可返回产生该 Run 的不可变 RecipeVersion。Workspace 或版本快速切换时，旧请求结果不会覆盖新作用域。
 
 最终导航只保留现有工作区 rail 上的 `Automation` 入口；`/recipes` 仅作为保留 query/hash 的兼容重定向。不要恢复独立 Recipes 导航，不新增“应用 → 自动化”包装层，也不改变原有项目/Workspace 概念。Recipe Core 提供的生命周期视图在 M3 中被纳入该统一页面，但仍不负责 Schedule repository、Worker 或持久化 Run 历史。
 

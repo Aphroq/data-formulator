@@ -78,7 +78,9 @@ Recipe Core 的签名配置回归已由 `3cd7ee12` 关闭并完整验证：未�
 - M3-A（已完成）：在现有工作区 rail 增加单一 `Automation` 入口，按 Recipe identity 聚合版本并复用 Recipe Core 生命周期 UI；`/recipes` 只保留兼容重定向。
 - M3-B（已完成 repository/tick 切片）：共享 `AutomationDatabase` 和 schema v3、固定 Published RecipeVersion 的 Schedule、数值 Cron/timezone/DST、事务型单次 scheduler tick，以及 Run claim/renew/fencing、取消、有限重试和过期 lease 恢复均已落地。
 - M3-C（已完成）：`c1181e30` 实现无 Flask request 的 `worker.run_once()`、白名单有限重试、独立 attempt artifact、步骤边界续租/取消、schema drift → Needs Review、稳定签名与同一绝对数据根检查；`61eba9eb` 增加覆盖长步骤的定时 heartbeat、正式 `data_formulator_worker` console script、可中断常驻 Scheduler/Worker 生命周期、安全启动边界和持久化 Run 跨 runtime 重建验证。当前并发为 1，Web/桌面应用不自动托管该进程。
-- M3-D：在单一 `/automation` 页面增加 Schedule 设置和 Runs Inbox，并把后台 Run 的 events/manifest、schema drift → Needs Review 闭环接入 UI。
+- M3-D（已完成实现切片）：`1f5f181d` 增加 Workspace-scoped Schedule/Run API、持久化 manual enqueue/cancel、校验后的 events/manifest 查询，以及单一 `/automation` 页面的 Schedule 设置、Runs Inbox 和 schema drift → Needs Review 回跳。服务端拥有排期/default binding，公共 API 不暴露 Worker lease/fencing 字段。
+
+M3 仍需用真实 Web 与独立 `data_formulator_worker` 完成页面关闭、重启、重复调度和 schema drift 的产品端到端验收；在该验收通过前，不把“页面关闭后仍能执行”标记为已完成。
 
 M3 不增加 Automation Project 容器；列表对象始终是 Recipe，Schedule 直接固定 Published RecipeVersion。逻辑队列 Run 与 Executor attempt artifact 使用不同 id，保证崩溃恢复和重试不覆盖不可变制品。
 
@@ -156,6 +158,7 @@ yarn build
 - Recipe hash、代码篡改、dry run 和发布状态机。
 - malformed JSON、非法 artifact id、极端数值、路径与 symlink 越界拒绝。
 - Workspace/版本快速切换、动作成功后刷新失败和即时 Run 摘要的前端回归。
+- Schedule/Run API 的 scope、严格请求字段、稳定签名/default binding、公共字段最小化和 artifact 完整性校验；Runs Inbox 的 Workspace 竞态、取消和 Needs Review 回跳。
 - SQLite migration、唯一入队、lease、重试、取消和恢复。
 - schema v2 → v3 原地升级、重复初始化和未知未来 migration 失败关闭。
 - 未配置稳定签名 key 且 Automation 关闭时原有交互分析可用；Recipe/Worker 边界缺 key 时安全失败。
@@ -167,5 +170,5 @@ yarn build
 - M0：四条探针都有可重复测试和明确结论。
 - M1：上下文来源可追踪，Copilot 不影响其他模型。
 - M2：真实 artifact 能稳定编译、dry run、发布和手动运行；Web/Worker 签名一致，父 Artifact 篡改和路径越界失败关闭，现有页面不会把成功动作误报为失败。
-- M3：页面关闭后 Schedule 仍能创建并执行 Run。
+- M3：Schedule/Run API 与 Runs Inbox 已落地，且页面关闭后 Schedule 仍能由独立 Worker 创建并执行 Run。
 - M4：所有基础命令通过，重启和 schema drift 场景通过。

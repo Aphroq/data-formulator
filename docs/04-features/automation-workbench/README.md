@@ -8,7 +8,7 @@
 | Worktree | `D:\projects\dfm-wt-automation` |
 | 本机实例 | `automation`：后端 5570、Vite 5176、数据目录 `D:\projects\dfm-runtime\automation` |
 | 基线 | Recipe Core `3cd7ee12`；6 个 M3-A 提交已线性重放，M3-A tip 为 `fd1f347c` |
-| 当前阶段 | M3-C 常驻执行边界已完成；下一步接 Schedule/Run API 与 Runs Inbox |
+| 当前阶段 | M3-D Schedule/Run API 与工作台 UI 已完成；下一步做真实双进程产品端到端验收与稳定化 |
 | 交接 | [Automation Workbench 分支交接](./HANDOFF.md) |
 
 ## 目标
@@ -51,7 +51,7 @@ Recipe Core 已经可以保存、校验、发布和手动运行 Recipe，但入�
 | --- | --- | --- |
 | [Open WebUI Workspace](https://docs.openwebui.com/features/workspace/) | 用稳定入口承载可复用资产；列表默认按最近更新组织 | 在现有工作区侧栏增加一个 Automation 入口和最近更新 Recipe 列表，不复制另一套全局导航 |
 | [Langflow Projects](https://docs.langflow.org/1.8.0/concepts-flows) | 以 Project 作为相关 Flow 的管理容器 | 不采纳 Project 容器；本项目已有 Workspace/项目语义，Automation 直接管理 Recipe，版本保留在 Recipe 内 |
-| [n8n Executions](https://docs.n8n.io/workflows/executions/all-executions/) | 执行记录既有全局入口，也能回到具体工作流上下文 | 本阶段只展示当前操作返回的最近运行结果；等持久化 Run 契约落地后再增加 Runs Inbox，避免用同步手动运行伪装后台执行历史 |
+| [n8n Executions](https://docs.n8n.io/workflows/executions/all-executions/) | 执行记录既有全局入口，也能回到具体工作流上下文 | M3-A 先只展示当前操作结果；M3-D 已用持久化 Run 契约增加 Runs Inbox，并让 Needs Review 回到固定 RecipeVersion |
 
 ### 信息架构
 
@@ -60,7 +60,7 @@ Recipe Core 已经可以保存、校验、发布和手动运行 Recipe，但入�
 - Automation 页头不再提供重复的“打开应用”按钮；返回分析区统一使用同一条工作区侧栏。
 - `/automation`：Recipe 列表 + 当前 Recipe 详情，保留 `/recipes` 重定向以兼容已有链接。
 - Recipe 列表：每个 Recipe 只显示一次，展示名称、最新版本状态、版本数和更新时间。
-- Recipe 详情：说明、版本选择、状态、hash、参数、输入、步骤、与当前状态匹配的主操作，以及当前会话最近一次运行结果。
+- Recipe 详情：说明、版本选择、状态、hash、参数、输入、步骤、与当前状态匹配的主操作，以及当前会话最近一次 dry run 结果；Published 版本另有 Schedule 管理，持久化 Run 统一进入 Runs Inbox。
 - 创建入口：仍由分析产物的 `Save as Recipe` 触发；Automation 空状态和页头只引导返回 App，不新增无血缘的“空白自动化”。
 
 ### 范围与非范围
@@ -101,7 +101,7 @@ Recipe Core 已经可以保存、校验、发布和手动运行 Recipe，但入�
 - 原有会话、知识、Workflow Replay、About 和 App 的名称、含义与入口行为不因本阶段改变。
 - 一个含多个 RecipeVersion 的 Recipe 在列表中只出现一次，且可在详情内切换版本。
 - 各版本只能执行其状态允许的操作，现有参数 typed binding 保持不变。
-- 试运行或手动运行完成后，当前页展示状态、Run ID、步骤耗时、输出位置、最终产物标记和安全错误信息；切换版本时清除旧结果。
+- dry run 完成后，当前页展示状态、Run ID、步骤耗时、输出位置、最终产物标记和安全错误信息；持久化手动 Run 返回 queued 后进入 Runs Inbox，切换版本时清除旧的 dry run 结果。
 - `Save as Recipe` 打开 `/automation?version=...`，旧 `/recipes?version=...` 无损重定向。
 - 页面在常用桌面宽度可用；窄屏导航不遮挡内容并保持键盘/读屏可达。
 - 不新增调度、Worker、LLM 调用或复杂编排依赖。
@@ -113,9 +113,9 @@ Recipe Core 已经可以保存、校验、发布和手动运行 Recipe，但入�
 - `/automation` 按 Recipe identity 聚合列表，Recipe 内可切换不可变 RecipeVersion；现有 dry run、publish、run now、archive 和 typed parameter binding 原样复用。
 - `Save as Recipe` 改为进入 `/automation?version=...`；旧 `/recipes` 路径保留 query/hash 后重定向。
 - `AUTOMATION_ENABLED=false` 时导航入口隐藏且直接访问失败关闭；无活动 Workspace 时不展示跨 Workspace 数据。
-- 试运行和手动运行返回后展示轻量结果面板；它不冒充持久化运行历史，刷新页面后不承诺恢复。
-- 已继承 Recipe Core M2-D 的过期请求丢弃、URL 版本同步、immutable 版本元数据和“动作结果先落地、后续刷新失败只告警”语义；Automation 继续只展示一套较详细的当前运行结果面板。
-- 未加入节点画布、Scheduler、Worker、Runs Inbox、新数据库表或新的状态管理依赖。
+- M3-A 当时为 dry run 和同步手动运行展示轻量结果面板；M3-D 已把手动运行改为持久化入队，轻量结果面板仅保留 dry run，后台历史由 Runs Inbox 展示。
+- 已继承 Recipe Core M2-D 的过期请求丢弃、URL 版本同步、immutable 版本元数据和“动作结果先落地、后续刷新失败只告警”语义；M3-D 又为 Schedule、Run 列表和 artifact 对话框增加作用域切换时的旧请求丢弃。
+- M3-A 没有加入节点画布、Scheduler、Worker、Runs Inbox、新数据库表或新的状态管理依赖；这些后台能力只在后续 M3-B/C/D 按既定边界增量接入，节点画布与新状态框架仍未引入。
 
 ## 开发前源码审计（2026-08-19）
 
@@ -164,7 +164,7 @@ running ── retryable failure / expired lease, attempts < 3 ──→ queued
 - queued 取消直接终结；running 取消只写请求，由 Worker 在步骤边界确认并产出 cancelled manifest。
 - repository 强制最多 3 次总尝试（初次 + 2 次重试）和 `available_at` 延迟领取，但只接受调用方给出的显式 retryable 决定；Worker 已只把现有 connector classifier 的 `retry=true` 与明确识别的 SQLite locked/busy 接入该决定。schema drift、签名、scope、参数、代码和输出校验永不重试。
 - `succeeded` / `needs_review` 必须保存完整且安全的相对 artifact reference；逻辑 Run id 不得复用为 attempt artifact id。`failed` / `needs_review` 必须保存成对的安全错误 code/message，`succeeded` / `cancelled` 不得夹带错误。
-- Scheduled Run 使用固定 Recipe/default binding；M3 不新增 Schedule 参数编辑器。现有同步 manual run 在 Runs API 切换到持久化 enqueue 前保持兼容，不冒充后台历史。
+- Scheduled Run 与持久化 manual Run 都使用固定 Recipe/default binding；M3 不新增 Schedule 参数编辑器。`1f5f181d` 已把页面手动运行切换为持久化 enqueue，客户端只提交 `version_id`，每次调用生成独立逻辑 Run 并进入 Runs Inbox。
 
 ### M3-B 实施切片
 
@@ -172,9 +172,10 @@ running ── retryable failure / expired lease, attempts < 3 ──→ queued
 2. [x] **B2 Schedule repository**：列表/编辑、数值 Cron、timezone/DST、停机补偿、重复 tick 幂等，以及同事务入队并推进 `next_run_at` 已完成。
 3. [x] **B3 Run repository**：合法状态转换、claim/fencing/renew、取消、延迟/有限重试和过期 lease 恢复已完成，全部使用注入时钟且无真实 sleep。
 4. [x] **B4 单次 tick/execute**：`scheduler.tick()` 与 `worker.run_once()` 均已完成；Worker 复用显式 Workspace/connector opener 和 `RecipeExecutor`，完成 claim → execute → finish/retry、独立 attempt artifact、安全错误分类、步骤边界续租/取消和 Needs Review。
-5. [x] **C1 常驻执行边界**：长步骤 heartbeat、正式 `data_formulator_worker`、可中断 Scheduler/Worker 循环、安全启动/退出和跨 runtime 持久化 Run 恢复已完成；API 和 UI 后接。
+5. [x] **C1 常驻执行边界**：长步骤 heartbeat、正式 `data_formulator_worker`、可中断 Scheduler/Worker 循环、安全启动/退出和跨 runtime 持久化 Run 恢复已完成。
+6. [x] **D1 API/UI 闭环**：Schedule/Run scoped API、持久化 manual enqueue/cancel、校验后 artifact 查询、Schedule 设置、Runs Inbox 与 Needs Review 回跳已完成。
 
-当前实现没有引入 Cron 第三方依赖、Flask 后台线程、API、UI 或并发 2。Cron/timezone/DST、停机补偿、事务回滚、lease/fencing、步骤边界取消、长步骤续租、分类重试和恢复均有合同测试；one-shot 原语仍可独立测试，正式常驻生命周期只由独立 `data_formulator_worker` 进程负责。
+当前实现没有引入 Cron 第三方依赖、Flask 后台线程或并发 2。Cron/timezone/DST、停机补偿、事务回滚、lease/fencing、步骤边界取消、长步骤续租、分类重试和恢复均有合同测试；one-shot 原语仍可独立测试，正式常驻生命周期只由独立 `data_formulator_worker` 进程负责。Web route 只做 scoped 管理与查询，不承担 Scheduler/Worker 循环。
 
 ### M3-C 常驻 Worker 契约
 
@@ -185,6 +186,15 @@ running ── retryable failure / expired lease, attempts < 3 ──→ queued
 - `--once` 只执行一个 Scheduler/Worker 周期；默认模式安装 SIGINT/SIGTERM handler，在当前同步周期结束后退出。Worker 不监听端口，也不伪造 Flask request。
 - 跨 runtime 合同先由一个 Runtime tick 把 due Schedule 写成 queued Run，再重新构造全部 repository、Scheduler 和 Worker，第二个 Runtime 能从同一 data home 执行该 Run。Web/桌面应用当前不会自动拉起或监督 Worker。
 
+### M3-D API 与界面契约
+
+- `AutomationService` 要求 Automation/Recipe repository 指向同一绝对数据库，并在创建 Schedule 或持久化 manual Run 前验证稳定签名、Published RecipeVersion 和完整 default binding；失败时不创建 Schedule/Run 行。
+- `/api/automation` 已提供 Schedule list/create/update/enable/disable，Run manual enqueue/list/get/cancel，以及 manifest/events 只读查询。所有访问由当前 identity + durable local Workspace 限定，feature flag 在存储初始化前失败关闭。
+- 服务端独占首个 `next_run_at`、manual `scheduled_for`/`available_at` 和逻辑 Run id；写接口严格拒绝额外执行字段、越界数字和 malformed JSON。公共 Run 响应不返回 lease owner、fencing token 或 lease expiry。
+- manifest/events 查询从逻辑 Run 解析 attempt reference，并通过 `RecipeRunArtifactStore.load()` 校验 scope、安全相对路径、manifest hash、descriptor 与全部文件 hash；active Run、缺失或损坏制品失败关闭，不返回未经验证的内容。
+- 单一 `/automation` 页面已接每日时间 → Cron、原始 Cron、IANA timezone、固定版本 Schedule 创建/编辑/启停，以及持久化 Runs Inbox 的状态过滤、刷新、取消、Needs Review 回跳和 artifact 审计对话框。
+- Recipe 的 Run now 已改为只提交 `version_id` 的持久化入队；Published 版本上的参数控件只作规范展示，后台 Run 使用已保存 default binding。Workspace/版本快速切换时旧响应会被丢弃。
+
 ## M3 后续实施顺序
 
 1. [x] Recipe Core 修复稳定签名配置回归，Automation rebase 到新基线并完成三项基础验证。
@@ -192,7 +202,8 @@ running ── retryable failure / expired lease, attempts < 3 ──→ queued
 3. [x] 完成 M3-B Schedule/Run repository 和单次 `scheduler.tick()`。
 4. [x] 实现 `worker.run_once()`，接入白名单错误分类、步骤边界续租/取消、固定版本/default binding 和 Web/Worker 数据根一致性。
 5. [x] 增加覆盖长步骤的 lease heartbeat、正式 `data_formulator_worker` 入口和 Scheduler/Worker 本机进程生命周期。
-6. 增加 Schedule/Run API、Runs Inbox 和 Needs Review 处置，再做页面关闭、独立进程和 UI 端到端验证。
+6. [x] 增加 Schedule/Run API、持久化 manual enqueue/cancel、校验后 artifact 查询、Schedule UI、Runs Inbox 和 Needs Review 处置。
+7. 使用真实 Web + 独立 Worker 做页面关闭、进程重启、重复调度、取消、schema drift 和 UI 处置的产品端到端验证。
 
 ## 开发记录
 
@@ -214,6 +225,7 @@ running ── retryable failure / expired lease, attempts < 3 ──→ queued
 | 2026-08-19 | M3-B2/B3 调度与状态机 | 增加数值五段 Cron、timezone/DST、单次事务型 Scheduler tick、停机补偿和重启用排期；补全 Run claim/renew/fencing、取消、延迟/有限重试、过期恢复及安全终态引用/错误合同；未接 Worker、route、线程或 UI | 聚焦 58 passed；Recipe/Automation 155 passed、2 skipped；全量后端 2298 passed、16 skipped、1 xfailed；前端 49 files / 405 tests；生产构建和 wheel 构建通过 | `e8110e27 feat: add automation scheduling lifecycle` |
 | 2026-08-19 | M3-B4 单次 Worker | 增加 request-independent `worker.run_once()`、统一绝对数据根、独立 attempt artifact、connector/SQLite 白名单重试、步骤成功/失败边界续租与取消、schema drift → Needs Review；未接常驻线程、CLI、route 或 UI | Worker/Executor 21 passed、1 skipped；全量后端 2312 passed、16 skipped、1 xfailed；前端 49 files / 405 tests；生产构建和 wheel 构建通过 | `c1181e30 feat: execute queued automation runs` |
 | 2026-08-19 | M3-C 常驻 Worker | 增加长步骤 fenced heartbeat、取消期间续租、正式 console script、可中断常驻 Runtime、安全配置错误、SQLite contention 周期重试及 persisted Run 跨 runtime 重建执行；仍未接 route/UI，当前并发 1 | Worker/Runtime/CLI 31 passed；Recipe/Automation 190 passed、2 skipped；全量后端 2333 passed、16 skipped、1 xfailed；前端 49 files / 405 tests；生产构建、模块编译、wheel 和 CLI 探针通过 | `61eba9eb feat: run automation worker service` |
+| 2026-08-19 | M3-D API/UI | 增加 scoped Schedule/Run API、服务端排期、持久化 manual enqueue/cancel、校验后 manifest/events 查询，以及 Schedule 设置、Runs Inbox、Needs Review 回跳和审计对话框；不把 Worker 循环放进 Flask | Recipe/Automation 208 passed、2 skipped；全量后端 2351 passed、16 skipped、1 xfailed；前端 51 files / 412 tests；相关 ESLint、生产构建、模块编译和 wheel 构建通过 | `1f5f181d feat: complete automation workbench APIs` |
 
 M3-B1 全量验证第一次继承 Codex 终端的 `cp936` / `TERM=dumb`，触发 7 个既有插件编码和 spinner 环境相关失败；未修改这些非本 Feature 文件。显式使用 `PYTHONUTF8=1`、`TERM=xterm` 后，相关 8 项及全量 2279 项收集均通过。
 
@@ -228,7 +240,7 @@ M3-B1 全量验证第一次继承 Codex 终端的 `cp936` / `TERM=dumb`，触发
 
 ## 未决与风险
 
-- Recipe 修复 `3cd7ee12` 尚未推送，Automation 也尚无远端分支；当前本地拓扑已验证，不影响继续 M3-B。
+- Recipe 修复 `3cd7ee12` 尚未推送，Automation 也尚无远端分支；当前本地拓扑已验证，不影响 M3-D 本地实现与后续验收。
 - 当前 Worktree 已基于 Recipe Core `3cd7ee12` 重放 Automation 提交；后续 Schedule/Run 工作不得回写 Recipe Core 分支。
 - Web、Worker 和 SQLite 直接在本机运行，不提供 Docker 或 Compose 方案。
 - SQLite 数据库和 artifact store 必须由 Web/Worker 解析到相同绝对路径。
@@ -242,6 +254,7 @@ M3-B1 全量验证第一次继承 Codex 终端的 `cp936` / `TERM=dumb`，触发
 - [x] Recipe Core 的签名回归已修复并同步，Automation 关闭且无稳定 key 时原有交互分析可用。
 - [x] Automation 列表术语为 Recipe/配方，没有 Project id、容器或 repository。
 - [x] schema v2 可原地升级到 v3，Recipe 与 Automation repository 可交替打开同一数据库。
+- [x] Schedule/Run API、持久化 manual enqueue/cancel、校验后 manifest/events、Schedule UI、Runs Inbox 和 Needs Review 回跳已完成，并覆盖 scope 与 Workspace 竞态。
 - [ ] 页面关闭后 Schedule 仍能创建 Run。
 - [x] repository 合同覆盖过期 running Run 的重排队/终结及旧 token fencing；持久化 queued Run 已覆盖跨 Runtime 重建执行，强杀真实进程的端到端验证仍待稳定化阶段。
 - [x] 同一 Schedule/计划时间唯一；重复 tick 幂等，停机跨多个周期最多创建一个补偿 Run，并把下一次推进到当前时刻之后。
