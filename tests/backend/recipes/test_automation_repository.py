@@ -147,6 +147,7 @@ def test_schedule_version_is_storage_level_immutable(
     ("cron_expression", "timezone_name", "next_run_at", "error"),
     [
         ("0 9 * *", "UTC", datetime.now(timezone.utc), "five fields"),
+        ("61 9 * * *", "UTC", datetime.now(timezone.utc), "Cron"),
         ("0 9 * * *", "Not/A-Timezone", datetime.now(timezone.utc), "IANA"),
         ("0 9 * * *", "UTC", datetime(2026, 8, 20, 9), "timezone-aware"),
     ],
