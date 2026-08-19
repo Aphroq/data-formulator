@@ -77,7 +77,7 @@ Recipe Core 的签名配置回归已由 `3cd7ee12` 关闭并完整验证：未�
 
 - M3-A（已完成）：在现有工作区 rail 增加单一 `Automation` 入口，按 Recipe identity 聚合版本并复用 Recipe Core 生命周期 UI；`/recipes` 只保留兼容重定向。
 - M3-B（已完成 repository/tick 切片）：共享 `AutomationDatabase` 和 schema v3、固定 Published RecipeVersion 的 Schedule、数值 Cron/timezone/DST、事务型单次 scheduler tick，以及 Run claim/renew/fencing、取消、有限重试和过期 lease 恢复均已落地。
-- M3-C（单次执行切片已完成）：`c1181e30` 已实现无 Flask request 的 `worker.run_once()`，把 connector classifier / SQLite busy 接到有限重试，增加独立 attempt artifact、步骤边界续租/取消、schema drift → Needs Review、稳定签名与同一绝对数据根检查。下一切片补覆盖长步骤的定时 heartbeat、常驻 Scheduler/Worker 生命周期和 `data_formulator_worker` 入口。
+- M3-C（已完成）：`c1181e30` 实现无 Flask request 的 `worker.run_once()`、白名单有限重试、独立 attempt artifact、步骤边界续租/取消、schema drift → Needs Review、稳定签名与同一绝对数据根检查；`61eba9eb` 增加覆盖长步骤的定时 heartbeat、正式 `data_formulator_worker` console script、可中断常驻 Scheduler/Worker 生命周期、安全启动边界和持久化 Run 跨 runtime 重建验证。当前并发为 1，Web/桌面应用不自动托管该进程。
 - M3-D：在单一 `/automation` 页面增加 Schedule 设置和 Runs Inbox，并把后台 Run 的 events/manifest、schema drift → Needs Review 闭环接入 UI。
 
 M3 不增加 Automation Project 容器；列表对象始终是 Recipe，Schedule 直接固定 Published RecipeVersion。逻辑队列 Run 与 Executor attempt artifact 使用不同 id，保证崩溃恢复和重试不覆盖不可变制品。

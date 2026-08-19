@@ -225,16 +225,18 @@ Schedule v1 持久化规范化的五段 Cron 表达式和 IANA timezone；“每
 
 持久化 Run 使用独立的队列状态，不复用 Recipe Core 的终态制品枚举。Run 至少保存明确 scope、固定 version、触发类型、`scheduled_for`、尝试次数、下一次可领取时间、lease owner/token/expiry、取消请求、最终安全错误和可校验 artifact reference。逻辑 `run_id` 与每次 Executor 尝试的 artifact run id 分开，避免崩溃恢复或重试与已有的不完整/不可变运行目录冲突。SQLite 不保存参数值、连接参数、凭据或绝对 artifact 路径；v1 Schedule 只运行固定 Recipe/default binding。
 
-当前 repository 已支持 Schedule 创建、查询、列表、编辑、启停和按 `(schedule_id, scheduled_for)` 幂等创建 queued Run；单次 Scheduler tick 会在一个 `BEGIN IMMEDIATE` 事务中完成到期扫描、最多一个停机补偿 Run 入队和 `next_run_at` 推进，任一 Schedule 计算失败时整批回滚。Run repository 已实现合法状态转换、claim/renew/fencing、运行中取消请求、最多 3 次总尝试和过期 lease 恢复；`AutomationWorker.run_once()` 已把一次 claim、明确 scope 打开、固定版本验证、确定性执行和终态写回接成闭环，但它与 Scheduler 都不是常驻服务。
+当前 repository 已支持 Schedule 创建、查询、列表、编辑、启停和按 `(schedule_id, scheduled_for)` 幂等创建 queued Run；单次 Scheduler tick 会在一个 `BEGIN IMMEDIATE` 事务中完成到期扫描、最多一个停机补偿 Run 入队和 `next_run_at` 推进，任一 Schedule 计算失败时整批回滚。Run repository 已实现合法状态转换、claim/renew/fencing、运行中取消请求、最多 3 次总尝试和过期 lease 恢复；`AutomationWorker.run_once()` 把一次 claim、明确 scope 打开、固定版本验证、确定性执行和终态写回接成闭环，`AutomationRuntime` 与 `data_formulator_worker` 则负责正式的常驻本机进程生命周期。
 
 ### Scheduler 与 Worker
 
 - Scheduler 以可注入时钟执行单次 tick，扫描到期 Schedule，并在同一事务中创建 queued Run、推进 `next_run_at`。服务停机跨过多个周期时，每个 Schedule 最多合并为一个补偿 Run，再推进到严格晚于当前时刻的下一次，避免重启后无界补跑。
-- Run repository 通过带随机 fencing token 的 lease 领取和续租 Run；过期 lease 可重新排队或在尝试耗尽/已请求取消时关闭，旧 Worker 失去 token 后不得覆盖新尝试的完成状态。单次 Worker 在开始、成功和失败步骤边界续租并检查取消；覆盖长步骤的定时 heartbeat 与实际 Worker 循环仍待实现。
-- 初始并发 1，允许显式配置到 2。
+- Run repository 通过带随机 fencing token 的 lease 领取和续租 Run；过期 lease 可重新排队或在尝试耗尽/已请求取消时关闭，旧 Worker 失去 token 后不得覆盖新尝试的完成状态。Worker 在开始、成功和失败步骤边界同步续租并检查取消，每个已领取 attempt 另有定时 heartbeat 覆盖同步长步骤；即使 heartbeat 已观察到取消，也继续续租到 Executor 到达下一个安全边界。步骤期间观察到 heartbeat/fencing 失败时 Executor 不写终态 manifest；任何 heartbeat 失败、续租异常或无法安全停止都禁止旧 Worker 写逻辑 Run 终态。若失败发生在 Executor 已原子完成 artifact 之后，该 artifact 可能成为未引用 attempt，后续回收不能把它误接到逻辑 Run。
+- `AutomationRuntime` 每个周期严格按 `Scheduler.tick()` → `Worker.run_once()` 执行，当前并发固定为 1；未来若开放显式并发配置，上限仍为 2，并且必须先补同 Workspace 写入竞争验证。
+- `data_formulator_worker` 是 wheel 中的正式 console script。默认常驻，也支持 `--once` 做一个确定性运维周期；默认 poll/lease/heartbeat 分别为 1/30/10 秒，heartbeat 必须短于 lease。常驻循环只对白名单 SQLite locked/busy 延后重试，其他意外错误让进程安全退出。
+- Worker CLI 与 Web 加载同一组仓库/包内 `.env`，但仍要求进程启动前解析到相同的绝对 `DATA_FORMULATOR_HOME`。它在任何数据库、Workspace 或 connector 初始化前验证 feature flag、稳定签名和 `WORKSPACE_BACKEND=local`；配置错误只输出固定安全信息。SIGINT/SIGTERM 只请求优雅停止，当前同步 Run 完成前 heartbeat 继续工作。
 - Repository 只接受调用方给出的显式 retryable 决定并强制最多 2 次重试；Worker 只把现有 connector classifier 标记 `retry=true` 的网络/超时失败和明确识别的 SQLite locked/busy 映射为 retryable。schema drift、签名、scope、参数、代码和输出校验错误永不重试；connector 原始异常和 classifier detail 不进入 Run 行或 artifact。
 - queued Run 可直接取消；running Run 记录取消请求，Worker 在步骤边界响应。终态不可重新打开。
-- Worker 在 claim 前检查 `AUTOMATION_ENABLED` 和稳定签名配置，使用 request-independent opener 打开明确 identity/workspace，不伪造 Flask 请求；Worker factory 从一个解析后的 `DATA_FORMULATOR_HOME` 同时构造 SQLite 与 Workspace opener，并拒绝 repository 数据库路径不一致。
+- Worker 在 claim 前检查 `AUTOMATION_ENABLED` 和稳定签名配置，使用 request-independent opener 打开明确 identity/workspace，不伪造 Flask 请求；Runtime factory 从一个解析后的 `DATA_FORMULATOR_HOME` 同时构造 Scheduler repository、Worker repository 和 Workspace opener，并拒绝 repository 数据库路径不一致。Web/桌面应用当前不负责拉起或监督 Worker 进程。
 
 队列 Run 状态：
 

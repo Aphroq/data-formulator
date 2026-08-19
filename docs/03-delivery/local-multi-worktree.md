@@ -44,6 +44,18 @@ yarn run start --host 127.0.0.1 --port 5174 --strictPort
 
 `--strictPort` 让 Vite 在端口被占用时直接失败，避免静默切换端口后连接到错误分支。后端也固定绑定 `127.0.0.1`，除非测试目标明确要求局域网访问。
 
+Automation 分支还需要独立 Worker 终端。Web 与 Worker 必须使用同一个 automation 实例数据目录；稳定的 `DF_CODE_SIGNING_SECRET` 或 `FLASK_SECRET_KEY` 放在该 Worktree 未跟踪的 `.env` 中，让两个入口加载同一值：
+
+```powershell
+Set-Location D:\projects\dfm-wt-automation
+$env:DATA_FORMULATOR_HOME = "D:\projects\dfm-runtime\automation"
+$env:AUTOMATION_ENABLED = "true"
+$env:WORKSPACE_BACKEND = "local"
+uv run data_formulator_worker --worker-id "automation-worker-1"
+```
+
+Worker 不监听端口。`Ctrl+C` / SIGTERM 会在当前同步周期后正常停止；只检查一个周期时使用 `uv run data_formulator_worker --once --worker-id "automation-worker-probe"`。不要同时启动两个使用相同 `worker-id` 的进程，也不要让其他 Worktree 指向 automation 数据目录。
+
 ## 必须隔离的资源
 
 | 资源 | 约定 | 原因 |
@@ -78,4 +90,4 @@ yarn run start --host 127.0.0.1 --port 5174 --strictPort
 1. 启动前检查固定端口；被占用时先确认 `OwningProcess`，不自动换端口。
 2. 开发服务器由各自终端管理，优先用 `Ctrl+C` 正常停止。
 3. 不根据端口盲目执行 `Stop-Process` 或 `taskkill`。
-4. 将来如果增加启动脚本，只保留一个轻量 PowerShell 入口，负责实例映射、端口预检、环境变量和本实例 PID；不建立常驻管理服务。
+4. 将来如果增加启动脚本，只保留一个轻量 PowerShell 入口，负责实例映射、端口预检、环境变量和本实例 PID；不在正式 `data_formulator_worker` 之外再建立常驻进程管理服务。

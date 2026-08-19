@@ -41,11 +41,13 @@ TrustGraph 的 `release/v2.8` 是移动分支。开发、测试和问题复现�
 | Workspace 导入导出 | ZIP 保存清洗后的状态和 Workspace snapshot | 直接复用，暂不承载 Recipe/Run |
 | 数据导入 | 上传 CSV/TSV/JSON/Excel；Local Folder 另支持 Parquet/JSONL | 直接复用 |
 | 结果导出 | 表格 CSV/TSV；报告 PNG、打印 PDF、HTML/文本复制 | 直接复用 |
-| 后台 Cron | 已有固定 Published RecipeVersion 的 Schedule、Cron/timezone/DST 求值、事务型单次 Scheduler tick 和 request-independent `worker.run_once()`；尚无常驻 Scheduler/Worker 服务 | 继续实现 heartbeat 和本机服务入口 |
+| 后台 Cron | 已有固定 Published RecipeVersion 的 Schedule、Cron/timezone/DST、长步骤 lease heartbeat，以及正式 `data_formulator_worker` 常驻本机入口 | 继续接 Schedule/Run API 与 UI |
 | Recipe 版本 | 已实现 Artifact Lineage、确定性编译、dry run、发布和手动运行 | 直接复用 |
-| Run 审计 | 已有 Recipe 终态制品、Automation 逻辑 Run 状态机、单次 claim/execute/finish、有限重试、步骤边界取消和 schema drift → Needs Review；尚无查询 API / Runs Inbox | 继续实现 API 与 UI |
+| Run 审计 | 已有 Recipe 终态制品、Automation 逻辑 Run 状态机、常驻 claim/execute/finish、有限重试、长步骤续租、步骤边界取消和 schema drift → Needs Review；尚无查询 API / Runs Inbox | 继续实现 API 与 UI |
 
-截至 2026-08-19，Automation 分支已经把共享目录数据库升级到 schema v3，并落地固定版本 Schedule、Cron/timezone/DST、事务型单次 Scheduler tick，以及逻辑 Run 的 claim/renew/fencing、取消、有限重试和过期 lease 恢复。`AutomationWorker.run_once()` 现可在无 Flask request 的路径中打开明确 identity/Workspace、验证固定 RecipeVersion、使用 default binding 执行 `RecipeExecutor`，并把安全的成功、失败、Needs Review、取消或延迟重试结果写回逻辑 Run；connector classifier 的 `retry=true` 和明确的 SQLite busy 是仅有的自动重试来源。Scheduler 与 Worker 仍都只是一次性调用，长步骤 heartbeat、常驻入口、API 和 Runs Inbox 尚未实现，因此页面关闭后的持续后台自动化仍不可用。
+截至 2026-08-19，Automation 分支已经把共享目录数据库升级到 schema v3，并落地固定版本 Schedule、Cron/timezone/DST、逻辑 Run 的 claim/renew/fencing、取消、有限重试和过期 lease 恢复。`AutomationWorker.run_once()` 可在无 Flask request 的路径中打开明确 identity/Workspace、验证固定 RecipeVersion、使用 default binding 执行 `RecipeExecutor`，并把安全的成功、失败、Needs Review、取消或延迟重试结果写回逻辑 Run；connector classifier 的 `retry=true` 和明确的 SQLite busy 是仅有的自动重试来源。
+
+提交 `61eba9eb` 又增加了长步骤定时 heartbeat 和正式 `data_formulator_worker`：常驻进程每个周期先执行事务型 Scheduler tick，再最多执行一个 queued Run；heartbeat 在同步步骤运行期间持续续租，取消请求也会保持 lease 到下一个安全步骤边界。步骤期间观察到 heartbeat/fencing 失败会阻止终态 manifest，任何 lease 失败都阻止旧 Worker 写逻辑 Run 终态；若失败恰好发生在 Executor 已原子完成 artifact 之后，可能留下未被 Run row 引用的 attempt artifact，后续稳定化阶段负责回收。入口在创建 SQLite、Workspace opener 或 connector registry 前检查 `AUTOMATION_ENABLED=true`、稳定签名和 local Workspace，并与 Web 使用同一绝对 `DATA_FORMULATOR_HOME`；SIGINT/SIGTERM 会在当前同步周期后停止。重新构造 repository/runtime 后消费前一进程已持久化 Run 的合同测试已经通过。因此，显式运行该独立进程时，浏览器页面关闭不再中断 Scheduler/Worker；但 Web/桌面应用不会自动拉起或监督它，Schedule/Run API、Runs Inbox 和完整产品端到端闭环仍未实现。
 
 ## 会话恢复不是执行
 
@@ -84,7 +86,7 @@ TrustGraph 的 `release/v2.8` 是移动分支。开发、测试和问题复现�
 
 SQL View 通过 DuckDB 重新采样；Python 派生表把已保存代码和服务器 HMAC 签名提交到后端，经现有 Sandbox 重跑。这个机制有实际复用价值，但仍缺少后台进程、持久化调度、步骤状态、超时、重试、版本和输出验收。
 
-页面关闭、浏览器限制计时器或服务重启后，都没有可恢复的任务。
+这条前端刷新链自身在页面关闭、浏览器限制计时器或 Web 服务重启后仍没有可恢复任务；新建的 Automation Worker 是另一条持久化执行路径，不能据此把前端 Hook 当成 Scheduler。
 
 源码：
 
