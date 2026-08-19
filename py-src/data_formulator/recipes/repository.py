@@ -12,6 +12,10 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
 
+from data_formulator.automation.db import (
+    AutomationDatabase,
+    AutomationDatabaseError,
+)
 from data_formulator.recipes.artifact_store import (
     RecipeArtifactError,
     RecipeArtifactStore,
@@ -101,12 +105,14 @@ class LoadedRecipeVersion:
 class RecipeRepository:
     """Own Recipe catalog state while immutable bytes remain in the Workspace."""
 
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = AutomationDatabase.SCHEMA_VERSION
 
     def __init__(self, database_path: Path | str) -> None:
-        self._database_path = Path(database_path).resolve()
-        self._database_path.parent.mkdir(parents=True, exist_ok=True)
-        self._initialize()
+        try:
+            self._database = AutomationDatabase(database_path)
+        except AutomationDatabaseError as exc:
+            raise RecipeRepositoryError(str(exc)) from exc
+        self._database_path = self._database.database_path
 
     @classmethod
     def for_data_home(cls) -> "RecipeRepository":
@@ -458,6 +464,26 @@ class RecipeRepository:
                 raise RecipeStateError(
                     "Only a published RecipeVersion can be archived"
                 )
+            enabled_schedule = connection.execute(
+                """
+                SELECT 1
+                FROM schedules
+                WHERE version_id = ?
+                    AND identity_id = ? AND workspace_id = ?
+                    AND enabled = 1
+                LIMIT 1
+                """,
+                (
+                    version_id,
+                    workspace.identity_id,
+                    workspace.workspace_id,
+                ),
+            ).fetchone()
+            if enabled_schedule is not None:
+                raise RecipeStateError(
+                    "Disable every enabled Schedule before archiving this "
+                    "RecipeVersion"
+                )
             connection.execute(
                 """
                 UPDATE recipe_versions
@@ -525,120 +551,8 @@ class RecipeRepository:
             rows = connection.execute(query, parameters).fetchall()
         return tuple(self._version_from_row(row) for row in rows)
 
-    def _initialize(self) -> None:
-        connection = self._connect()
-        try:
-            connection.execute("BEGIN IMMEDIATE")
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS automation_schema_migrations (
-                    version INTEGER PRIMARY KEY,
-                    applied_at TEXT NOT NULL
-                )
-                """
-            )
-            applied = {
-                row[0]
-                for row in connection.execute(
-                    "SELECT version FROM automation_schema_migrations"
-                )
-            }
-            unexpected = applied - set(range(1, self.SCHEMA_VERSION + 1))
-            if unexpected:
-                raise RecipeRepositoryError(
-                    f"Unsupported automation database migration(s): {sorted(unexpected)}"
-                )
-            if 1 not in applied:
-                self._apply_schema_v1(connection)
-                connection.execute(
-                    """
-                    INSERT INTO automation_schema_migrations (version, applied_at)
-                    VALUES (?, ?)
-                    """,
-                    (1, self._now()),
-                )
-            if 2 not in applied:
-                self._apply_schema_v2(connection)
-                connection.execute(
-                    """
-                    INSERT INTO automation_schema_migrations (version, applied_at)
-                    VALUES (?, ?)
-                    """,
-                    (2, self._now()),
-                )
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
-
-    @staticmethod
-    def _apply_schema_v1(connection: sqlite3.Connection) -> None:
-        connection.execute(
-            """
-            CREATE TABLE recipes (
-                recipe_id TEXT PRIMARY KEY,
-                identity_id TEXT NOT NULL,
-                workspace_id TEXT NOT NULL,
-                name TEXT NOT NULL,
-                description TEXT NOT NULL,
-                created_by TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                UNIQUE (recipe_id, identity_id, workspace_id)
-            )
-            """
-        )
-        connection.execute(
-            """
-            CREATE TABLE recipe_versions (
-                version_id TEXT PRIMARY KEY,
-                recipe_id TEXT NOT NULL,
-                identity_id TEXT NOT NULL,
-                workspace_id TEXT NOT NULL,
-                recipe_hash TEXT NOT NULL,
-                status TEXT NOT NULL CHECK (
-                    status IN ('draft', 'validated', 'published', 'archived')
-                ),
-                artifact_path TEXT NOT NULL,
-                manifest_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                validated_at TEXT,
-                published_at TEXT,
-                archived_at TEXT,
-                validation_run_id TEXT,
-                validation_manifest_hash TEXT,
-                UNIQUE (version_id, identity_id, workspace_id),
-                FOREIGN KEY (recipe_id, identity_id, workspace_id)
-                    REFERENCES recipes (recipe_id, identity_id, workspace_id)
-                    ON DELETE RESTRICT
-            )
-            """
-        )
-        connection.execute(
-            """
-            CREATE INDEX recipe_versions_scope_status_idx
-            ON recipe_versions (identity_id, workspace_id, status, created_at)
-            """
-        )
-
-    @staticmethod
-    def _apply_schema_v2(connection: sqlite3.Connection) -> None:
-        connection.execute(
-            "ALTER TABLE recipe_versions ADD COLUMN validation_artifact_path TEXT"
-        )
-        connection.execute(
-            "ALTER TABLE recipe_versions ADD COLUMN validation_binding_hash TEXT"
-        )
-
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self._database_path, timeout=5.0)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA busy_timeout = 5000")
-        connection.execute("PRAGMA journal_mode = WAL")
-        return connection
+        return self._database.connect()
 
     @staticmethod
     def _require_row_scope(
