@@ -41,11 +41,11 @@ TrustGraph 的 `release/v2.8` 是移动分支。开发、测试和问题复现�
 | Workspace 导入导出 | ZIP 保存清洗后的状态和 Workspace snapshot | 直接复用，暂不承载 Recipe/Run |
 | 数据导入 | 上传 CSV/TSV/JSON/Excel；Local Folder 另支持 Parquet/JSONL | 直接复用 |
 | 结果导出 | 表格 CSV/TSV；报告 PNG、打印 PDF、HTML/文本复制 | 直接复用 |
-| 后台 Cron | 已有固定 Published RecipeVersion 的 Schedule、Cron/timezone/DST 求值和事务型单次 Scheduler tick；尚无 Worker 或常驻服务 | 继续实现 Worker/服务入口 |
+| 后台 Cron | 已有固定 Published RecipeVersion 的 Schedule、Cron/timezone/DST 求值、事务型单次 Scheduler tick 和 request-independent `worker.run_once()`；尚无常驻 Scheduler/Worker 服务 | 继续实现 heartbeat 和本机服务入口 |
 | Recipe 版本 | 已实现 Artifact Lineage、确定性编译、dry run、发布和手动运行 | 直接复用 |
-| Run 审计 | 已有 Recipe 终态制品、Automation 逻辑 Run 状态机、lease/fencing、取消和恢复；尚无执行闭环、查询 API / Runs Inbox | 继续实现 Worker、API 与 UI |
+| Run 审计 | 已有 Recipe 终态制品、Automation 逻辑 Run 状态机、单次 claim/execute/finish、有限重试、步骤边界取消和 schema drift → Needs Review；尚无查询 API / Runs Inbox | 继续实现 API 与 UI |
 
-截至 2026-08-19，Automation 分支已经把共享目录数据库升级到 schema v3：`RecipeRepository` 与 `AutomationRepository` 共同使用 `AutomationDatabase`，并已落地 `schedules`、`runs`、scope 外键、固定版本、归档保护、Cron/timezone/DST 求值、事务型单次 Scheduler tick，以及逻辑 Run 的 claim/renew/fencing、取消、有限重试和过期 lease 恢复。Scheduler 目前只是可测试的一次性调用，Run repository 也不执行 Recipe；`worker.run_once()`、错误分类接线、heartbeat、常驻入口、API 和 Runs Inbox 尚未实现，因此后台自动化闭环仍不可用。
+截至 2026-08-19，Automation 分支已经把共享目录数据库升级到 schema v3，并落地固定版本 Schedule、Cron/timezone/DST、事务型单次 Scheduler tick，以及逻辑 Run 的 claim/renew/fencing、取消、有限重试和过期 lease 恢复。`AutomationWorker.run_once()` 现可在无 Flask request 的路径中打开明确 identity/Workspace、验证固定 RecipeVersion、使用 default binding 执行 `RecipeExecutor`，并把安全的成功、失败、Needs Review、取消或延迟重试结果写回逻辑 Run；connector classifier 的 `retry=true` 和明确的 SQLite busy 是仅有的自动重试来源。Scheduler 与 Worker 仍都只是一次性调用，长步骤 heartbeat、常驻入口、API 和 Runs Inbox 尚未实现，因此页面关闭后的持续后台自动化仍不可用。
 
 ## 会话恢复不是执行
 

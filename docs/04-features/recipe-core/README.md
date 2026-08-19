@@ -267,7 +267,7 @@ M2-D 实施结果：
 - 现有 Workspace `content_hash` 是抽样 MD5；Artifact 完整性与 schema fingerprint 必须使用独立、明确版本的算法。
 - Azure Blob 首发支持取决于正式 artifact store 接口；不能使用 scratch。
 - 数据库纵向切片使用已有环境或测试替身，不建立 Docker 测试依赖。
-- Worker 调度、lease 与 Run catalog 属于 Automation Workbench；Recipe Core 已提供无 request opener 和确定性 service，但尚未接 Worker 生命周期。
+- Worker 调度、lease 与 Run catalog 属于 Automation Workbench；Recipe Core 提供的无 request opener 和确定性 executor 已由 Automation 提交 `c1181e30` 接入单次 Worker 生命周期，常驻 heartbeat/进程入口仍不属于 Recipe Core。
 - 原有交互 Web 未配置稳定 key 时只在当前 Flask 进程内签名和验证，重启后不承诺复用；Recipe 生命周期和后续 Worker 必须显式共享 `DF_CODE_SIGNING_SECRET` 或 `FLASK_SECRET_KEY`，缺少时安全拒绝且不打开 Workspace/connector。
 - Recipes 目前只显示本次请求返回的 Run 摘要；持久历史、筛选和处置仍归 Automation Workbench 的 Runs Inbox。
 - Run 目录以最终 manifest 作为完成标记；进程崩溃留下的无 manifest 目录安全地不可读取，但自动回收策略留给 Automation Workbench 的维护任务。

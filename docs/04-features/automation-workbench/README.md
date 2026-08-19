@@ -8,7 +8,7 @@
 | Worktree | `D:\projects\dfm-wt-automation` |
 | 本机实例 | `automation`：后端 5570、Vite 5176、数据目录 `D:\projects\dfm-runtime\automation` |
 | 基线 | Recipe Core `3cd7ee12`；6 个 M3-A 提交已线性重放，M3-A tip 为 `fd1f347c` |
-| 当前阶段 | M3-B2/B3 Scheduler 与 Run 生命周期已完成；进入 B4 `worker.run_once()` 执行闭环 |
+| 当前阶段 | M3-B4 `worker.run_once()` 单次执行闭环已完成；下一步补常驻 heartbeat/进程入口 |
 | 交接 | [Automation Workbench 分支交接](./HANDOFF.md) |
 
 ## 目标
@@ -162,7 +162,7 @@ running ── retryable failure / expired lease, attempts < 3 ──→ queued
 - 逻辑 `run_id` 对外稳定；每次 Executor 尝试使用新的 artifact run id。Run row 只保存可校验的最终 artifact reference、binding hash、尝试次数和安全错误，不保存参数值、凭据、连接参数或绝对路径。
 - claim 写入 lease owner + 随机 fencing token；renew/finish/fail 都校验 owner、token 和未过期时间。过期 Worker 即使晚到，也不能覆盖新尝试结果。
 - queued 取消直接终结；running 取消只写请求，由 Worker 在步骤边界确认并产出 cancelled manifest。
-- repository 强制最多 3 次总尝试（初次 + 2 次重试）和 `available_at` 延迟领取，但只接受调用方给出的显式 retryable 决定；把现有 connector classifier 的 `retry=true` 与明确列出的 SQLite busy 接入该决定仍属于 B4 Worker 工作。schema drift、签名、scope、参数、代码和输出校验永不重试。
+- repository 强制最多 3 次总尝试（初次 + 2 次重试）和 `available_at` 延迟领取，但只接受调用方给出的显式 retryable 决定；Worker 已只把现有 connector classifier 的 `retry=true` 与明确识别的 SQLite locked/busy 接入该决定。schema drift、签名、scope、参数、代码和输出校验永不重试。
 - `succeeded` / `needs_review` 必须保存完整且安全的相对 artifact reference；逻辑 Run id 不得复用为 attempt artifact id。`failed` / `needs_review` 必须保存成对的安全错误 code/message，`succeeded` / `cancelled` 不得夹带错误。
 - Scheduled Run 使用固定 Recipe/default binding；M3 不新增 Schedule 参数编辑器。现有同步 manual run 在 Runs API 切换到持久化 enqueue 前保持兼容，不冒充后台历史。
 
@@ -171,17 +171,18 @@ running ── retryable failure / expired lease, attempts < 3 ──→ queued
 1. [x] **B1 迁移所有权**：唯一 DB helper、v1 → v2 → v3、重复初始化、失败回滚、未来版本拒绝；未注册 route。
 2. [x] **B2 Schedule repository**：列表/编辑、数值 Cron、timezone/DST、停机补偿、重复 tick 幂等，以及同事务入队并推进 `next_run_at` 已完成。
 3. [x] **B3 Run repository**：合法状态转换、claim/fencing/renew、取消、延迟/有限重试和过期 lease 恢复已完成，全部使用注入时钟且无真实 sleep。
-4. [ ] **B4 单次 tick/execute**：`scheduler.tick()` 已完成；下一步实现 `worker.run_once()`，复用显式 Workspace/connector opener 和 `RecipeExecutor`。常驻 CLI、heartbeat、API 和 UI 后接。
+4. [x] **B4 单次 tick/execute**：`scheduler.tick()` 与 `worker.run_once()` 均已完成；Worker 复用显式 Workspace/connector opener 和 `RecipeExecutor`，完成 claim → execute → finish/retry、独立 attempt artifact、安全错误分类、步骤边界续租/取消和 Needs Review。常驻 CLI、长步骤 heartbeat、API 和 UI 后接。
 
-当前实现没有引入 Cron 第三方依赖、常驻线程、API、UI 或并发 2。Cron/timezone/DST、停机补偿、事务回滚、lease/fencing、取消和恢复均由注入时钟合同测试覆盖；`scheduler.tick()` 只是一次性调用，不能冒充后台服务。
+当前实现没有引入 Cron 第三方依赖、常驻线程、API、UI 或并发 2。Cron/timezone/DST、停机补偿、事务回滚、lease/fencing、步骤边界取消、分类重试和恢复均由注入时钟合同测试覆盖；`scheduler.tick()` 与 `worker.run_once()` 都只是一次性调用，不能冒充后台服务。
 
 ## M3 后续实施顺序
 
 1. [x] Recipe Core 修复稳定签名配置回归，Automation rebase 到新基线并完成三项基础验证。
 2. [x] 本分支完成“自动化项目 → Recipe/配方”术语收口及聚焦前端测试。
 3. [x] 完成 M3-B Schedule/Run repository 和单次 `scheduler.tick()`。
-4. 实现 `worker.run_once()`，接入错误分类、步骤边界取消、lease heartbeat、Web/Worker 路径一致性和 `data_formulator_worker`。
-5. 增加 Schedule/Run API、Runs Inbox 和 Needs Review 处置，再做页面关闭及进程重启验证。
+4. [x] 实现 `worker.run_once()`，接入白名单错误分类、步骤边界续租/取消、固定版本/default binding 和 Web/Worker 数据根一致性。
+5. 增加覆盖长步骤的 lease heartbeat、正式 `data_formulator_worker` 入口和 Scheduler/Worker 本机进程生命周期。
+6. 增加 Schedule/Run API、Runs Inbox 和 Needs Review 处置，再做页面关闭及进程重启验证。
 
 ## 开发记录
 
@@ -201,6 +202,7 @@ running ── retryable failure / expired lease, attempts < 3 ──→ queued
 | 2026-08-19 | M3-B 开发准备 | 核对分支拓扑、单一 Automation 入口、schema v2 迁移冲突和 Worker/Executor 复用点；在 Recipe 关闭签名 P0，Automation 线性同步新基线并把 Project 术语收口为 Recipe | Recipe 聚焦 67 passed、1 skipped；全量后端 2251 passed、16 skipped、1 xfailed；Recipe 前端 399 passed、生产构建通过；Automation 聚焦前端 11 passed；文档检查通过 | `fix: prepare automation persistence` |
 | 2026-08-19 | M3-B1 持久化契约 | 抽取唯一 `AutomationDatabase` migration owner 并升级 schema v3；增加固定 Published RecipeVersion 的 Schedule、归档保护、独立 Automation Run 状态/字段及按计划时刻幂等 queued 入队；未接 route、线程或 Worker | 聚焦 22 passed；Recipe/Automation 119 passed、2 skipped；全量后端 2262 passed、16 skipped、1 xfailed；前端 49 files / 405 tests；生产构建和 wheel 构建通过 | `9f3056ef feat: establish automation persistence contracts` |
 | 2026-08-19 | M3-B2/B3 调度与状态机 | 增加数值五段 Cron、timezone/DST、单次事务型 Scheduler tick、停机补偿和重启用排期；补全 Run claim/renew/fencing、取消、延迟/有限重试、过期恢复及安全终态引用/错误合同；未接 Worker、route、线程或 UI | 聚焦 58 passed；Recipe/Automation 155 passed、2 skipped；全量后端 2298 passed、16 skipped、1 xfailed；前端 49 files / 405 tests；生产构建和 wheel 构建通过 | `e8110e27 feat: add automation scheduling lifecycle` |
+| 2026-08-19 | M3-B4 单次 Worker | 增加 request-independent `worker.run_once()`、统一绝对数据根、独立 attempt artifact、connector/SQLite 白名单重试、步骤成功/失败边界续租与取消、schema drift → Needs Review；未接常驻线程、CLI、route 或 UI | Worker/Executor 21 passed、1 skipped；全量后端 2312 passed、16 skipped、1 xfailed；前端 49 files / 405 tests；生产构建和 wheel 构建通过 | `c1181e30 feat: execute queued automation runs` |
 
 M3-B1 全量验证第一次继承 Codex 终端的 `cp936` / `TERM=dumb`，触发 7 个既有插件编码和 spinner 环境相关失败；未修改这些非本 Feature 文件。显式使用 `PYTHONUTF8=1`、`TERM=xterm` 后，相关 8 项及全量 2279 项收集均通过。
 
@@ -219,9 +221,9 @@ M3-B1 全量验证第一次继承 Codex 终端的 `cp936` / `TERM=dumb`，触发
 - 当前 Worktree 已基于 Recipe Core `3cd7ee12` 重放 Automation 提交；后续 Schedule/Run 工作不得回写 Recipe Core 分支。
 - Web、Worker 和 SQLite 直接在本机运行，不提供 Docker 或 Compose 方案。
 - SQLite 数据库和 artifact store 必须由 Web/Worker 解析到相同绝对路径。
-- 当前已有单次事务型 Scheduler tick，但没有负责调用它的常驻服务、feature-flag 启动边界或跨进程生命周期；不能用临时 Flask/脚本循环冒充正式 Scheduler。
-- Run repository 已覆盖过期 lease、过期后 fencing、取消和重试上限；真实 Worker 崩溃、heartbeat、步骤边界取消及 attempt artifact 清理仍需 B4 集成测试。
-- retryable 目前是 repository 输入合同，尚未与 connector classifier/SQLite busy 分类接线；在 Worker 完成前不能宣称自动重试策略已经闭环。
+- 当前已有单次事务型 Scheduler tick 和受 feature flag/稳定签名保护的单次 Worker，但没有负责循环调用它们的常驻服务或跨进程生命周期；不能用临时 Flask/脚本循环冒充正式 Scheduler/Worker。
+- Worker 已覆盖步骤成功/失败边界的续租、取消和 fencing 失败关闭；覆盖单个长步骤的定时 heartbeat、真实进程崩溃/重启和无 manifest attempt artifact 回收仍待后续集成。
+- connector classifier / SQLite busy 的有限重试已经闭环并验证不会持久化原始敏感错误；真实外部 connector 仍需使用用户已有端点补验，不建立 Docker 前置条件。
 
 ## 合并前检查
 
@@ -231,7 +233,7 @@ M3-B1 全量验证第一次继承 Codex 终端的 `cp936` / `TERM=dumb`，触发
 - [ ] 页面关闭后 Schedule 仍能创建 Run。
 - [x] repository 合同覆盖过期 running Run 的重排队/终结及旧 token fencing；真实 Worker 进程重启仍待验证。
 - [x] 同一 Schedule/计划时间唯一；重复 tick 幂等，停机跨多个周期最多创建一个补偿 Run，并把下一次推进到当前时刻之后。
-- [ ] Schema drift 进入 Needs Review。
-- [ ] Automation flag 关闭时 Worker、API、UI 均不可用。
-- [ ] 正常 Run 路径没有 LLM/TrustGraph 调用。
+- [x] Schema drift 进入 Needs Review，并保存可校验 attempt artifact。
+- [x] Automation flag 关闭时现有 Worker、Recipe API 和 UI 均不可用；常驻 Scheduler 服务尚未实现。
+- [x] 正常 Run 路径没有 LLM、TrustGraph 或 Workflow Replay 调用。
 - [x] `uv run pytest`、`yarn test`、`yarn build` 通过。
