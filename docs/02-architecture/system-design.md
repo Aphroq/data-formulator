@@ -219,18 +219,19 @@ SQLite 第一版只保留四张主表：
 
 `runs` 对 `(schedule_id, scheduled_for)` 建唯一约束，防止重复入队。
 
-schema v3 已由 `data_formulator.automation.db.AutomationDatabase` 统一拥有；`RecipeRepository` 和 `AutomationRepository` 都通过它解析绝对路径、打开 WAL/foreign keys/`busy_timeout` 连接并执行 v1 → v2 → v3 顺序 migration。v2 原地升级、重复打开、事务回滚和未知未来版本失败关闭都有合同测试，任何 repository 都不得重新维护自己的 schema version 或 migration 分支。
+schema v4 已由 `data_formulator.automation.db.AutomationDatabase` 统一拥有；`RecipeRepository` 和 `AutomationRepository` 都通过它解析绝对路径、打开 WAL/foreign keys/`busy_timeout` 连接并执行 v1 → v2 → v3 → v4 顺序 migration。v3 引入 Schedule/Run，v4 为 Run 增加 `active_attempt_run_id` 与 `cleanup_attempt_run_id`。v2 原地升级、重复打开、事务回滚和未知未来版本失败关闭都有合同测试，任何 repository 都不得重新维护自己的 schema version 或 migration 分支。
 
 Schedule v1 持久化规范化的五段 Cron 表达式和 IANA timezone；“每日”只是 UI 对 Cron 的受控简化。v1 Cron 只接受数值、列表、升序范围和步长，day-of-month/day-of-week 使用标准 union 语义；春季跳时中不存在的墙上分钟跳过，秋季回拨的重复墙上分钟只执行一次。`version_id` 创建后不可修改，切换 RecipeVersion 必须新建 Schedule。存在 enabled Schedule 时归档其 RecipeVersion 必须失败关闭，用户需先显式停用 Schedule；已绑定 archived version 的 Schedule 不允许重新启用。归档不删除不可变版本字节，归档前已经入队并固定该版本的 Run 仍可完成，避免管理动作静默改写既有执行计划。`next_run_at` 统一按 UTC 持久化，解析和展示时才使用 Schedule timezone；重新启用时从启用时刻之后重算，不补跑显式停用期间的周期。
 
-持久化 Run 使用独立的队列状态，不复用 Recipe Core 的终态制品枚举。Run 至少保存明确 scope、固定 version、触发类型、`scheduled_for`、尝试次数、下一次可领取时间、lease owner/token/expiry、取消请求、最终安全错误和可校验 artifact reference。逻辑 `run_id` 与每次 Executor 尝试的 artifact run id 分开，避免崩溃恢复或重试与已有的不完整/不可变运行目录冲突。SQLite 不保存参数值、连接参数、凭据或绝对 artifact 路径；v1 Schedule 和持久化 manual Run 都只运行固定 Recipe/default binding。
+持久化 Run 使用独立的队列状态，不复用 Recipe Core 的终态制品枚举。Run 至少保存明确 scope、固定 version、触发类型、`scheduled_for`、尝试次数、下一次可领取时间、lease owner/token/expiry、取消请求、内部 active/cleanup attempt id、最终安全错误和可校验 artifact reference。逻辑 `run_id` 与每次 Executor 尝试的 artifact run id 分开，避免崩溃恢复或重试与已有的不完整/不可变运行目录冲突；active/cleanup id 不进入公共 API。SQLite 不保存参数值、连接参数、凭据或绝对 artifact 路径；v1 Schedule 和持久化 manual Run 都只运行固定 Recipe/default binding。
 
-当前 repository 已支持 Schedule 创建、查询、列表、编辑、启停和按 `(schedule_id, scheduled_for)` 幂等创建 queued Run；单次 Scheduler tick 会在一个 `BEGIN IMMEDIATE` 事务中完成到期扫描、最多一个停机补偿 Run 入队和 `next_run_at` 推进，任一 Schedule 计算失败时整批回滚。Run repository 已实现 scoped list/get、每次调用生成独立逻辑 Run 的持久化 manual enqueue、合法状态转换、claim/renew/fencing、运行中取消请求、最多 3 次总尝试和过期 lease 恢复；`AutomationWorker.run_once()` 把一次 claim、明确 scope 打开、固定版本验证、确定性执行和终态写回接成闭环，`AutomationRuntime` 与 `data_formulator_worker` 则负责正式的常驻本机进程生命周期。
+当前 repository 已支持 Schedule 创建、查询、列表、编辑、启停和按 `(schedule_id, scheduled_for)` 幂等创建 queued Run；单次 Scheduler tick 会在一个 `BEGIN IMMEDIATE` 事务中完成到期扫描、最多一个停机补偿 Run 入队和 `next_run_at` 推进，任一 Schedule 计算失败时整批回滚。Run repository 已实现 scoped list/get、每次调用生成独立逻辑 Run 的持久化 manual enqueue、合法状态转换、claim/renew/fencing、运行中取消请求、最多 3 次总尝试、过期 lease 恢复和精确 attempt cleanup 门禁；`AutomationWorker.run_once()` 把恢复、清理、claim、明确 scope 打开、固定版本验证、确定性执行和终态写回接成闭环，`AutomationRuntime` 与 `data_formulator_worker` 则负责正式的常驻本机进程生命周期。
 
 ### Scheduler 与 Worker
 
 - Scheduler 以可注入时钟执行单次 tick，扫描到期 Schedule，并在同一事务中创建 queued Run、推进 `next_run_at`。服务停机跨过多个周期时，每个 Schedule 最多合并为一个补偿 Run，再推进到严格晚于当前时刻的下一次，避免重启后无界补跑。
-- Run repository 通过带随机 fencing token 的 lease 领取和续租 Run；过期 lease 可重新排队或在尝试耗尽/已请求取消时关闭，旧 Worker 失去 token 后不得覆盖新尝试的完成状态。Worker 在开始、成功和失败步骤边界同步续租并检查取消，每个已领取 attempt 另有定时 heartbeat 覆盖同步长步骤；即使 heartbeat 已观察到取消，也继续续租到 Executor 到达下一个安全边界。步骤期间观察到 heartbeat/fencing 失败时 Executor 不写终态 manifest；任何 heartbeat 失败、续租异常或无法安全停止都禁止旧 Worker 写逻辑 Run 终态。若失败发生在 Executor 已原子完成 artifact 之后，该 artifact 可能成为未引用 attempt，后续回收不能把它误接到逻辑 Run。
+- Run repository 通过带随机 fencing token 的 lease 领取和续租 Run；Worker 在创建物理目录前以同一 fencing token 登记 active attempt id。过期恢复把 active id 原子移动为 cleanup id，带 cleanup id 的 queued Run 不能重领。Worker 只打开该行声明的 identity/Workspace 并定点处置：无 manifest 目录先改名隔离、写 retired tombstone 后删除，目录尚不存在时也写 tombstone，因而旧进程不能迟到创建同一 id；已有 manifest 的 attempt 原样保留且不挂接到逻辑 Run。清理完成以 compare-and-set 清除同一 cleanup id，之后才允许下一次 claim。
+- 旧 Worker 失去 token 后不得覆盖新尝试的完成状态。Worker 在开始、成功和失败步骤边界同步续租并检查取消，每个已领取 attempt 另有定时 heartbeat 覆盖同步长步骤；即使 heartbeat 已观察到取消，也继续续租到 Executor 到达下一个安全边界。步骤期间观察到 heartbeat/fencing 失败时 Executor 不写终态 manifest；任何 heartbeat 失败、续租异常或无法安全停止都禁止旧 Worker 写逻辑 Run 终态。若失败发生在 Executor 已原子完成 artifact 之后，该 artifact 可能成为保留的未引用 attempt，但不能被误接为新尝试结果。
 - `AutomationRuntime` 每个周期严格按 `Scheduler.tick()` → `Worker.run_once()` 执行，当前并发固定为 1；未来若开放显式并发配置，上限仍为 2，并且必须先补同 Workspace 写入竞争验证。
 - `data_formulator_worker` 是 wheel 中的正式 console script。默认常驻，也支持 `--once` 做一个确定性运维周期；默认 poll/lease/heartbeat 分别为 1/30/10 秒，heartbeat 必须短于 lease。常驻循环只对白名单 SQLite locked/busy 延后重试，其他意外错误让进程安全退出。
 - Worker CLI 与 Web 加载同一组仓库/包内 `.env`，但仍要求进程启动前解析到相同的绝对 `DATA_FORMULATOR_HOME`。它在任何数据库、Workspace 或 connector 初始化前验证 feature flag、稳定签名和 `WORKSPACE_BACKEND=local`；配置错误只输出固定安全信息。SIGINT/SIGTERM 只请求优雅停止，当前同步 Run 完成前 heartbeat 继续工作。

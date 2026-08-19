@@ -197,6 +197,79 @@ def test_expired_worker_cannot_finish_after_the_run_is_reclaimed(tmp_path) -> No
     assert finished.lease_token is None
 
 
+def test_expired_attempt_must_be_cleaned_before_the_run_is_reclaimed(
+    tmp_path,
+) -> None:
+    repository, clock, _schedule, queued = _seed_repository(tmp_path)
+    claimed = repository.claim_next_run(
+        worker_id="worker-a",
+        lease_duration=timedelta(seconds=30),
+    )
+    assert claimed is not None
+    attempt_run_id = "run_" + "a" * 32
+
+    started = repository.start_run_attempt(
+        "user:alice",
+        "ws-1",
+        queued.run_id,
+        worker_id="worker-a",
+        lease_token="lease-1",
+        attempt_run_id=attempt_run_id,
+    )
+
+    assert started.active_attempt_run_id == attempt_run_id
+    assert started.cleanup_attempt_run_id is None
+    digest = HashDigest.sha256(b"wrong-attempt")
+    with pytest.raises(AutomationStateError, match="active physical attempt"):
+        repository.finish_run(
+            "user:alice",
+            "ws-1",
+            queued.run_id,
+            worker_id="worker-a",
+            lease_token="lease-1",
+            status=AutomationRunStatus.SUCCEEDED,
+            artifact_run_id="run_" + "b" * 32,
+            artifact_path="artifacts/recipe-runs/run_" + "b" * 32,
+            manifest_hash=digest,
+            binding_hash=digest,
+        )
+    clock.advance(seconds=31)
+    recovered = repository.recover_expired_runs()
+
+    assert len(recovered) == 1
+    assert recovered[0].status is AutomationRunStatus.QUEUED
+    assert recovered[0].active_attempt_run_id is None
+    assert recovered[0].cleanup_attempt_run_id == attempt_run_id
+    assert repository.claim_next_run(
+        worker_id="worker-b",
+        lease_duration=timedelta(seconds=30),
+    ) is None
+
+    unchanged = repository.complete_run_attempt_cleanup(
+        "user:alice",
+        "ws-1",
+        queued.run_id,
+        attempt_run_id="run_" + "b" * 32,
+    )
+    assert unchanged.cleanup_attempt_run_id == attempt_run_id
+
+    cleaned = repository.complete_run_attempt_cleanup(
+        "user:alice",
+        "ws-1",
+        queued.run_id,
+        attempt_run_id=attempt_run_id,
+    )
+    assert cleaned.cleanup_attempt_run_id is None
+
+    reclaimed = repository.claim_next_run(
+        worker_id="worker-b",
+        lease_duration=timedelta(seconds=30),
+    )
+    assert reclaimed is not None
+    assert reclaimed.run_id == queued.run_id
+    assert reclaimed.attempt_count == 2
+
+
 def test_queued_and_running_cancellation_never_reopen_terminal_state(
     tmp_path,
 ) -> None:

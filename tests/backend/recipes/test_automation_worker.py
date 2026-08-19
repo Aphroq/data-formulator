@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sqlite3
+import subprocess
+import sys
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -34,6 +38,67 @@ from data_formulator.security.code_signing import CodeSigningConfigurationError
 
 
 pytestmark = [pytest.mark.backend]
+
+
+_HARD_KILL_WORKER_SCRIPT = r"""
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from uuid import UUID
+
+from data_formulator.automation.repository import AutomationRepository
+from data_formulator.automation.worker import AutomationWorker
+from data_formulator.recipes.openers import LocalWorkspaceOpener
+from data_formulator.recipes.repository import RecipeRepository
+
+
+class BlockingLoader:
+    def __init__(self, marker):
+        self.marker = marker
+
+    def fetch_data_as_arrow(self, source_table, import_options):
+        self.marker.write_text("started", encoding="utf-8")
+        while True:
+            time.sleep(0.1)
+
+    def get_safe_params(self):
+        return {}
+
+    def get_column_types(self, source_table):
+        raise NotImplementedError
+
+
+class ConnectorOpener:
+    def __init__(self, marker):
+        self.marker = marker
+
+    def open(self, identity_id, source_id):
+        return BlockingLoader(self.marker)
+
+
+data_home = Path(sys.argv[1]).resolve()
+database_path = data_home / "automation" / "automation.db"
+marker = data_home / "hard-kill-worker.started"
+
+
+def clock():
+    return datetime(2026, 8, 20, 9, tzinfo=timezone.utc)
+
+
+AutomationWorker(
+    AutomationRepository(database_path, clock=clock),
+    RecipeRepository(database_path),
+    LocalWorkspaceOpener(data_home),
+    ConnectorOpener(marker),
+    worker_id="hard-kill-worker",
+    enabled=True,
+    clock=clock,
+    lease_duration=timedelta(seconds=1),
+    heartbeat_interval=timedelta(milliseconds=100),
+    attempt_id_factory=lambda: UUID("d" * 32),
+).run_once()
+"""
 
 
 class _MutableClock:
@@ -270,6 +335,8 @@ def test_worker_refuses_disabled_or_unsigned_execution_before_claim(
 
 def test_worker_returns_none_when_no_run_is_available() -> None:
     automation = Mock()
+    automation.recover_expired_runs.return_value = ()
+    automation.list_runs_pending_attempt_cleanup.return_value = ()
     automation.claim_next_run.return_value = None
     workspace_opener = Mock()
     worker = AutomationWorker(
@@ -570,6 +637,105 @@ def test_worker_never_finalizes_after_lease_fencing_loss(
     )
     assert attempt_dir.is_dir()
     assert not (attempt_dir / "manifest.json").exists()
+
+    clock.advance(seconds=31)
+    replacement = _worker(
+        data_home,
+        recipes,
+        automation,
+        clock,
+        _ConnectorOpener(_WorkerLoader()),
+        attempt_ids=("b",),
+    ).run_once()
+
+    assert replacement is not None
+    assert replacement.status is AutomationRunStatus.SUCCEEDED
+    assert replacement.attempt_count == 2
+    assert replacement.artifact_run_id == "run_" + "b" * 32
+    assert replacement.active_attempt_run_id is None
+    assert replacement.cleanup_attempt_run_id is None
+    assert not attempt_dir.exists()
+
+
+def test_worker_recovers_an_incomplete_attempt_after_process_termination(
+    tmp_path,
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+) -> None:
+    data_home, workspace, recipes, automation, clock, _schedule, queued = (
+        _seed_queued_run(tmp_path, recipe_workspace, executable_recipe)
+    )
+    marker = data_home / "hard-kill-worker.started"
+    project_root = Path(__file__).resolve().parents[3]
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(
+        filter(
+            None,
+            (
+                str(project_root / "py-src"),
+                environment.get("PYTHONPATH"),
+            ),
+        )
+    )
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            _HARD_KILL_WORKER_SCRIPT,
+            str(data_home),
+        ],
+        cwd=project_root,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 15
+        while not marker.exists() and time.monotonic() < deadline:
+            if process.poll() is not None:
+                _stdout, stderr = process.communicate()
+                pytest.fail(f"Hard-kill Worker exited before execution: {stderr}")
+            time.sleep(0.05)
+        assert marker.exists(), "Hard-kill Worker did not enter the load step"
+
+        running = automation.get_run(
+            workspace.identity_id,
+            workspace.workspace_id,
+            queued.run_id,
+        )
+        attempt_run_id = "run_" + "d" * 32
+        assert running.status is AutomationRunStatus.RUNNING
+        assert running.active_attempt_run_id == attempt_run_id
+        attempt_dir = workspace.confined_root.resolve(
+            f"artifacts/recipe-runs/{attempt_run_id}"
+        )
+        assert attempt_dir.is_dir()
+        assert not (attempt_dir / "manifest.json").exists()
+
+        process.terminate()
+        process.wait(timeout=10)
+        assert process.returncode != 0
+
+        clock.advance(seconds=2)
+        replacement = _worker(
+            data_home,
+            recipes,
+            automation,
+            clock,
+            _ConnectorOpener(_WorkerLoader()),
+            attempt_ids=("e",),
+        ).run_once()
+
+        assert replacement is not None
+        assert replacement.status is AutomationRunStatus.SUCCEEDED
+        assert replacement.attempt_count == 2
+        assert replacement.artifact_run_id == "run_" + "e" * 32
+        assert not attempt_dir.exists()
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=10)
 
 
 def test_worker_renews_lease_while_a_long_step_is_still_running(

@@ -63,6 +63,8 @@ class StoredAutomationRun:
     lease_token: str | None
     lease_expires_at: str | None
     cancel_requested_at: str | None
+    active_attempt_run_id: str | None
+    cleanup_attempt_run_id: str | None
     artifact_run_id: str | None
     artifact_path: str | None
     manifest_hash: HashDigest | None

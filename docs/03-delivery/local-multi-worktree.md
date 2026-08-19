@@ -44,6 +44,8 @@ yarn run start --host 127.0.0.1 --port 5174 --strictPort
 
 `--strictPort` 让 Vite 在端口被占用时直接失败，避免静默切换端口后连接到错误分支。后端也固定绑定 `127.0.0.1`，除非测试目标明确要求局域网访问。
 
+当前 `yarn.lock` 中的 jsdom 29 要求 Node `^20.19.0 || ^22.13.0 || >=24.0.0`。运行 `yarn test` 或 `yarn build` 前先用 `node --version` 核对实际 PATH；本机系统 Node 20.15.1 不满足该约束，会在 Vitest worker 启动阶段触发 CJS/ESM 加载错误。应切换到已安装的兼容 Node，而不是修改锁文件或依赖内容规避运行时版本要求。
+
 Automation 分支还需要独立 Worker 终端。Web 与 Worker 必须使用同一个 automation 实例数据目录；稳定的 `DF_CODE_SIGNING_SECRET` 或 `FLASK_SECRET_KEY` 放在该 Worktree 未跟踪的 `.env` 中，让两个入口加载同一值：
 
 ```powershell

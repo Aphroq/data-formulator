@@ -48,12 +48,12 @@ def test_schema_v2_upgrades_once_and_both_repositories_reopen_it(tmp_path) -> No
     assert automation.database_path == database_path.resolve()
     assert recipe.database_path == database_path.resolve()
     assert reopened.database_path == database_path.resolve()
-    assert RecipeRepository.SCHEMA_VERSION == AutomationDatabase.SCHEMA_VERSION == 3
+    assert RecipeRepository.SCHEMA_VERSION == AutomationDatabase.SCHEMA_VERSION == 4
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
             "SELECT version FROM automation_schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,)]
         tables = {
             row[0]
             for row in connection.execute(
@@ -61,6 +61,13 @@ def test_schema_v2_upgrades_once_and_both_repositories_reopen_it(tmp_path) -> No
             )
         }
         assert {"recipes", "recipe_versions", "schedules", "runs"}.issubset(tables)
+        run_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(runs)")
+        }
+        assert {
+            "active_attempt_run_id",
+            "cleanup_attempt_run_id",
+        }.issubset(run_columns)
 
 
 def test_database_rejects_unknown_future_migration_without_partial_upgrade(
@@ -79,11 +86,11 @@ def test_database_rejects_unknown_future_migration_without_partial_upgrade(
         connection.execute(
             """
             INSERT INTO automation_schema_migrations (version, applied_at)
-            VALUES (4, '2026-08-19T00:00:00Z')
+            VALUES (5, '2026-08-19T00:00:00Z')
             """
         )
 
-    with pytest.raises(AutomationDatabaseError, match=r"Unsupported.*\[4\]"):
+    with pytest.raises(AutomationDatabaseError, match=r"Unsupported.*\[5\]"):
         AutomationDatabase(database_path)
 
     with sqlite3.connect(database_path) as connection:

@@ -580,6 +580,26 @@ class AutomationRepository:
                 ).fetchall()
         return tuple(self._run_from_row(row) for row in rows)
 
+    def list_runs_pending_attempt_cleanup(
+        self,
+        *,
+        limit: int = 100,
+    ) -> tuple[StoredAutomationRun, ...]:
+        """List exact abandoned attempts that must be resolved before reclaim."""
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("limit must be an integer from 1 to 100")
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM runs
+                WHERE cleanup_attempt_run_id IS NOT NULL
+                ORDER BY updated_at ASC, run_id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return tuple(self._run_from_row(row) for row in rows)
+
     def enqueue_manual_run(
         self,
         identity_id: str,
@@ -678,6 +698,8 @@ class AutomationRepository:
                 WHERE status = ? AND available_at <= ?
                     AND attempt_count < ?
                     AND cancel_requested_at IS NULL
+                    AND active_attempt_run_id IS NULL
+                    AND cleanup_attempt_run_id IS NULL
                 ORDER BY available_at ASC, created_at ASC, run_id ASC
                 LIMIT 1
                 """,
@@ -727,6 +749,175 @@ class AutomationRepository:
             )
             connection.commit()
             return self._run_from_row(claimed_row)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def start_run_attempt(
+        self,
+        identity_id: str,
+        workspace_id: str,
+        run_id: str,
+        *,
+        worker_id: str,
+        lease_token: str,
+        attempt_run_id: str,
+    ) -> StoredAutomationRun:
+        """Bind one physical attempt id to the currently fenced logical Run."""
+        identity_id = self._require_identifier(identity_id, "identity_id")
+        workspace_id = self._require_identifier(workspace_id, "workspace_id")
+        run_id = validate_run_id(run_id)
+        worker_id = self._require_identifier(worker_id, "worker_id")
+        lease_token = self._require_lease_token(lease_token)
+        attempt_run_id = validate_run_id(attempt_run_id)
+        if attempt_run_id == run_id:
+            raise ValueError(
+                "Artifact attempt run id must differ from the logical Run id"
+            )
+
+        connection = self._database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            now_utc = self._clock_datetime()
+            now = normalize_utc_datetime(now_utc, field_name="clock")
+            row = self._get_run_row(
+                connection,
+                identity_id,
+                workspace_id,
+                run_id,
+            )
+            current = self._run_from_row(row)
+            self._require_active_lease(
+                current,
+                worker_id=worker_id,
+                lease_token=lease_token,
+                now=now_utc,
+            )
+            if current.active_attempt_run_id is not None:
+                raise AutomationStateError(
+                    "Run already has an active physical attempt"
+                )
+            if current.cleanup_attempt_run_id is not None:
+                raise AutomationStateError(
+                    "Run has an abandoned attempt awaiting cleanup"
+                )
+            updated = connection.execute(
+                """
+                UPDATE runs
+                SET active_attempt_run_id = ?, updated_at = ?
+                WHERE run_id = ?
+                    AND identity_id = ? AND workspace_id = ?
+                    AND status = ? AND lease_owner = ? AND lease_token = ?
+                    AND active_attempt_run_id IS NULL
+                    AND cleanup_attempt_run_id IS NULL
+                """,
+                (
+                    attempt_run_id,
+                    now,
+                    run_id,
+                    identity_id,
+                    workspace_id,
+                    AutomationRunStatus.RUNNING.value,
+                    worker_id,
+                    lease_token,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise AutomationLeaseError(
+                    "Worker lease fencing check failed while starting an attempt"
+                )
+            started = self._get_run_row(
+                connection,
+                identity_id,
+                workspace_id,
+                run_id,
+            )
+            connection.commit()
+            return self._run_from_row(started)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def complete_run_attempt_cleanup(
+        self,
+        identity_id: str,
+        workspace_id: str,
+        run_id: str,
+        *,
+        attempt_run_id: str,
+    ) -> StoredAutomationRun:
+        """Clear one exact cleanup marker without touching a newer attempt."""
+        identity_id = self._require_identifier(identity_id, "identity_id")
+        workspace_id = self._require_identifier(workspace_id, "workspace_id")
+        run_id = validate_run_id(run_id)
+        attempt_run_id = validate_run_id(attempt_run_id)
+
+        connection = self._database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._get_run_row(
+                connection,
+                identity_id,
+                workspace_id,
+                run_id,
+            )
+            current = self._run_from_row(row)
+            if current.cleanup_attempt_run_id is None:
+                connection.commit()
+                return current
+            if current.cleanup_attempt_run_id != attempt_run_id:
+                connection.commit()
+                return current
+            if (
+                current.status is AutomationRunStatus.RUNNING
+                or current.active_attempt_run_id is not None
+            ):
+                raise AutomationStateError(
+                    "Active Run state cannot complete abandoned-attempt cleanup"
+                )
+            now = self._now()
+            updated = connection.execute(
+                """
+                UPDATE runs
+                SET cleanup_attempt_run_id = NULL, updated_at = ?
+                WHERE run_id = ?
+                    AND identity_id = ? AND workspace_id = ?
+                    AND cleanup_attempt_run_id = ?
+                """,
+                (
+                    now,
+                    run_id,
+                    identity_id,
+                    workspace_id,
+                    attempt_run_id,
+                ),
+            )
+            if updated.rowcount != 1:
+                latest = self._get_run_row(
+                    connection,
+                    identity_id,
+                    workspace_id,
+                    run_id,
+                )
+                current = self._run_from_row(latest)
+                if current.cleanup_attempt_run_id is not None:
+                    raise AutomationConflictError(
+                        "Run cleanup marker changed during completion"
+                    )
+                connection.commit()
+                return current
+            cleaned = self._get_run_row(
+                connection,
+                identity_id,
+                workspace_id,
+                run_id,
+            )
+            connection.commit()
+            return self._run_from_row(cleaned)
         except Exception:
             connection.rollback()
             raise
@@ -982,16 +1173,29 @@ class AutomationRepository:
                 raise AutomationStateError(
                     "Run cannot finish cancelled without a cancellation request"
                 )
+            if current.cleanup_attempt_run_id is not None:
+                raise AutomationStateError(
+                    "Run cannot finish while attempt cleanup is pending"
+                )
+            if (
+                current.active_attempt_run_id is not None
+                and current.active_attempt_run_id != artifact_run_id
+            ):
+                raise AutomationStateError(
+                    "Terminal artifact does not match the active physical attempt"
+                )
             updated = connection.execute(
                 """
                 UPDATE runs
                 SET status = ?, lease_owner = NULL, lease_token = NULL,
-                    lease_expires_at = NULL, artifact_run_id = ?,
+                    lease_expires_at = NULL, active_attempt_run_id = NULL,
+                    cleanup_attempt_run_id = NULL, artifact_run_id = ?,
                     artifact_path = ?, manifest_hash = ?, binding_hash = ?,
                     error_code = ?, error_message = ?, updated_at = ?
                 WHERE run_id = ?
                     AND identity_id = ? AND workspace_id = ?
                     AND status = ? AND lease_owner = ? AND lease_token = ?
+                    AND active_attempt_run_id IS ?
                 """,
                 (
                     final_status.value,
@@ -1008,6 +1212,7 @@ class AutomationRepository:
                     AutomationRunStatus.RUNNING.value,
                     worker_id,
                     lease_token,
+                    current.active_attempt_run_id,
                 ),
             )
             if updated.rowcount != 1:
@@ -1086,6 +1291,10 @@ class AutomationRepository:
                 lease_token=lease_token,
                 now=now_utc,
             )
+            if current.cleanup_attempt_run_id is not None:
+                raise AutomationStateError(
+                    "Run cannot fail while attempt cleanup is already pending"
+                )
             if current.cancel_requested_at is not None:
                 target_status = AutomationRunStatus.CANCELLED
                 stored_error_code = None
@@ -1100,12 +1309,16 @@ class AutomationRepository:
                 UPDATE runs
                 SET status = ?, available_at = ?, lease_owner = NULL,
                     lease_token = NULL, lease_expires_at = NULL,
+                    cleanup_attempt_run_id = active_attempt_run_id,
+                    active_attempt_run_id = NULL,
                     artifact_run_id = NULL, artifact_path = NULL,
                     manifest_hash = NULL, binding_hash = NULL,
                     error_code = ?, error_message = ?, updated_at = ?
                 WHERE run_id = ?
                     AND identity_id = ? AND workspace_id = ?
                     AND status = ? AND lease_owner = ? AND lease_token = ?
+                    AND active_attempt_run_id IS ?
+                    AND cleanup_attempt_run_id IS NULL
                 """,
                 (
                     target_status.value,
@@ -1119,6 +1332,7 @@ class AutomationRepository:
                     AutomationRunStatus.RUNNING.value,
                     worker_id,
                     lease_token,
+                    current.active_attempt_run_id,
                 ),
             )
             if updated.rowcount != 1:
@@ -1239,6 +1453,10 @@ class AutomationRepository:
         recovered: list[sqlite3.Row] = []
         for row in rows:
             current = self._run_from_row(row)
+            if current.cleanup_attempt_run_id is not None:
+                raise AutomationStateError(
+                    "Running Run already has an attempt cleanup marker"
+                )
             if current.cancel_requested_at is not None:
                 target_status = AutomationRunStatus.CANCELLED
                 error_code = None
@@ -1256,6 +1474,8 @@ class AutomationRepository:
                 UPDATE runs
                 SET status = ?, available_at = ?, lease_owner = NULL,
                     lease_token = NULL, lease_expires_at = NULL,
+                    cleanup_attempt_run_id = active_attempt_run_id,
+                    active_attempt_run_id = NULL,
                     artifact_run_id = NULL, artifact_path = NULL,
                     manifest_hash = NULL, binding_hash = NULL,
                     error_code = ?, error_message = ?, updated_at = ?
@@ -1572,6 +1792,8 @@ class AutomationRepository:
             lease_token=row["lease_token"],
             lease_expires_at=row["lease_expires_at"],
             cancel_requested_at=row["cancel_requested_at"],
+            active_attempt_run_id=row["active_attempt_run_id"],
+            cleanup_attempt_run_id=row["cleanup_attempt_run_id"],
             artifact_run_id=row["artifact_run_id"],
             artifact_path=row["artifact_path"],
             manifest_hash=(

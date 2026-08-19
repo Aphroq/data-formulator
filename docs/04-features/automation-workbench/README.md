@@ -125,17 +125,17 @@ Recipe Core 已经可以保存、校验、发布和手动运行 Recipe，但入�
 | P0 | `tests/conftest.py` 为所有测试默认注入 `DF_CODE_SIGNING_SECRET` | 已增加显式删除两种稳定 key 的交互、API、Service、Compiler 和 Executor 回归 |
 | P1 | `recipes.json`、`Recipes.tsx` 测试标题和列表标签曾出现 `Projects / 自动化项目` | 已收口为 `Recipes / 配方`，数据模型仍只有 Recipe/RecipeVersion |
 | P1 | 当前实现只有 `/automation`，`/recipes` 已重定向；旧系统设计仍写两个最终页面 | 已同步产品和系统设计为单一入口，不恢复独立 Recipes 导航 |
-| P1 | 原 `RecipeRepository.SCHEMA_VERSION == 2`，初始化会拒绝任何未知更高 migration | 已抽取唯一 `AutomationDatabase` owner 并升级到 schema v3；Recipe/Automation repository 可交替打开同一库 |
+| P1 | 原 `RecipeRepository.SCHEMA_VERSION == 2`，初始化会拒绝任何未知更高 migration | 已抽取唯一 `AutomationDatabase` owner；v3 引入 Schedule/Run，当前 v4 增加 attempt 恢复字段，Recipe/Automation repository 可交替打开同一库 |
 
 Recipe 修复验证：聚焦后端 67 passed、1 skipped；全量后端 2251 passed、16 skipped、1 xfailed；Recipe 前端 399 passed，生产构建通过。Automation 术语收口聚焦前端 11 passed。
 
 ## M3-B 实施契约：Schedule 与持久化 Run
 
-### 单一数据库与 schema v3
+### 单一数据库与 schema v4
 
 - `DATA_FORMULATOR_HOME/automation/automation.db` 仍是唯一目录数据库。
-- `AutomationDatabase` 已统一绝对路径、WAL、foreign keys、`busy_timeout`、显式事务和 v1 → v2 → v3 顺序 migration；`RecipeRepository` 与 `AutomationRepository` 共同使用。
-- v3 已在现有 `recipes` / `recipe_versions` 上增加 `schedules` / `runs`；合同测试覆盖空库初始化、v2 原地升级、重复初始化、事务回滚和未知未来版本失败关闭。
+- `AutomationDatabase` 已统一绝对路径、WAL、foreign keys、`busy_timeout`、显式事务和 v1 → v2 → v3 → v4 顺序 migration；`RecipeRepository` 与 `AutomationRepository` 共同使用。
+- v3 已在现有 `recipes` / `recipe_versions` 上增加 `schedules` / `runs`，v4 为 Run 增加 active/cleanup attempt id；合同测试覆盖空库初始化、v2 顺序原地升级、重复初始化、事务回滚和未知未来版本失败关闭。
 - 所有查询和写入都带 `identity_id + workspace_id`；Schedule 外键固定同 scope 的 RecipeVersion，创建时必须验证其状态为 `published`。
 
 ### Schedule 契约
@@ -159,7 +159,7 @@ running ── retryable failure / expired lease, attempts < 3 ──→ queued
 
 - `(schedule_id, scheduled_for)` 唯一；并发或重复 tick 只能得到一个逻辑 Run。
 - 队列状态使用新的 Automation Run enum；Recipe Core 的 artifact status 只扩展必要终态，不能承载 queued/running。
-- 逻辑 `run_id` 对外稳定；每次 Executor 尝试使用新的 artifact run id。Run row 只保存可校验的最终 artifact reference、binding hash、尝试次数和安全错误，不保存参数值、凭据、连接参数或绝对路径。
+- 逻辑 `run_id` 对外稳定；每次 Executor 尝试使用新的 artifact run id。Run row 保存可校验的最终 artifact reference、binding hash、尝试次数、安全错误，以及仅供 Worker 恢复使用的 active/cleanup attempt id；内部恢复字段不进入公共 API，也不保存参数值、凭据、连接参数或绝对路径。
 - claim 写入 lease owner + 随机 fencing token；renew/finish/fail 都校验 owner、token 和未过期时间。过期 Worker 即使晚到，也不能覆盖新尝试结果。
 - queued 取消直接终结；running 取消只写请求，由 Worker 在步骤边界确认并产出 cancelled manifest。
 - repository 强制最多 3 次总尝试（初次 + 2 次重试）和 `available_at` 延迟领取，但只接受调用方给出的显式 retryable 决定；Worker 已只把现有 connector classifier 的 `retry=true` 与明确识别的 SQLite locked/busy 接入该决定。schema drift、签名、scope、参数、代码和输出校验永不重试。
@@ -168,19 +168,19 @@ running ── retryable failure / expired lease, attempts < 3 ──→ queued
 
 ### M3-B 实施切片
 
-1. [x] **B1 迁移所有权**：唯一 DB helper、v1 → v2 → v3、重复初始化、失败回滚、未来版本拒绝；未注册 route。
+1. [x] **B1 迁移所有权**：唯一 DB helper、当前 v1 → v2 → v3 → v4、重复初始化、失败回滚、未来版本拒绝；未注册 route。
 2. [x] **B2 Schedule repository**：列表/编辑、数值 Cron、timezone/DST、停机补偿、重复 tick 幂等，以及同事务入队并推进 `next_run_at` 已完成。
 3. [x] **B3 Run repository**：合法状态转换、claim/fencing/renew、取消、延迟/有限重试和过期 lease 恢复已完成，全部使用注入时钟且无真实 sleep。
 4. [x] **B4 单次 tick/execute**：`scheduler.tick()` 与 `worker.run_once()` 均已完成；Worker 复用显式 Workspace/connector opener 和 `RecipeExecutor`，完成 claim → execute → finish/retry、独立 attempt artifact、安全错误分类、步骤边界续租/取消和 Needs Review。
 5. [x] **C1 常驻执行边界**：长步骤 heartbeat、正式 `data_formulator_worker`、可中断 Scheduler/Worker 循环、安全启动/退出和跨 runtime 持久化 Run 恢复已完成。
 6. [x] **D1 API/UI 闭环**：Schedule/Run scoped API、持久化 manual enqueue/cancel、校验后 artifact 查询、Schedule 设置、Runs Inbox 与 Needs Review 回跳已完成。
 
-当前实现没有引入 Cron 第三方依赖、Flask 后台线程或并发 2。Cron/timezone/DST、停机补偿、事务回滚、lease/fencing、步骤边界取消、长步骤续租、分类重试和恢复均有合同测试；one-shot 原语仍可独立测试，正式常驻生命周期只由独立 `data_formulator_worker` 进程负责。Web route 只做 scoped 管理与查询，不承担 Scheduler/Worker 循环。
+当前实现没有引入 Cron 第三方依赖、Flask 后台线程或并发 2。Cron/timezone/DST、停机补偿、事务回滚、lease/fencing、步骤边界取消、长步骤续租、分类重试、强杀恢复和 attempt 清理均有合同测试；one-shot 原语仍可独立测试，正式常驻生命周期只由独立 `data_formulator_worker` 进程负责。Web route 只做 scoped 管理与查询，不承担 Scheduler/Worker 循环。
 
 ### M3-C 常驻 Worker 契约
 
 - 每个 claim 后先同步续租并确认 fencing，再启动该 attempt 专属的 daemon heartbeat；默认 lease 30 秒、heartbeat 10 秒。步骤仍同步执行，但 heartbeat 定时使用独立 SQLite 连接续租，因此单个 load/transform/chart 超过原始 lease 也不会被错误重领。
-- heartbeat 观察到取消后继续续租，直到 Executor 到达步骤边界并写 cancelled artifact；heartbeat 失去 token、续租异常或无法停止时统一转成 `AutomationWorkerLeaseLostError`，旧 Worker 不提交逻辑 Run 终态。步骤内失败已有“不写 manifest”合同；若失败晚于 Executor 原子 finalize，可能留下未被 Run row 引用的 attempt artifact，不能将其误接为成功结果。
+- heartbeat 观察到取消后继续续租，直到 Executor 到达步骤边界并写 cancelled artifact；heartbeat 失去 token、续租异常或无法停止时统一转成 `AutomationWorkerLeaseLostError`，旧 Worker 不提交逻辑 Run 终态。Worker 在 Executor 创建目录前持久化 active attempt id；lease 过期时 repository 把它转成 cleanup id，并在清理完成前阻止下一次 claim。无 manifest attempt 被隔离删除并留下 retired tombstone，已有 manifest 的孤立 attempt 保留且不能误接为成功结果。
 - `AutomationRuntime` 每个周期执行 `scheduler.tick()`，再最多调用一次 `worker.run_once()`；默认每秒轮询，等待可由 stop event 中断。循环只对白名单 SQLite locked/busy 继续下一周期，其他异常安全退出。
 - wheel 新增 `data_formulator_worker = data_formulator.automation.cli:main`。入口加载与 Web 相同的 `.env` 位置，并在创建数据库、Workspace opener 或 connector registry 前验证 `AUTOMATION_ENABLED=true`、稳定签名和 local Workspace；配置与意外错误都不回显原始异常。
 - `--once` 只执行一个 Scheduler/Worker 周期；默认模式安装 SIGINT/SIGTERM handler，在当前同步周期结束后退出。Worker 不监听端口，也不伪造 Flask request。
@@ -204,7 +204,13 @@ running ── retryable failure / expired lease, attempts < 3 ──→ queued
 - Worker 停止期间入队的 Run 保持 `queued`、尝试次数为 0；重新启动独立 Worker 后被领取并成功完成。另一个 queued Run 经 UI 取消后保持 `cancelled`，Worker 再次启动也未执行它。
 - 使用受控 drift connector opener 但保持同一生产 `AutomationWorker.run_once()`、RecipeExecutor、repository 和 artifact store 路径，把 Movies schema 改为不兼容表结构；Run 一次尝试后进入 `needs_review`，保存 `schema_drift` 安全错误、可校验 manifest 和 `started → needs_review` 事件，UI 同时显示人工检查引导与 Recipe 回跳。
 
-## M3 后续实施顺序
+### M4 强杀与 attempt 制品恢复（2026-08-19）
+
+- `AutomationDatabase` 升级到 schema v4，新增 `active_attempt_run_id` 与 `cleanup_attempt_run_id`。Worker 只有持有未过期 owner/token 时才能登记物理 attempt；过期恢复原子转移清理责任，claim 查询拒绝 cleanup 未完成的 Run。
+- `RecipeRunArtifactStore.resolve_abandoned_attempt()` 只接受精确 run id 和当前 Run 行声明的 Workspace。无 manifest 目录先原子改名到隔离路径，再写 retired tombstone 并删除；目录尚不存在时同样写 tombstone，关闭旧进程迟到创建的竞态。manifest 已存在时保留不可变目录，不生成引用，也不把它挂到后续逻辑 Run。
+- 自动化验收启动真实子进程，让 Worker 完成 claim、attempt 登记并进入阻塞 load 后调用进程终止；测试推进 lease 时钟后由新 Worker 回收无 manifest 目录、领取同一逻辑 Run 的第二次尝试并成功完成。repository、artifact store 和 fencing 的聚焦回归同时覆盖清理门禁、compare-and-set 和旧 token 失效。
+
+## M3/M4 实施顺序
 
 1. [x] Recipe Core 修复稳定签名配置回归，Automation rebase 到新基线并完成三项基础验证。
 2. [x] 本分支完成“自动化项目 → Recipe/配方”术语收口及聚焦前端测试。
@@ -213,6 +219,7 @@ running ── retryable failure / expired lease, attempts < 3 ──→ queued
 5. [x] 增加覆盖长步骤的 lease heartbeat、正式 `data_formulator_worker` 入口和 Scheduler/Worker 本机进程生命周期。
 6. [x] 增加 Schedule/Run API、持久化 manual enqueue/cancel、校验后 artifact 查询、Schedule UI、Runs Inbox 和 Needs Review 处置。
 7. [x] 使用真实 Web + 独立 Worker 完成页面关闭、Worker 重启恢复、取消、schema drift 和 UI 处置的产品端到端验证；重复调度幂等继续由并发/补偿合同测试覆盖。
+8. [x] 完成运行中 Worker 强杀后的 lease 恢复、无 manifest attempt 定点回收、迟到创建 tombstone 和第二次尝试验收。
 
 ## 开发记录
 
@@ -236,6 +243,7 @@ running ── retryable failure / expired lease, attempts < 3 ──→ queued
 | 2026-08-19 | M3-C 常驻 Worker | 增加长步骤 fenced heartbeat、取消期间续租、正式 console script、可中断常驻 Runtime、安全配置错误、SQLite contention 周期重试及 persisted Run 跨 runtime 重建执行；仍未接 route/UI，当前并发 1 | Worker/Runtime/CLI 31 passed；Recipe/Automation 190 passed、2 skipped；全量后端 2333 passed、16 skipped、1 xfailed；前端 49 files / 405 tests；生产构建、模块编译、wheel 和 CLI 探针通过 | `61eba9eb feat: run automation worker service` |
 | 2026-08-19 | M3-D API/UI | 增加 scoped Schedule/Run API、服务端排期、持久化 manual enqueue/cancel、校验后 manifest/events 查询，以及 Schedule 设置、Runs Inbox、Needs Review 回跳和审计对话框；不把 Worker 循环放进 Flask | Recipe/Automation 208 passed、2 skipped；全量后端 2351 passed、16 skipped、1 xfailed；前端 51 files / 412 tests；相关 ESLint、生产构建、模块编译和 wheel 构建通过 | `1f5f181d feat: complete automation workbench APIs` |
 | 2026-08-19 | M3-D 产品 E2E | 使用真实 Web、Vite、独立 Worker 和 Published Movies Recipe 验证 manual Run、关页后定时执行、Runs Inbox/审计、Worker 重启恢复、queued 取消和 schema drift → Needs Review；测试 Schedule 已停用 | manual/scheduled/restarted Run 均 1 次尝试成功；queued 取消保持 0 次尝试；drift Run 1 次尝试进入 `needs_review`，manifest/events 均经 UI 反查 | `docs: record automation product e2e` |
+| 2026-08-19 | M4 强杀恢复 | schema v4 持久化 active/cleanup attempt id；过期 Run 清理前禁止重领；无 manifest 目录隔离删除并写 retired tombstone；已有 manifest 的孤立 attempt 保留不误挂；真实执行中 Worker 子进程强制终止后由第二个 Worker 恢复 | 聚焦 Automation/Executor 97 passed、1 skipped；全量后端 2354 passed、16 skipped、1 xfailed；前端 51 files / 412 tests；Node 24.19.0 生产构建通过；真实 hard-kill 子进程验收通过 | `feat: recover abandoned automation attempts` |
 
 M3-B1 全量验证第一次继承 Codex 终端的 `cp936` / `TERM=dumb`，触发 7 个既有插件编码和 spinner 环境相关失败；未修改这些非本 Feature 文件。显式使用 `PYTHONUTF8=1`、`TERM=xterm` 后，相关 8 项及全量 2279 项收集均通过。
 
@@ -255,7 +263,7 @@ M3-B1 全量验证第一次继承 Codex 终端的 `cp936` / `TERM=dumb`，触发
 - Web、Worker 和 SQLite 直接在本机运行，不提供 Docker 或 Compose 方案。
 - SQLite 数据库和 artifact store 必须由 Web/Worker 解析到相同绝对路径。
 - 当前已有正式常驻 Worker 入口，但 Web/桌面应用不自动拉起、监督或重启该进程；本机部署仍需单独管理 Worker 终端/进程。
-- Worker 已覆盖步骤边界和单个长步骤的续租、取消与 fencing 失败关闭；真实独立 Worker 停止期间持久化的 queued Run 已在进程重启后成功领取。运行中进程强制崩溃后的 lease 恢复及无 manifest attempt artifact 回收仍待稳定化阶段处理。
+- Worker 已覆盖步骤边界和单个长步骤的续租、取消与 fencing 失败关闭；真实独立 Worker 停止期间持久化的 queued Run 已在进程重启后成功领取，运行中子进程强制终止后的 lease 恢复、无 manifest attempt 回收和第二次尝试也已有自动化验收。仍未提供 Web/桌面对 Worker 进程的自动监督或重启。
 - 当前 Runtime 固定并发 1；设计上限 2 尚未暴露，必须先验证同 Workspace 并行写入和 connector/sandbox 线程安全。
 - connector classifier / SQLite busy 的有限重试已经闭环并验证不会持久化原始敏感错误；真实外部 connector 仍需使用用户已有端点补验，不建立 Docker 前置条件。
 
@@ -263,10 +271,10 @@ M3-B1 全量验证第一次继承 Codex 终端的 `cp936` / `TERM=dumb`，触发
 
 - [x] Recipe Core 的签名回归已修复并同步，Automation 关闭且无稳定 key 时原有交互分析可用。
 - [x] Automation 列表术语为 Recipe/配方，没有 Project id、容器或 repository。
-- [x] schema v2 可原地升级到 v3，Recipe 与 Automation repository 可交替打开同一数据库。
+- [x] schema v2 可顺序原地升级到 v4，Recipe 与 Automation repository 可交替打开同一数据库。
 - [x] Schedule/Run API、持久化 manual enqueue/cancel、校验后 manifest/events、Schedule UI、Runs Inbox 和 Needs Review 回跳已完成，并覆盖 scope 与 Workspace 竞态。
 - [x] 页面关闭后 Schedule 仍能创建 Run；重新打开页面后能从 Runs Inbox 读取成功状态和经校验的 manifest/events。
-- [x] repository 合同覆盖过期 running Run 的重排队/终结及旧 token fencing；真实独立 Worker 停止期间的 persisted queued Run 已覆盖进程重启恢复，运行中进程强杀仍待稳定化阶段。
+- [x] repository 合同覆盖过期 running Run 的重排队/终结、旧 token fencing 和 cleanup claim 门禁；真实子进程强杀覆盖无 manifest attempt 回收、迟到创建阻断及第二次尝试成功。
 - [x] 同一 Schedule/计划时间唯一；重复 tick 幂等，停机跨多个周期最多创建一个补偿 Run，并把下一次推进到当前时刻之后。
 - [x] Schema drift 进入 Needs Review，并保存可校验 attempt artifact。
 - [x] Automation flag 关闭时 Worker CLI 在任何存储初始化前退出，Recipe API 和 UI 也不可用；常驻 Scheduler/Worker 已由独立进程实现。

@@ -17,7 +17,7 @@ class AutomationDatabaseError(RuntimeError):
 class AutomationDatabase:
     """Own the one SQLite schema used by Recipe and Automation repositories."""
 
-    SCHEMA_VERSION = 3
+    SCHEMA_VERSION = 4
 
     def __init__(self, database_path: Path | str) -> None:
         self._database_path = Path(database_path).resolve()
@@ -83,6 +83,7 @@ class AutomationDatabase:
                 1: self._apply_schema_v1,
                 2: self._apply_schema_v2,
                 3: self._apply_schema_v3,
+                4: self._apply_schema_v4,
             }
             for version in range(highest_applied + 1, self.SCHEMA_VERSION + 1):
                 migrations[version](connection)
@@ -363,6 +364,22 @@ class AutomationDatabase:
                     'Run scheduling identity is immutable'
                 );
             END
+            """
+        )
+
+    @staticmethod
+    def _apply_schema_v4(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "ALTER TABLE runs ADD COLUMN active_attempt_run_id TEXT"
+        )
+        connection.execute(
+            "ALTER TABLE runs ADD COLUMN cleanup_attempt_run_id TEXT"
+        )
+        connection.execute(
+            """
+            CREATE INDEX runs_attempt_cleanup_idx
+            ON runs (updated_at, run_id)
+            WHERE cleanup_attempt_run_id IS NOT NULL
             """
         )
 

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import threading
@@ -21,6 +22,7 @@ from data_formulator.automation.models import (
     validate_run_id,
 )
 from data_formulator.automation.repository import (
+    AutomationLeaseError,
     AutomationRepository,
     AutomationStateError,
 )
@@ -41,6 +43,8 @@ from data_formulator.recipes.repository import (
     RecipeVersionStatus,
 )
 from data_formulator.recipes.run_store import (
+    RecipeRunArtifactError,
+    RecipeRunArtifactStore,
     RecipeRunKind,
     RecipeRunReference,
     RecipeRunStatus,
@@ -55,6 +59,9 @@ Clock = Callable[[], datetime]
 AttemptIdFactory = Callable[[], UUID]
 EnabledCheck = Callable[[], bool]
 LeaseRenewal = Callable[[], StoredAutomationRun]
+
+
+logger = logging.getLogger(__name__)
 
 
 class AutomationWorkerError(RuntimeError):
@@ -312,6 +319,8 @@ class AutomationWorker:
         # This check deliberately precedes claim so configuration failures do
         # not consume an attempt or strand a leased Run.
         require_stable_code_signing()
+        self._repository.recover_expired_runs()
+        self._cleanup_abandoned_attempts()
         claimed = self._repository.claim_next_run(
             worker_id=self._worker_id,
             lease_duration=self._lease_duration,
@@ -326,11 +335,10 @@ class AutomationWorker:
         heartbeat = self._heartbeat(claimed)
         execution: RecipeExecutionResult | None = None
         setup_failure: _WorkerFailure | None = None
-        aborted: RecipeExecutionAborted | None = None
+        aborted: BaseException | None = None
         try:
             heartbeat.start()
             try:
-                attempt_run_id = self._new_attempt_run_id()
                 workspace = self._workspace_opener.open(
                     claimed.identity_id,
                     claimed.workspace_id,
@@ -347,6 +355,15 @@ class AutomationWorker:
                         "Queued Run does not reference an executable "
                         "RecipeVersion"
                     )
+                attempt_run_id = self._new_attempt_run_id()
+                claimed = self._repository.start_run_attempt(
+                    claimed.identity_id,
+                    claimed.workspace_id,
+                    claimed.run_id,
+                    worker_id=self._worker_id,
+                    lease_token=self._lease_token(claimed),
+                    attempt_run_id=attempt_run_id,
+                )
                 executor = RecipeExecutor(
                     workspace,
                     loader_resolver=(
@@ -364,6 +381,8 @@ class AutomationWorker:
                     checkpoint=heartbeat.checkpoint,
                 )
             except RecipeExecutionAborted as exc:
+                aborted = exc
+            except AutomationLeaseError as exc:
                 aborted = exc
             except Exception as exc:
                 setup_failure = _classify_failure(exc)
@@ -392,6 +411,40 @@ class AutomationWorker:
             )
 
         return self._record_execution(claimed, execution)
+
+    def _cleanup_abandoned_attempts(self) -> None:
+        for pending in self._repository.list_runs_pending_attempt_cleanup():
+            attempt_run_id = pending.cleanup_attempt_run_id
+            if attempt_run_id is None:
+                continue
+            if (
+                pending.status is AutomationRunStatus.RUNNING
+                or pending.active_attempt_run_id is not None
+            ):
+                logger.warning(
+                    "Automation attempt cleanup is blocked by active Run %s.",
+                    pending.run_id,
+                )
+                continue
+            try:
+                workspace = self._workspace_opener.open(
+                    pending.identity_id,
+                    pending.workspace_id,
+                )
+                RecipeRunArtifactStore.for_workspace(
+                    workspace
+                ).resolve_abandoned_attempt(attempt_run_id)
+                self._repository.complete_run_attempt_cleanup(
+                    pending.identity_id,
+                    pending.workspace_id,
+                    pending.run_id,
+                    attempt_run_id=attempt_run_id,
+                )
+            except (OSError, RecipeRunArtifactError, WorkspaceOpenError):
+                logger.warning(
+                    "Automation attempt cleanup remains pending for Run %s.",
+                    pending.run_id,
+                )
 
     def _heartbeat(self, claimed: StoredAutomationRun) -> _RunLeaseHeartbeat:
         lease_token = claimed.lease_token

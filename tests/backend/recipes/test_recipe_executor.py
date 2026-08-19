@@ -12,7 +12,9 @@ from data_formulator.recipes.compiler import CompiledRecipe
 from data_formulator.recipes.binding import bind_recipe_parameters
 from data_formulator.recipes.executor import RecipeExecutionAborted, RecipeExecutor
 from data_formulator.recipes.run_store import (
+    RecipeRunCleanupOutcome,
     RecipeRunArtifactStore,
+    RecipeRunConflictError,
     RecipeRunCorruptError,
     RecipeRunKind,
     RecipeRunStatus,
@@ -487,3 +489,50 @@ def test_executor_does_not_finalize_after_checkpoint_fencing_loss(
     )
     assert run_dir.is_dir()
     assert not (run_dir / "manifest.json").exists()
+    store = RecipeRunArtifactStore.for_workspace(recipe_workspace)
+    assert store.resolve_abandoned_attempt(
+        attempt_run_id
+    ) is RecipeRunCleanupOutcome.DISCARDED
+    assert not run_dir.exists()
+    with pytest.raises(RecipeRunConflictError, match="retired"):
+        store.begin(
+            executable_recipe.spec,
+            bind_recipe_parameters(executable_recipe.spec, {}),
+            RecipeRunKind.AUTOMATION,
+            run_id=attempt_run_id,
+        )
+
+    missing_run_id = "run_" + "d" * 32
+    assert store.resolve_abandoned_attempt(
+        missing_run_id
+    ) is RecipeRunCleanupOutcome.MISSING
+    with pytest.raises(RecipeRunConflictError, match="retired"):
+        store.begin(
+            executable_recipe.spec,
+            bind_recipe_parameters(executable_recipe.spec, {}),
+            RecipeRunKind.AUTOMATION,
+            run_id=missing_run_id,
+        )
+
+
+def test_abandoned_attempt_cleanup_preserves_a_finalized_orphan(
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+) -> None:
+    attempt_run_id = "run_" + "e" * 32
+    result = RecipeExecutor(
+        recipe_workspace,
+        loader_resolver=lambda _source_id: _RunLoader(),
+    ).execute(
+        executable_recipe.spec,
+        parameter_values={},
+        kind=RecipeRunKind.AUTOMATION,
+        run_id=attempt_run_id,
+    )
+    assert result.reference is not None
+    store = RecipeRunArtifactStore.for_workspace(recipe_workspace)
+
+    assert store.resolve_abandoned_attempt(
+        attempt_run_id
+    ) is RecipeRunCleanupOutcome.FINALIZED
+    assert store.load(result.reference).reference == result.reference

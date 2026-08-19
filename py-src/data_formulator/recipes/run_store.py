@@ -44,6 +44,14 @@ class RecipeRunStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class RecipeRunCleanupOutcome(StrEnum):
+    """Disposition of one exact attempt left behind by a fenced Worker."""
+
+    MISSING = "missing"
+    DISCARDED = "discarded"
+    FINALIZED = "finalized"
+
+
 class RecipeRunArtifactError(ValueError):
     """Base class for Recipe run artifact failures."""
 
@@ -294,7 +302,13 @@ class RecipeRunArtifactStore:
         resolved_run_id = run_id or f"run_{uuid.uuid4().hex}"
         self._validate_run_id(resolved_run_id)
         run_dir = self._run_dir(resolved_run_id)
+        retired_marker = self._retired_marker(resolved_run_id)
         with WorkspaceLock(self._root):
+            self._validate_retired_marker(retired_marker)
+            if retired_marker.exists():
+                raise RecipeRunConflictError(
+                    f"Recipe run id is retired: {resolved_run_id}"
+                )
             try:
                 run_dir.mkdir()
             except FileExistsError as exc:
@@ -314,6 +328,63 @@ class RecipeRunArtifactStore:
             if run_dir.exists():
                 shutil.rmtree(run_dir, ignore_errors=True)
             raise
+
+    def resolve_abandoned_attempt(
+        self,
+        run_id: str,
+    ) -> RecipeRunCleanupOutcome:
+        """Discard an incomplete attempt while preserving any manifest boundary."""
+        self._validate_run_id(run_id)
+        run_dir = self._root / run_id
+        quarantine = self._root / f".cleanup-{run_id}"
+        retired_marker = self._retired_marker(run_id)
+
+        with WorkspaceLock(self._root):
+            self._validate_retired_marker(retired_marker)
+            if self._unsafe_link(quarantine):
+                raise RecipeRunArtifactError(
+                    "Recipe run cleanup quarantine is an unsafe link"
+                )
+            if quarantine.exists():
+                if not quarantine.is_dir():
+                    raise RecipeRunArtifactError(
+                        "Recipe run cleanup quarantine is not a directory"
+                    )
+                if self._has_manifest_boundary(quarantine):
+                    if run_dir.exists() or self._unsafe_link(run_dir):
+                        raise RecipeRunArtifactError(
+                            "Finalized cleanup quarantine conflicts with a run"
+                        )
+                    quarantine.rename(run_dir)
+                    return RecipeRunCleanupOutcome.FINALIZED
+                self._ensure_retired_marker(retired_marker)
+                self._require_cleanup_tree_safe(quarantine)
+                shutil.rmtree(quarantine)
+
+            if self._unsafe_link(run_dir):
+                raise RecipeRunArtifactError(
+                    "Recipe run directory is an unsafe link"
+                )
+            if not run_dir.exists():
+                self._ensure_retired_marker(retired_marker)
+                return RecipeRunCleanupOutcome.MISSING
+            if not run_dir.is_dir():
+                raise RecipeRunArtifactError(
+                    "Recipe run cleanup target is not a directory"
+                )
+            if self._has_manifest_boundary(run_dir):
+                return RecipeRunCleanupOutcome.FINALIZED
+
+            # Rename first so a fenced process cannot add a manifest at the
+            # original path between the final check and recursive removal.
+            run_dir.rename(quarantine)
+            if self._has_manifest_boundary(quarantine):
+                quarantine.rename(run_dir)
+                return RecipeRunCleanupOutcome.FINALIZED
+            self._ensure_retired_marker(retired_marker)
+            self._require_cleanup_tree_safe(quarantine)
+            shutil.rmtree(quarantine)
+            return RecipeRunCleanupOutcome.DISCARDED
 
     def load(self, reference: RecipeRunReference) -> StoredRecipeRun:
         if not isinstance(reference, RecipeRunReference):
@@ -375,6 +446,54 @@ class RecipeRunArtifactStore:
     def _run_dir(self, run_id: str) -> Path:
         self._validate_run_id(run_id)
         return self._root_jail.resolve(run_id)
+
+    def _retired_marker(self, run_id: str) -> Path:
+        self._validate_run_id(run_id)
+        return self._root / f".retired-{run_id}"
+
+    def _ensure_retired_marker(self, marker: Path) -> None:
+        self._validate_retired_marker(marker)
+        if not marker.exists():
+            _write_file(marker, b"")
+
+    def _validate_retired_marker(self, marker: Path) -> None:
+        if self._unsafe_link(marker):
+            raise RecipeRunArtifactError(
+                "Recipe run retired marker is an unsafe link"
+            )
+        if marker.exists() and not marker.is_file():
+            raise RecipeRunArtifactError(
+                "Recipe run retired marker is not a file"
+            )
+
+    def _has_manifest_boundary(self, run_dir: Path) -> bool:
+        manifest = run_dir / self.MANIFEST_FILENAME
+        if self._unsafe_link(manifest):
+            raise RecipeRunArtifactError(
+                "Recipe run manifest boundary is an unsafe link"
+            )
+        if not manifest.exists():
+            return False
+        if not manifest.is_file():
+            raise RecipeRunArtifactError(
+                "Recipe run manifest boundary is not a file"
+            )
+        return True
+
+    @classmethod
+    def _require_cleanup_tree_safe(cls, run_dir: Path) -> None:
+        for path in run_dir.rglob("*"):
+            if cls._unsafe_link(path):
+                raise RecipeRunArtifactError(
+                    "Recipe run cleanup target contains an unsafe link"
+                )
+
+    @staticmethod
+    def _unsafe_link(path: Path) -> bool:
+        is_junction = getattr(path, "is_junction", None)
+        return path.is_symlink() or bool(
+            callable(is_junction) and is_junction()
+        )
 
     @staticmethod
     def _validate_run_id(run_id: str) -> None:

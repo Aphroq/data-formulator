@@ -92,7 +92,7 @@ def test_repository_migrates_existing_v1_catalog_in_place(tmp_path) -> None:
         }.issubset(columns)
         assert connection.execute(
             "SELECT version FROM automation_schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,)]
 
 
 def test_repository_saves_and_reopens_draft_without_copying_recipe_json(
@@ -142,7 +142,7 @@ def test_repository_saves_and_reopens_draft_without_copying_recipe_json(
         }.issubset(columns)
         assert connection.execute(
             "SELECT version FROM automation_schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,)]
 
 
 def test_repository_scopes_every_version_lookup(

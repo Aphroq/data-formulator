@@ -76,18 +76,18 @@ M2 合并前只做一轮最小收口：
 Recipe Core 的签名配置回归已由 `3cd7ee12` 关闭并完整验证：未配置稳定 key 且 Automation 关闭时，原有交互 `visualize` 继续可用；Recipe/Worker 需要稳定 key 的边界返回 `SERVICE_UNAVAILABLE` 或拒绝启动。Automation 已线性同步该基线，可以进入 M3 持久化开发。
 
 - M3-A（已完成）：在现有工作区 rail 增加单一 `Automation` 入口，按 Recipe identity 聚合版本并复用 Recipe Core 生命周期 UI；`/recipes` 只保留兼容重定向。
-- M3-B（已完成 repository/tick 切片）：共享 `AutomationDatabase` 和 schema v3、固定 Published RecipeVersion 的 Schedule、数值 Cron/timezone/DST、事务型单次 scheduler tick，以及 Run claim/renew/fencing、取消、有限重试和过期 lease 恢复均已落地。
+- M3-B（已完成 repository/tick 切片）：共享 `AutomationDatabase`（当前 schema v4）、固定 Published RecipeVersion 的 Schedule、数值 Cron/timezone/DST、事务型单次 scheduler tick，以及 Run claim/renew/fencing、取消、有限重试、过期 lease 恢复和 attempt cleanup 门禁均已落地。
 - M3-C（已完成）：`c1181e30` 实现无 Flask request 的 `worker.run_once()`、白名单有限重试、独立 attempt artifact、步骤边界续租/取消、schema drift → Needs Review、稳定签名与同一绝对数据根检查；`61eba9eb` 增加覆盖长步骤的定时 heartbeat、正式 `data_formulator_worker` console script、可中断常驻 Scheduler/Worker 生命周期、安全启动边界和持久化 Run 跨 runtime 重建验证。当前并发为 1，Web/桌面应用不自动托管该进程。
 - M3-D（已完成实现切片）：`1f5f181d` 增加 Workspace-scoped Schedule/Run API、持久化 manual enqueue/cancel、校验后的 events/manifest 查询，以及单一 `/automation` 页面的 Schedule 设置、Runs Inbox 和 schema drift → Needs Review 回跳。服务端拥有排期/default binding，公共 API 不暴露 Worker lease/fencing 字段。
 
-M3 仍需用真实 Web 与独立 `data_formulator_worker` 完成页面关闭、重启、重复调度和 schema drift 的产品端到端验收；在该验收通过前，不把“页面关闭后仍能执行”标记为已完成。
+M3 已使用真实 Web 与独立 `data_formulator_worker` 完成页面关闭后定时执行、Worker 重启、取消和 schema drift 的产品端到端验收；重复调度由幂等/停机补偿合同测试覆盖。
 
 M3 不增加 Automation Project 容器；列表对象始终是 Recipe，Schedule 直接固定 Published RecipeVersion。逻辑队列 Run 与 Executor attempt artifact 使用不同 id，保证崩溃恢复和重试不覆盖不可变制品。
 
 ### M4：稳定化
 
-- 权限、日志清洗和 migration 测试。
-- 长时间运行、崩溃恢复、重复调度和重启测试。
+- 权限、日志清洗和 migration 测试；schema v4 原地升级与未来版本拒绝已有合同覆盖。
+- 长时间运行、崩溃恢复、重复调度和重启测试；运行中 Worker 子进程强制终止后的 lease 恢复、无 manifest attempt 清理和重新执行已经覆盖。
 - 中英文 UI、升级说明和发布检查。
 
 ## 第一条纵向切片
