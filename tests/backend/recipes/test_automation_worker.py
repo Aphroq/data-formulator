@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -16,6 +17,8 @@ from data_formulator.automation.repository import (
     AutomationLeaseError,
     AutomationRepository,
 )
+from data_formulator.automation.scheduler import AutomationScheduler
+from data_formulator.automation.runtime import AutomationRuntime
 from data_formulator.automation.worker import (
     AutomationWorker,
     AutomationWorkerDisabledError,
@@ -86,6 +89,46 @@ class _CancellingLoader(_WorkerLoader):
             "ws-1",
             self._run_id,
         )
+        return super().fetch_data_as_arrow(source_table, import_options)
+
+
+class _HeartbeatWaitingLoader(_WorkerLoader):
+    def __init__(self, heartbeat_observed: threading.Event) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self._heartbeat_observed = heartbeat_observed
+
+    def fetch_data_as_arrow(self, source_table: str, import_options: dict):
+        self.started.set()
+        if not self._heartbeat_observed.wait(timeout=5):
+            raise AssertionError("Heartbeat was not observed during the load step")
+        return super().fetch_data_as_arrow(source_table, import_options)
+
+
+class _CancellingHeartbeatWaitingLoader(_WorkerLoader):
+    def __init__(
+        self,
+        repository: AutomationRepository,
+        run_id: str,
+        heartbeat_after_cancel: threading.Event,
+    ) -> None:
+        super().__init__()
+        self._repository = repository
+        self._run_id = run_id
+        self._heartbeat_after_cancel = heartbeat_after_cancel
+        self.cancel_requested = threading.Event()
+
+    def fetch_data_as_arrow(self, source_table: str, import_options: dict):
+        self._repository.request_run_cancel(
+            "user:alice",
+            "ws-1",
+            self._run_id,
+        )
+        self.cancel_requested.set()
+        if not self._heartbeat_after_cancel.wait(timeout=5):
+            raise AssertionError(
+                "Lease was not renewed after cancellation during a long step"
+            )
         return super().fetch_data_as_arrow(source_table, import_options)
 
 
@@ -165,6 +208,7 @@ def _worker(
     connector_opener,
     *,
     attempt_ids=("a", "b", "c"),
+    heartbeat_interval: timedelta | None = None,
 ) -> AutomationWorker:
     ids = iter(UUID(character * 32) for character in attempt_ids)
     return AutomationWorker(
@@ -178,6 +222,7 @@ def _worker(
         lease_duration=timedelta(seconds=30),
         retry_delays=(timedelta(seconds=5), timedelta(seconds=30)),
         attempt_id_factory=lambda: next(ids),
+        heartbeat_interval=heartbeat_interval,
     )
 
 
@@ -525,3 +570,215 @@ def test_worker_never_finalizes_after_lease_fencing_loss(
     )
     assert attempt_dir.is_dir()
     assert not (attempt_dir / "manifest.json").exists()
+
+
+def test_worker_renews_lease_while_a_long_step_is_still_running(
+    tmp_path,
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+    monkeypatch,
+) -> None:
+    data_home, _workspace, recipes, automation, clock, _schedule, _queued = (
+        _seed_queued_run(tmp_path, recipe_workspace, executable_recipe)
+    )
+    heartbeat_observed = threading.Event()
+    loader = _HeartbeatWaitingLoader(heartbeat_observed)
+    original_renew = automation.renew_run_lease
+    original_lease_deadline = clock.current + timedelta(seconds=30)
+    renewals_during_step = 0
+
+    def observe_heartbeat(*args, **kwargs):
+        nonlocal renewals_during_step
+        if loader.started.is_set():
+            renewals_during_step += 1
+            clock.advance(seconds=10)
+        renewed = original_renew(*args, **kwargs)
+        if renewals_during_step >= 4:
+            heartbeat_observed.set()
+        return renewed
+
+    monkeypatch.setattr(automation, "renew_run_lease", observe_heartbeat)
+    worker = _worker(
+        data_home,
+        recipes,
+        automation,
+        clock,
+        _ConnectorOpener(loader),
+        heartbeat_interval=timedelta(milliseconds=10),
+    )
+
+    finished = worker.run_once()
+
+    assert heartbeat_observed.is_set()
+    assert clock.current > original_lease_deadline
+    assert finished is not None
+    assert finished.status is AutomationRunStatus.SUCCEEDED
+
+
+def test_worker_does_not_finalize_after_background_heartbeat_loses_fence(
+    tmp_path,
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+    monkeypatch,
+) -> None:
+    data_home, workspace, recipes, automation, clock, _schedule, queued = (
+        _seed_queued_run(tmp_path, recipe_workspace, executable_recipe)
+    )
+    heartbeat_failed = threading.Event()
+    loader = _HeartbeatWaitingLoader(heartbeat_failed)
+    original_renew = automation.renew_run_lease
+
+    def lose_fence_during_step(*args, **kwargs):
+        if loader.started.is_set():
+            heartbeat_failed.set()
+            raise AutomationLeaseError("Worker lease fencing token is stale")
+        return original_renew(*args, **kwargs)
+
+    monkeypatch.setattr(
+        automation,
+        "renew_run_lease",
+        lose_fence_during_step,
+    )
+    worker = _worker(
+        data_home,
+        recipes,
+        automation,
+        clock,
+        _ConnectorOpener(loader),
+        heartbeat_interval=timedelta(milliseconds=10),
+    )
+
+    with pytest.raises(AutomationWorkerLeaseLostError, match="lease"):
+        worker.run_once()
+
+    assert heartbeat_failed.is_set()
+    current = automation.get_run(
+        workspace.identity_id,
+        workspace.workspace_id,
+        queued.run_id,
+    )
+    assert current.status is AutomationRunStatus.RUNNING
+    attempt_dir = workspace.confined_root.resolve(
+        "artifacts/recipe-runs/run_" + "a" * 32
+    )
+    assert attempt_dir.is_dir()
+    assert not (attempt_dir / "manifest.json").exists()
+
+
+def test_worker_keeps_lease_alive_until_long_step_reaches_cancel_boundary(
+    tmp_path,
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+    monkeypatch,
+) -> None:
+    data_home, workspace, recipes, automation, clock, _schedule, queued = (
+        _seed_queued_run(tmp_path, recipe_workspace, executable_recipe)
+    )
+    heartbeat_after_cancel = threading.Event()
+    loader = _CancellingHeartbeatWaitingLoader(
+        automation,
+        queued.run_id,
+        heartbeat_after_cancel,
+    )
+    original_renew = automation.renew_run_lease
+
+    def observe_post_cancel_renewal(*args, **kwargs):
+        renewed = original_renew(*args, **kwargs)
+        if loader.cancel_requested.is_set():
+            heartbeat_after_cancel.set()
+        return renewed
+
+    monkeypatch.setattr(
+        automation,
+        "renew_run_lease",
+        observe_post_cancel_renewal,
+    )
+    worker = _worker(
+        data_home,
+        recipes,
+        automation,
+        clock,
+        _ConnectorOpener(loader),
+        heartbeat_interval=timedelta(milliseconds=10),
+    )
+
+    cancelled = worker.run_once()
+
+    assert heartbeat_after_cancel.is_set()
+    assert cancelled is not None
+    assert cancelled.status is AutomationRunStatus.CANCELLED
+    manifest, _persisted = _read_attempt(workspace, cancelled.artifact_run_id)
+    assert manifest["status"] == "cancelled"
+
+
+def test_worker_rejects_a_heartbeat_that_cannot_precede_lease_expiry() -> None:
+    with pytest.raises(ValueError, match="heartbeat_interval"):
+        AutomationWorker(
+            Mock(),
+            Mock(),
+            Mock(),
+            Mock(),
+            worker_id="worker-a",
+            enabled=True,
+            lease_duration=timedelta(seconds=30),
+            heartbeat_interval=timedelta(seconds=30),
+        )
+
+
+def test_restarted_runtime_executes_a_run_persisted_by_an_earlier_cycle(
+    tmp_path,
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+) -> None:
+    data_home, workspace, _recipes, automation, clock, schedule, _queued = (
+        _seed_queued_run(tmp_path, recipe_workspace, executable_recipe)
+    )
+    with sqlite3.connect(automation.database_path) as connection:
+        connection.execute("DELETE FROM runs")
+        connection.execute(
+            "UPDATE schedules SET next_run_at = ? WHERE schedule_id = ?",
+            ("2026-08-20T09:00:00.000000Z", schedule.schedule_id),
+        )
+
+    scheduler_only_worker = Mock()
+    scheduler_only_worker.run_once.return_value = None
+    first_process = AutomationRuntime(
+        AutomationScheduler(automation, clock=clock),
+        scheduler_only_worker,
+        enabled=True,
+    )
+
+    scheduled = first_process.run_cycle()
+
+    assert len(scheduled.scheduler.runs) == 1
+    persisted_run_id = scheduled.scheduler.runs[0].run_id
+    scheduler_only_worker.run_once.assert_called_once_with()
+
+    restarted_automation = AutomationRepository(
+        automation.database_path,
+        clock=clock,
+    )
+    restarted_recipes = RecipeRepository(automation.database_path)
+    restarted_worker = _worker(
+        data_home,
+        restarted_recipes,
+        restarted_automation,
+        clock,
+        _ConnectorOpener(_WorkerLoader()),
+    )
+    restarted_process = AutomationRuntime(
+        AutomationScheduler(restarted_automation, clock=clock),
+        restarted_worker,
+        enabled=True,
+    )
+
+    completed = restarted_process.run_cycle()
+
+    assert completed.run is not None
+    assert completed.run.run_id == persisted_run_id
+    assert completed.run.status is AutomationRunStatus.SUCCEEDED
+    assert restarted_automation.get_run(
+        workspace.identity_id,
+        workspace.workspace_id,
+        persisted_run_id,
+    ).status is AutomationRunStatus.SUCCEEDED

@@ -102,6 +102,7 @@ include = ["data_formulator*"]
 [project.scripts]
 data_formulator = "data_formulator:run_app"
 data_formulator_desktop = "data_formulator.desktop:run_desktop"
+data_formulator_worker = "data_formulator.automation.cli:main"
 
 [tool.uv]
 dev-dependencies = [

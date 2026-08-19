@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -53,6 +54,7 @@ from data_formulator.security.code_signing import (
 Clock = Callable[[], datetime]
 AttemptIdFactory = Callable[[], UUID]
 EnabledCheck = Callable[[], bool]
+LeaseRenewal = Callable[[], StoredAutomationRun]
 
 
 class AutomationWorkerError(RuntimeError):
@@ -72,6 +74,109 @@ class _WorkerFailure:
     code: str
     message: str
     retryable: bool = False
+
+
+class _RunLeaseHeartbeat:
+    """Renew one fenced Run lease while a synchronous step is in flight."""
+
+    def __init__(
+        self,
+        renew: LeaseRenewal,
+        *,
+        interval: timedelta,
+        run_id: str,
+        join_timeout: float,
+    ) -> None:
+        self._renew = renew
+        self._interval_seconds = interval.total_seconds()
+        self._join_timeout = join_timeout
+        self._stop_event = threading.Event()
+        self._state_lock = threading.Lock()
+        self._pulse_lock = threading.Lock()
+        self._failure: Exception | None = None
+        self._cancel_requested = False
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"data-formulator-heartbeat-{run_id}",
+            daemon=True,
+        )
+        self._thread_started = False
+
+    def start(self) -> None:
+        """Fence once synchronously, then begin timed renewal."""
+        cancelled = self.checkpoint()
+        if cancelled:
+            return
+        try:
+            self._thread.start()
+        except Exception as exc:
+            self._record_failure(exc)
+            self.raise_if_failed()
+        self._thread_started = True
+
+    def stop(self) -> None:
+        """Stop renewal before the caller mutates logical terminal state."""
+        self._stop_event.set()
+        if not self._thread_started:
+            return
+        self._thread.join(timeout=self._join_timeout)
+        if self._thread.is_alive():
+            self._record_failure(
+                RuntimeError("Automation lease heartbeat did not stop")
+            )
+
+    def checkpoint(self) -> bool:
+        """Synchronously renew and expose cancellation at a safe boundary."""
+        self.raise_if_failed()
+        if self.cancel_requested:
+            return True
+        self._pulse()
+        self.raise_if_failed()
+        return self.cancel_requested
+
+    @property
+    def cancel_requested(self) -> bool:
+        with self._state_lock:
+            return self._cancel_requested
+
+    def raise_if_failed(self) -> None:
+        with self._state_lock:
+            failure = self._failure
+        if failure is not None:
+            raise RecipeExecutionAborted(
+                "Automation Worker lease heartbeat failed"
+            ) from failure
+
+    def _run(self) -> None:
+        while not self._stop_event.wait(self._interval_seconds):
+            self._pulse()
+            with self._state_lock:
+                should_stop = self._failure is not None
+            if should_stop:
+                return
+
+    def _pulse(self) -> None:
+        if self._stop_event.is_set():
+            return
+        with self._pulse_lock:
+            with self._state_lock:
+                if self._failure is not None:
+                    return
+            try:
+                renewed = self._renew()
+                cancel_requested = renewed.cancel_requested_at is not None
+            except Exception as exc:
+                self._record_failure(exc)
+                return
+            if cancel_requested:
+                with self._state_lock:
+                    self._cancel_requested = True
+
+    def _record_failure(self, error: Exception) -> None:
+        with self._state_lock:
+            if self._failure is None:
+                self._failure = error
+        self._stop_event.set()
 
 
 class AutomationWorker:
@@ -96,6 +201,7 @@ class AutomationWorker:
         lease_duration: timedelta = DEFAULT_LEASE_DURATION,
         retry_delays: Sequence[timedelta] = DEFAULT_RETRY_DELAYS,
         attempt_id_factory: AttemptIdFactory | None = None,
+        heartbeat_interval: timedelta | None = None,
     ) -> None:
         if not isinstance(worker_id, str) or not worker_id.strip():
             raise ValueError("worker_id cannot be empty")
@@ -104,6 +210,17 @@ class AutomationWorker:
             or lease_duration <= timedelta(0)
         ):
             raise ValueError("lease_duration must be a positive timedelta")
+        if heartbeat_interval is None:
+            heartbeat_interval = lease_duration / 3
+        if (
+            not isinstance(heartbeat_interval, timedelta)
+            or heartbeat_interval <= timedelta(0)
+            or heartbeat_interval >= lease_duration
+        ):
+            raise ValueError(
+                "heartbeat_interval must be positive and shorter than "
+                "lease_duration"
+            )
         delays = tuple(retry_delays)
         if not delays or any(
             not isinstance(delay, timedelta) or delay < timedelta(0)
@@ -125,6 +242,7 @@ class AutomationWorker:
         self._enabled = enabled_check
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._lease_duration = lease_duration
+        self._heartbeat_interval = heartbeat_interval
         self._retry_delays = delays
         self._attempt_id_factory = attempt_id_factory or uuid4
         self._validate_database_paths()
@@ -164,7 +282,7 @@ class AutomationWorker:
     ) -> "AutomationWorker":
         from data_formulator.datalake.workspace import get_data_formulator_home
 
-        if not _automation_enabled_from_environment():
+        if not automation_enabled_from_environment():
             raise AutomationWorkerDisabledError(
                 "Automation Worker is disabled by AUTOMATION_ENABLED."
             )
@@ -205,72 +323,99 @@ class AutomationWorker:
                 "Claimed Automation Run has no fenced lease token."
             )
 
+        heartbeat = self._heartbeat(claimed)
+        execution: RecipeExecutionResult | None = None
+        setup_failure: _WorkerFailure | None = None
+        aborted: RecipeExecutionAborted | None = None
         try:
-            attempt_run_id = self._new_attempt_run_id()
-            workspace = self._workspace_opener.open(
-                claimed.identity_id,
-                claimed.workspace_id,
-            )
-            loaded = self._recipe_repository.load_version(
-                workspace,
-                claimed.version_id,
-            )
-            if loaded.version.status not in {
-                RecipeVersionStatus.PUBLISHED,
-                RecipeVersionStatus.ARCHIVED,
-            }:
-                raise ValueError(
-                    "Queued Run does not reference an executable RecipeVersion"
-                )
-            executor = RecipeExecutor(
-                workspace,
-                loader_resolver=lambda source_id: self._connector_opener.open(
+            heartbeat.start()
+            try:
+                attempt_run_id = self._new_attempt_run_id()
+                workspace = self._workspace_opener.open(
                     claimed.identity_id,
-                    source_id,
-                ),
-            )
-            execution = executor.execute(
-                loaded.compiled.spec,
-                parameter_values={},
-                kind=RecipeRunKind.AUTOMATION,
-                run_id=attempt_run_id,
-                checkpoint=self._checkpoint(claimed),
-            )
+                    claimed.workspace_id,
+                )
+                loaded = self._recipe_repository.load_version(
+                    workspace,
+                    claimed.version_id,
+                )
+                if loaded.version.status not in {
+                    RecipeVersionStatus.PUBLISHED,
+                    RecipeVersionStatus.ARCHIVED,
+                }:
+                    raise ValueError(
+                        "Queued Run does not reference an executable "
+                        "RecipeVersion"
+                    )
+                executor = RecipeExecutor(
+                    workspace,
+                    loader_resolver=(
+                        lambda source_id: self._connector_opener.open(
+                            claimed.identity_id,
+                            source_id,
+                        )
+                    ),
+                )
+                execution = executor.execute(
+                    loaded.compiled.spec,
+                    parameter_values={},
+                    kind=RecipeRunKind.AUTOMATION,
+                    run_id=attempt_run_id,
+                    checkpoint=heartbeat.checkpoint,
+                )
+            except RecipeExecutionAborted as exc:
+                aborted = exc
+            except Exception as exc:
+                setup_failure = _classify_failure(exc)
         except RecipeExecutionAborted as exc:
+            aborted = exc
+        finally:
+            heartbeat.stop()
+
+        try:
+            heartbeat.raise_if_failed()
+        except RecipeExecutionAborted as exc:
+            aborted = exc
+        if aborted is not None:
             raise AutomationWorkerLeaseLostError(
                 "Automation Worker lease checkpoint failed."
-            ) from exc
-        except Exception as exc:
-            return self._record_setup_failure(claimed, _classify_failure(exc))
+            ) from aborted
+        if setup_failure is not None:
+            return self._record_setup_failure(claimed, setup_failure)
+        if execution is None:
+            return self._record_setup_failure(
+                claimed,
+                _WorkerFailure(
+                    code="WORKER_EXECUTION_FAILED",
+                    message="Automation Worker execution failed.",
+                ),
+            )
 
         return self._record_execution(claimed, execution)
 
-    def _checkpoint(self, claimed: StoredAutomationRun) -> Callable[[], bool]:
+    def _heartbeat(self, claimed: StoredAutomationRun) -> _RunLeaseHeartbeat:
         lease_token = claimed.lease_token
         if lease_token is None:
             raise AutomationWorkerLeaseLostError(
                 "Claimed Automation Run has no fenced lease token."
             )
 
-        def checkpoint() -> bool:
-            try:
-                renewed = self._repository.renew_run_lease(
-                    claimed.identity_id,
-                    claimed.workspace_id,
-                    claimed.run_id,
-                    worker_id=self._worker_id,
-                    lease_token=lease_token,
-                    lease_duration=self._lease_duration,
-                )
-            except Exception as exc:
-                # Without a successful fenced checkpoint, the attempt cannot
-                # safely finalize an immutable artifact or logical Run row.
-                raise RecipeExecutionAborted(
-                    "Automation Worker lease checkpoint failed"
-                ) from exc
-            return renewed.cancel_requested_at is not None
-
-        return checkpoint
+        return _RunLeaseHeartbeat(
+            lambda: self._repository.renew_run_lease(
+                claimed.identity_id,
+                claimed.workspace_id,
+                claimed.run_id,
+                worker_id=self._worker_id,
+                lease_token=lease_token,
+                lease_duration=self._lease_duration,
+            ),
+            interval=self._heartbeat_interval,
+            run_id=claimed.run_id,
+            join_timeout=max(
+                1.0,
+                min(self._lease_duration.total_seconds(), 6.0),
+            ),
+        )
 
     def _record_execution(
         self,
@@ -420,7 +565,7 @@ class AutomationWorker:
             )
 
 
-def _automation_enabled_from_environment() -> bool:
+def automation_enabled_from_environment() -> bool:
     return os.getenv("AUTOMATION_ENABLED", "false").strip().lower() == "true"
 
 
