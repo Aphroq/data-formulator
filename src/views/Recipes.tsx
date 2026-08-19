@@ -32,6 +32,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { ApiRequestError } from '../app/apiClient';
+import { enqueueManualRun } from '../app/automationApi';
 import type { DataFormulatorState } from '../app/dfSlice';
 import {
     archiveRecipe,
@@ -44,8 +45,8 @@ import {
     RecipeSummary,
     RecipeVersionDetail,
     RecipeVersionStatus,
-    runRecipe,
 } from '../app/recipeApi';
+import { RunsInbox, SchedulePanel } from './AutomationOperations';
 
 
 const statusColor = (status: RecipeVersionStatus) => {
@@ -216,6 +217,7 @@ export const Automation: FC = () => {
     const [notice, setNotice] = useState('');
     const [warning, setWarning] = useState('');
     const [lastRun, setLastRun] = useState<RecipeExecutionResult | null>(null);
+    const [runsRefreshToken, setRunsRefreshToken] = useState(0);
     const requestSequence = useRef(0);
     const translation = useRef(t);
     translation.current = t;
@@ -300,6 +302,7 @@ export const Automation: FC = () => {
         setNotice('');
         setLastRun(null);
         setWarning('');
+        setRunsRefreshToken(0);
         if (activeWorkspace && enabled) void refresh(requestedVersionId || undefined);
         return () => {
             requestSequence.current += 1;
@@ -337,6 +340,7 @@ export const Automation: FC = () => {
             let completedNotice = '';
             let completedRun: RecipeExecutionResult | null = null;
             let completedVersion: RecipeVersionDetail['version'] | null = null;
+            let enqueuedRunId = '';
             if (action === 'dry-run') {
                 const response = await dryRunRecipe(versionId, parameterValues());
                 completedRun = response.result;
@@ -348,11 +352,9 @@ export const Automation: FC = () => {
                 completedVersion = await publishRecipe(versionId);
                 completedNotice = t('recipes.publishSucceeded');
             } else if (action === 'run') {
-                const result = await runRecipe(versionId, parameterValues());
-                completedRun = result;
-                if (result.status === 'succeeded') {
-                    completedNotice = t('recipes.runSucceeded', { runId: result.run?.run_id });
-                }
+                const run = await enqueueManualRun(versionId);
+                enqueuedRunId = run.run_id;
+                completedNotice = t('automation.runs.queuedNotice', { runId: run.run_id });
             } else {
                 completedVersion = await archiveRecipe(versionId);
                 completedNotice = t('recipes.archiveSucceeded');
@@ -365,6 +367,7 @@ export const Automation: FC = () => {
             }
             setLastRun(completedRun);
             setNotice(completedNotice);
+            if (enqueuedRunId) setRunsRefreshToken(current => current + 1);
             const refreshOutcome = await refresh(versionId, {
                 surfaceError: false,
                 preserveDetail: true,
@@ -550,9 +553,21 @@ export const Automation: FC = () => {
                                     />
                                 )}
 
+                                {(status === 'published' || status === 'archived') && (
+                                    <SchedulePanel
+                                        versionId={detail.version.version_id}
+                                        versionStatus={detail.version.status}
+                                    />
+                                )}
+
                                 <Divider />
                                 <Box>
                                     <Typography variant="h6" component="h3" sx={{ mb: 1.5 }}>{t('recipes.parameters')}</Typography>
+                                    {status !== 'draft' && parameterFields.length > 0 && (
+                                        <Alert severity="info" sx={{ mb: 1.5 }}>
+                                            {t('automation.defaultBinding')}
+                                        </Alert>
+                                    )}
                                     {parameterFields.length === 0 ? (
                                         <Typography color="text.secondary">{t('recipes.noParameters')}</Typography>
                                     ) : (
@@ -563,6 +578,7 @@ export const Automation: FC = () => {
                                                     select={parameter.type === 'boolean'}
                                                     type={parameter.type === 'date' ? 'date' : parameter.type === 'integer' || parameter.type === 'number' ? 'number' : 'text'}
                                                     required={parameter.required}
+                                                    disabled={status !== 'draft'}
                                                     label={parameter.name}
                                                     value={parameters[parameter.id] ?? ''}
                                                     onChange={event => setParameters(current => ({ ...current, [parameter.id]: event.target.value }))}
@@ -618,6 +634,12 @@ export const Automation: FC = () => {
                     </Paper>
                 </Box>
                 )}
+                <RunsInbox
+                    workspaceId={activeWorkspace.id}
+                    recipes={recipes}
+                    refreshToken={runsRefreshToken}
+                    onSelectVersion={selectVersion}
+                />
             </Box>
         </Box>
     );

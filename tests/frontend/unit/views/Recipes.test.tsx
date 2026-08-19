@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
     getRecipeVersion: vi.fn(),
     dryRunRecipe: vi.fn(),
     publishRecipe: vi.fn(),
-    runRecipe: vi.fn(),
+    enqueueManualRun: vi.fn(),
     archiveRecipe: vi.fn(),
 }));
 
@@ -27,8 +27,16 @@ vi.mock('../../../../src/app/recipeApi', () => ({
     getRecipeVersion: mocks.getRecipeVersion,
     dryRunRecipe: mocks.dryRunRecipe,
     publishRecipe: mocks.publishRecipe,
-    runRecipe: mocks.runRecipe,
     archiveRecipe: mocks.archiveRecipe,
+}));
+
+vi.mock('../../../../src/app/automationApi', () => ({
+    enqueueManualRun: mocks.enqueueManualRun,
+}));
+
+vi.mock('../../../../src/views/AutomationOperations', () => ({
+    SchedulePanel: () => <section aria-label="Schedule settings">Schedule settings</section>,
+    RunsInbox: () => <section aria-label="Runs Inbox">Runs Inbox</section>,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -58,6 +66,7 @@ vi.mock('react-i18next', () => ({
             'automation.runResult.outputPath': 'Saved output',
             'automation.runResult.contentHash': 'content',
             'automation.runResult.schemaHash': 'schema',
+            'automation.runs.queuedNotice': `Run ${values?.runId} queued.`,
             'recipes.status.draft': 'Draft',
             'recipes.status.published': 'Published',
             'recipes.versionNumber': `Version ${values?.number}`,
@@ -151,20 +160,6 @@ const publishedDetail = {
     spec: { ...detail.spec, version_id: 'rv_1' },
 };
 
-const runResult = {
-    status: 'succeeded',
-    run: { run_id: 'run_2', kind: 'manual', status: 'succeeded', manifest_hash: 'sha256:a' },
-    steps: [{
-        step_id: 'step_1',
-        kind: 'load',
-        content_hash: `sha256:${'b'.repeat(64)}`,
-        schema_hash: `sha256:${'c'.repeat(64)}`,
-        output_path: 'workspace/data/orders.parquet',
-        duration_ms: 125,
-    }],
-    error: null,
-};
-
 function deferred<T>() {
     let resolve!: (value: T) => void;
     const promise = new Promise<T>(next => {
@@ -198,7 +193,11 @@ beforeEach(() => {
         },
         version: { ...version, status: 'validated' },
     });
-    mocks.runRecipe.mockResolvedValue(runResult);
+    mocks.enqueueManualRun.mockResolvedValue({
+        run_id: 'run_queued',
+        version_id: 'rv_1',
+        status: 'queued',
+    });
 });
 
 
@@ -226,28 +225,16 @@ describe('Automation page', () => {
         expect(within(resultPanel).getByText('Final output')).toBeInTheDocument();
     });
 
-    it('shows an execution error when a manual run fails before producing output', async () => {
-        mocks.runRecipe.mockResolvedValue({
-            status: 'failed',
-            run: { run_id: 'run_failed', kind: 'manual', status: 'failed', manifest_hash: 'sha256:f' },
-            steps: [],
-            error: {
-                code: 'connector_error',
-                exception_type: 'RecipeConnectorError',
-                message: 'The source could not be opened.',
-            },
-        });
+    it('persists a default-binding manual run in the Runs Inbox', async () => {
         render(<MemoryRouter initialEntries={['/automation?version=rv_1']}><Automation /></MemoryRouter>);
 
         expect(await screen.findByText('Published')).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
 
-        await waitFor(() => expect(mocks.runRecipe).toHaveBeenCalledWith('rv_1', {}));
-        const resultPanel = await screen.findByRole('region', { name: 'Latest run result' });
-        expect(within(resultPanel).getByText('Failed')).toBeInTheDocument();
-        expect(within(resultPanel).getByText('connector_error')).toBeInTheDocument();
-        expect(within(resultPanel).getByText('The source could not be opened.')).toBeInTheDocument();
-        expect(within(resultPanel).getByText('No step result')).toBeInTheDocument();
+        await waitFor(() => expect(mocks.enqueueManualRun).toHaveBeenCalledWith('rv_1'));
+        expect(await screen.findByText('Run run_queued queued.')).toBeInTheDocument();
+        expect(screen.getByRole('region', { name: 'Runs Inbox' })).toBeInTheDocument();
+        expect(screen.queryByRole('region', { name: 'Latest run result' })).not.toBeInTheDocument();
     });
 
     it('switches versions inside the selected recipe', async () => {
@@ -313,7 +300,7 @@ describe('Automation page', () => {
         expect(screen.getByRole('heading', { name: 'Second immutable version' })).toBeInTheDocument();
     });
 
-    it('keeps a successful run result when the follow-up refresh fails', async () => {
+    it('keeps a queued run notice when the follow-up Recipe refresh fails', async () => {
         mocks.listRecipes
             .mockResolvedValueOnce([recipe])
             .mockRejectedValueOnce(new Error('refresh failed'));
@@ -323,8 +310,8 @@ describe('Automation page', () => {
         expect(await screen.findByText('Published')).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
 
-        await waitFor(() => expect(mocks.runRecipe).toHaveBeenCalledWith('rv_1', {}));
-        expect(await screen.findByRole('region', { name: 'Latest run result' })).toBeInTheDocument();
+        await waitFor(() => expect(mocks.enqueueManualRun).toHaveBeenCalledWith('rv_1'));
+        expect(await screen.findByText('Run run_queued queued.')).toBeInTheDocument();
         expect(screen.getByText('Action completed, but Automation could not be refreshed.')).toBeInTheDocument();
         expect(screen.queryByText('recipes.actionFailed')).not.toBeInTheDocument();
     });

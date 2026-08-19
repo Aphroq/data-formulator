@@ -95,7 +95,7 @@ class AutomationRepository:
         name: str,
         cron_expression: str,
         timezone_name: str,
-        next_run_at: datetime,
+        next_run_at: datetime | None = None,
         schedule_id: str | None = None,
     ) -> StoredSchedule:
         identity_id = self._require_identifier(identity_id, "identity_id")
@@ -105,6 +105,12 @@ class AutomationRepository:
         normalized_cron = normalize_cron_expression(cron_expression)
         CronExpression.parse(normalized_cron)
         normalized_timezone = normalize_timezone_name(timezone_name)
+        if next_run_at is None:
+            next_run_at = next_cron_occurrence(
+                normalized_cron,
+                normalized_timezone,
+                self._clock_datetime(),
+            )
         normalized_next_run = normalize_utc_datetime(
             next_run_at,
             field_name="next_run_at",
@@ -529,6 +535,123 @@ class AutomationRepository:
                 run_id,
             )
         return self._run_from_row(row)
+
+    def list_runs(
+        self,
+        identity_id: str,
+        workspace_id: str,
+        *,
+        limit: int = 50,
+        status: AutomationRunStatus | str | None = None,
+    ) -> tuple[StoredAutomationRun, ...]:
+        identity_id = self._require_identifier(identity_id, "identity_id")
+        workspace_id = self._require_identifier(workspace_id, "workspace_id")
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("limit must be an integer from 1 to 100")
+        normalized_status = (
+            AutomationRunStatus(status) if status is not None else None
+        )
+        with self._database.connect() as connection:
+            if normalized_status is None:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM runs
+                    WHERE identity_id = ? AND workspace_id = ?
+                    ORDER BY created_at DESC, run_id DESC
+                    LIMIT ?
+                    """,
+                    (identity_id, workspace_id, limit),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM runs
+                    WHERE identity_id = ? AND workspace_id = ?
+                        AND status = ?
+                    ORDER BY created_at DESC, run_id DESC
+                    LIMIT ?
+                    """,
+                    (
+                        identity_id,
+                        workspace_id,
+                        normalized_status.value,
+                        limit,
+                    ),
+                ).fetchall()
+        return tuple(self._run_from_row(row) for row in rows)
+
+    def enqueue_manual_run(
+        self,
+        identity_id: str,
+        workspace_id: str,
+        version_id: str,
+        *,
+        run_id: str | None = None,
+    ) -> StoredAutomationRun:
+        """Persist one default-binding Run without accepting client timing data."""
+        identity_id = self._require_identifier(identity_id, "identity_id")
+        workspace_id = self._require_identifier(workspace_id, "workspace_id")
+        version_id = self._require_identifier(version_id, "version_id")
+        normalized_run_id = validate_run_id(
+            run_id or f"run_{self._id_factory().hex}"
+        )
+
+        connection = self._database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_published_version(
+                connection,
+                identity_id,
+                workspace_id,
+                version_id,
+            )
+            now = self._now()
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO runs (
+                        run_id, identity_id, workspace_id, version_id,
+                        schedule_id, trigger, scheduled_for, status,
+                        attempt_count, available_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 0, ?, ?, ?)
+                    """,
+                    (
+                        normalized_run_id,
+                        identity_id,
+                        workspace_id,
+                        version_id,
+                        AutomationRunTrigger.MANUAL.value,
+                        now,
+                        AutomationRunStatus.QUEUED.value,
+                        now,
+                        now,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                if connection.execute(
+                    "SELECT 1 FROM runs WHERE run_id = ?",
+                    (normalized_run_id,),
+                ).fetchone() is not None:
+                    raise AutomationConflictError(
+                        "run_id is already bound to another Run"
+                    ) from exc
+                raise AutomationRepositoryError(
+                    "Manual Run could not be persisted safely"
+                ) from exc
+            row = self._get_run_row(
+                connection,
+                identity_id,
+                workspace_id,
+                normalized_run_id,
+            )
+            connection.commit()
+            return self._run_from_row(row)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def claim_next_run(
         self,
@@ -1336,6 +1459,8 @@ class AutomationRepository:
         normalized = value.strip()
         if not normalized:
             raise ValueError("name cannot be empty")
+        if len(normalized) > 200:
+            raise ValueError("name cannot exceed 200 characters")
         return normalized
 
     @staticmethod

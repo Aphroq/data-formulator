@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pyarrow as pa
 import pytest
@@ -211,6 +211,73 @@ def test_scheduled_run_enqueue_is_idempotent_for_one_planned_time(
     assert first.scheduled_for == "2026-08-20T09:00:00.000000Z"
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 1
+
+
+def test_manual_runs_are_distinct_and_listed_only_inside_their_scope(
+    tmp_path,
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+) -> None:
+    database_path = tmp_path / "automation.db"
+    recipes = RecipeRepository(database_path)
+    published = _publish_version(recipes, recipe_workspace, executable_recipe)
+    current = datetime(2026, 8, 20, 9, tzinfo=timezone.utc)
+    automation = AutomationRepository(database_path, clock=lambda: current)
+
+    first = automation.enqueue_manual_run(
+        recipe_workspace.identity_id,
+        recipe_workspace.workspace_id,
+        published.version_id,
+    )
+    current += timedelta(seconds=1)
+    second = automation.enqueue_manual_run(
+        recipe_workspace.identity_id,
+        recipe_workspace.workspace_id,
+        published.version_id,
+    )
+
+    assert first.run_id != second.run_id
+    assert first.schedule_id is None
+    assert first.trigger is AutomationRunTrigger.MANUAL
+    assert first.status is AutomationRunStatus.QUEUED
+    assert first.scheduled_for == "2026-08-20T09:00:00.000000Z"
+    assert second.scheduled_for == "2026-08-20T09:00:01.000000Z"
+    assert automation.list_runs(
+        recipe_workspace.identity_id,
+        recipe_workspace.workspace_id,
+        limit=1,
+    ) == (second,)
+    assert automation.list_runs(
+        recipe_workspace.identity_id,
+        recipe_workspace.workspace_id,
+        status=AutomationRunStatus.QUEUED,
+    ) == (second, first)
+    assert automation.list_runs("user:mallory", "ws-1") == ()
+
+
+def test_schedule_can_compute_its_first_occurrence_from_the_repository_clock(
+    tmp_path,
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+) -> None:
+    database_path = tmp_path / "automation.db"
+    recipes = RecipeRepository(database_path)
+    published = _publish_version(recipes, recipe_workspace, executable_recipe)
+    automation = AutomationRepository(
+        database_path,
+        clock=lambda: datetime(2026, 8, 20, 12, tzinfo=timezone.utc),
+    )
+
+    schedule = automation.create_schedule(
+        identity_id=recipe_workspace.identity_id,
+        workspace_id=recipe_workspace.workspace_id,
+        version_id=published.version_id,
+        name="Next daily run",
+        cron_expression="0 9 * * *",
+        timezone_name="UTC",
+    )
+
+    assert schedule.next_run_at == "2026-08-21T09:00:00.000000Z"
 
 
 def test_enabled_schedule_blocks_archive_until_explicitly_disabled(
