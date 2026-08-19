@@ -16,7 +16,7 @@ fixed upstream baseline
 
 | 分支 | 负责 | 不负责 |
 | --- | --- | --- |
-| `feat/analysis-integrations` | TrustGraph Skill、citation、Copilot OAuth/capability | Recipe、Scheduler、Worker |
+| `feat/analysis-integrations` | TrustGraph 知识目录、只读查询 Skill、citation、Copilot OAuth/capability | Recipe、Scheduler、Worker、TrustGraph UI、rows 入表/同步、行语义搜索、知识摄取/Core 管理 |
 | `feat/recipe-core` | Artifact ledger、Recipe、Compiler、dry run、manual run | Scheduler、Runs Inbox |
 | `feat/automation-workbench` | SQLite、Schedule、Worker、Runs Inbox | Agent 和模型集成 |
 
@@ -40,7 +40,7 @@ fixed upstream baseline
 
 先完成四条可执行探针：
 
-1. TrustGraph：固定快照、真实 flow/collection、bearer workspace、sources、超时和错误格式。
+1. TrustGraph：固定快照、真实 ontology/flow/collection、bearer workspace、三元组与只读 SPARQL、`urn:graph:source` 溯源、超时和错误格式。
 2. Copilot：LiteLLM `1.91.3` 下的 OAuth device、chat、stream、tool calling 和 token refresh。
 3. Lineage：真实 database load → transform → chart，后端能完整遍历并稳定编译。
 4. Runtime：Worker 无 Flask request 打开相同 Workspace，Web/Worker 共享同一 SQLite 和 artifact store。
@@ -51,9 +51,12 @@ M0 不启动 Docker。数据库和 TrustGraph 合同验证使用已有可访问�
 
 ### M1：可信交互分析
 
-- 通用 business context provider 和 Skill。
+- 通用引用通道，以及 TrustGraph 本体/知识图谱只读 Skill。
 - identity/workspace/citation 契约及前端持久化显示。
-- TrustGraph 配置、超时、来源和故障降级。
+- TrustGraph Flow、collection、document、processing 与 Knowledge Core 目录。
+- TrustGraph 图实体语义检索、本体读取、类型化 RDF 查询、只读 SPARQL、溯源和故障降级。
+- TrustGraph GraphQL rows 只读查询；当前阶段不写 Data Formulator 表或 Workspace，不做同步。
+- TrustGraph 官方 UI 继续承担摄取、Context Core 管理和完整知识图谱工作台；Data Formulator 不复制这些能力。
 - Copilot OAuth endpoint 和能力探测。
 
 ### M2：Recipe Core
@@ -73,7 +76,8 @@ M0 不启动 Docker。数据库和 TrustGraph 合同验证使用已有可访问�
 
 ### M4：稳定化
 
-- 权限、日志清洗和 migration 测试。
+- TrustGraph 目录、图实体语义检索和只读 GraphQL 查询的端到端产品收口；需要管理 UI 时打开官方 `trustgraph-ui`。
+- 保留既有授权、引用、错误和大小边界的回归测试，不把它们继续拆成独立功能里程碑。
 - 长时间运行、崩溃恢复、重复调度和重启测试。
 - 中英文 UI、升级说明和发布检查。
 
@@ -81,13 +85,14 @@ M0 不启动 Docker。数据库和 TrustGraph 合同验证使用已有可访问�
 
 只使用一个数据库连接器、一个 TrustGraph collection 和一个支持工具调用的模型：
 
-1. 查询业务上下文并显示来源。
-2. 加载一张数据库表。
-3. 生成一个 transform 和一个 chart。
-4. 从 chart artifact 编译并 dry run Recipe。
-5. 发布 RecipeVersion，创建每日 Schedule。
-6. 成功运行一次。
-7. 修改源 schema，再运行并进入 Needs Review。
+1. 查看 TrustGraph 知识目录，语义发现一个实体，再读取绑定本体、事实和抽取溯源。
+2. 用 TrustGraph GraphQL query 取得结构化 rows，作为只读查询证据返回。
+3. 加载一张数据库表。
+4. 生成一个 transform 和一个 chart。
+5. 从 chart artifact 编译并 dry run Recipe。
+6. 发布 RecipeVersion，创建每日 Schedule。
+7. 成功运行一次。
+8. 修改源 schema，再运行并进入 Needs Review。
 
 通过后再扩展更多连接器、图表和调度能力。
 
@@ -137,7 +142,8 @@ yarn build
 
 必须覆盖：
 
-- TrustGraph 合同、认证隔离、sources 规范化、超时和提示注入防护。
+- TrustGraph 目录、本体、图实体语义检索、三元组/SPARQL 和只读 GraphQL rows 合同。
+- TrustGraph RDF term 与溯源规范化、查询 Skill 只读边界、超时和故障降级。
 - Copilot OAuth 生命周期和工具调用能力探测。
 - Artifact 记录、缺失血缘拒绝和稳定拓扑编译。
 - typed parameter binding 的非法输入和注入尝试。

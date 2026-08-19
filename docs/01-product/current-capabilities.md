@@ -5,7 +5,8 @@
 | 组件 | 固定版本 |
 | --- | --- |
 | Data Formulator | `0.8.0b1` / `5477f0e236426dc8f74a498ec400414fba7fbc0f` |
-| TrustGraph | `0bcfe9377c3d55b7199c16335b9e52ed91286233` |
+| TrustGraph 服务源码 | `0bcfe9377c3d55b7199c16335b9e52ed91286233` |
+| TrustGraph Python API | `trustgraph-base==2.8.14` |
 | LiteLLM | Data Formulator `uv.lock` 中的 `1.91.3` |
 
 TrustGraph 的 `release/v2.8` 是移动分支。开发、测试和问题复现记录完整提交号，不只记录分支名。
@@ -44,6 +45,25 @@ TrustGraph 的 `release/v2.8` 是移动分支。开发、测试和问题复现�
 | 后台 Cron | 无 | 新增 |
 | Recipe 版本 | 无 | 新增 |
 | Run 审计 | 无 | 新增 |
+
+## TrustGraph 能力与接入判断
+
+当前分支已经通过官方 `trustgraph-base==2.8.14` 接通知识目录、图实体语义检索、绑定本体、类型化 RDF 三元组、命名来源图和 SPARQL。锁定的 Python 包还直接提供以下现成接口：
+
+| 能力 | 官方 Python API | 产品判断 |
+| --- | --- | --- |
+| 知识目录 | collection、flow、document、processing、Knowledge Core 列表 | A8 已接入只读 Skill，先让 Agent 知道有哪些知识可用 |
+| 图实体语义搜索 | `graph_embeddings_query` / embeddings + graph-embeddings | A8 已接入只读 Skill，先发现实体再展开关系 |
+| 结构化行 | `rows_query`、`row_embeddings_query`、`structured_query` | 只接入确定性的 GraphQL rows 读取；`row_embeddings_query` 明确不接入，也不导入 Data Formulator 表或做同步 |
+| 文档检索 | `document_embeddings_query` | 在需要原文片段时作为图谱事实的补充，不替代本体/RDF 主路径 |
+| 文档与 Context Core | Library processing、Knowledge Core load/unload、bulk import/export | Data Formulator 不接入写操作；继续由 TrustGraph 官方 UI/CLI 管理，Skill 仅查看只读目录 |
+| TrustGraph 自带回答 | GraphRAG、DocumentRAG、Agent、text completion | 不接入；避免形成第二个回答 runtime |
+
+TrustGraph `2.8.14` 的独立 MCP Server 已通过真实 `initialize` 和 `tools/list` 探针，声明 31 个工具，能够向任意外部 MCP 客户端公开查询和管理能力。但它不是本项目获得上述能力的必要条件：当前 Python 后端已经安装官方 SDK，SDK 的结构化查询、行/文档语义搜索、Explainability 和 bulk 接口比该版本 MCP 工具面更完整。现阶段采用“官方 Python SDK 为产品主通道、MCP 为可选外部互操作入口”，不同时维护两条内部调用栈。
+
+真实探针还发现当前官方生成的 `2.8.14` Compose 中，MCP 默认反向连接 `api-gateway:8888`，而同一部署的 Gateway 实际监听 `8088`；显式覆盖 `--websocket-url ws://api-gateway:8088/api/v1/socket` 后可完成 Gateway 认证。该部署差异应在以后启用 MCP 兼容入口时单独修正，不阻塞 Python SDK 功能切片。
+
+TrustGraph 已提供独立的官方 [`trustgraph-ui`](https://github.com/trustgraph-ai/trustgraph-ui)。其 monorepo 包含 [`@trustgraph/trustkit`](https://www.npmjs.com/package/@trustgraph/trustkit) 组件/设计系统，以及 `@trustgraph/client`、`@trustgraph/react-provider` 和 `@trustgraph/react-state`。npm 实时注册表显示这些包已于 2026-08-18 发布 `2.0.3`；其中 `trustkit` 要求 React 19，而 Data Formulator 仍使用 React 18。管理和完整可视化直接使用独立官方 UI，本项目不复制组件、不升级 React，也不增加 TrustGraph 前端入口。
 
 ## 会话恢复不是执行
 

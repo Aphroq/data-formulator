@@ -4,7 +4,7 @@
 
 本项目直接扩展 Microsoft Data Formulator，形成一个“可信交互分析 + 确定性 Recipe + 轻量后台运行”的单体工作台。
 
-用户继续在现有 Data Thread 中使用唯一的 `AnalystAgent` 探索数据。Agent 可以按需读取本地知识和 TrustGraph 业务上下文，也可以选择经 LiteLLM 使用 GitHub Copilot 模型。用户确认结果后，系统从真实 Artifact Lineage 编译不可变 RecipeVersion；手动和定时 Run 只执行该版本，不调用 LLM 或 TrustGraph。
+用户继续在现有 Data Thread 中使用唯一的 `AnalystAgent` 探索数据。Agent 可以按需读取本地知识，也可以浏览 TrustGraph 的知识目录和本体、按语义发现图实体、查询 RDF 事实与抽取溯源，并把 TrustGraph 的 GraphQL 行查询结果作为结构化证据用于当前分析。用户还可以选择经 LiteLLM 使用 GitHub Copilot 模型。用户确认结果后，系统从真实 Artifact Lineage 编译不可变 RecipeVersion；手动和定时 Run 只执行该版本，不调用 LLM 或 TrustGraph。
 
 ## 目标用户
 
@@ -28,7 +28,9 @@ Workflow Replay 保留为灵活的“分析方法复用”；Recipe 是严格的
 
 ## 第一版必须完成
 
-- 在现有 AnalystAgent 中按需查询 TrustGraph，只读获取业务上下文和来源。
+- 在现有 AnalystAgent 中浏览 TrustGraph collection、文档、处理任务和 Context Core 目录，并按需读取业务本体。
+- 通过图实体语义搜索、三元组模式或 SPARQL 查询知识图谱及抽取溯源。
+- 通过 GraphQL 只读查询 TrustGraph 结构化数据；当前阶段只返回结构化查询结果，不写入 Data Formulator 表、Workspace，也不建立同步或刷新链路。
 - 可选使用 GitHub Copilot 模型，并验证 OAuth device、刷新、流式和工具调用。
 - 为加载、转换、图表和报告建立后端权威 Artifact Lineage。
 - 从选定产物编译、dry run、发布和手动运行 Recipe。
@@ -43,12 +45,17 @@ Workflow Replay 保留为灵活的“分析方法复用”；Recipe 是严格的
 - 页面内 URL/数据库刷新和已有派生代码重跑体验。
 - CSV/TSV 表格导出，以及报告 PNG、打印 PDF、富文本复制。
 - 现有数据连接器、Sandbox、代码签名和内容 hash。
+- TrustGraph 官方 `trustgraph-ui` 负责知识图谱浏览、Ontology/SPARQL/GraphQL 工作台、文档摄取和 Context Core 运维；Data Formulator 不复制这些管理界面。
 
 这些能力可扩展或调用，但不改名包装成后台 Recipe 系统。
 
 ## 第一版明确不做
 
 - 不增加第二个 Agent 或新的 Agent runtime。
+- 不把 TrustGraph Agent、GraphRAG 或文本补全作为本项目的回答路径；自然语言回答仍由现有 `AnalystAgent` 生成。
+- 不接入 TrustGraph `row_embeddings_query()`，不增加行数据语义搜索。
+- 不在 Data Formulator 增加文档摄取、Processing 或 Context Core load/unload/bulk 管理入口。
+- 不自建或复制 TrustGraph 工作台；需要管理和可视化时复用官方 `trustgraph-ui`。
 - 不使用 Copilot SDK，不部署 LiteLLM Proxy。
 - 不建设通用 DAG 编辑器或任意工作流平台。
 - 不引入 Celery、Redis、Temporal、Kafka。
@@ -61,7 +68,7 @@ Workflow Replay 保留为灵活的“分析方法复用”；Recipe 是严格的
 
 ## 完成标准
 
-- 用户能在同一 Data Thread 中获得带来源的业务上下文并完成分析。
+- 用户能在同一 Data Thread 中发现可用知识域、查看业务本体、语义搜索实体、获得结构化图谱事实和行数据，并把结果用于后续表格与图表分析。
 - Save as Recipe 不依赖聊天猜测，能显示完整输入和步骤。
 - 发布前 dry run 成功；版本不可变，Schedule 固定版本。
 - 手动和定时 Run 均不调用 LLM/TrustGraph。
