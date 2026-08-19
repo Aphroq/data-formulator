@@ -76,7 +76,7 @@ M2 合并前只做一轮最小收口：
 Recipe Core 的签名配置回归已由 `3cd7ee12` 关闭并完整验证：未配置稳定 key 且 Automation 关闭时，原有交互 `visualize` 继续可用；Recipe/Worker 需要稳定 key 的边界返回 `SERVICE_UNAVAILABLE` 或拒绝启动。Automation 已线性同步该基线，可以进入 M3 持久化开发。
 
 - M3-A（已完成）：在现有工作区 rail 增加单一 `Automation` 入口，按 Recipe identity 聚合版本并复用 Recipe Core 生命周期 UI；`/recipes` 只保留兼容重定向。
-- M3-B：抽取同一 `automation.db` 的共享连接/migration owner，以 schema v3 增加 Schedule、持久化 Run、唯一入队和显式状态转换。
+- M3-B（进行中）：共享 `AutomationDatabase` 和 schema v3 已完成，已增加固定 Published RecipeVersion 的 Schedule、归档保护及 queued Run 唯一入队；下一步实现到期扫描、显式状态转换、claim/fencing、取消和恢复。
 - M3-C：实现可单测的 scheduler tick、lease/fencing、续租、过期恢复、步骤边界取消和最多 2 次明确瞬时错误重试，再增加无 Flask request 的 `data_formulator_worker` 入口。
 - M3-D：在单一 `/automation` 页面增加 Schedule 设置和 Runs Inbox，并把后台 Run 的 events/manifest、schema drift → Needs Review 闭环接入 UI。
 

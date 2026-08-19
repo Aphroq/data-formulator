@@ -41,9 +41,11 @@ TrustGraph 的 `release/v2.8` 是移动分支。开发、测试和问题复现�
 | Workspace 导入导出 | ZIP 保存清洗后的状态和 Workspace snapshot | 直接复用，暂不承载 Recipe/Run |
 | 数据导入 | 上传 CSV/TSV/JSON/Excel；Local Folder 另支持 Parquet/JSONL | 直接复用 |
 | 结果导出 | 表格 CSV/TSV；报告 PNG、打印 PDF、HTML/文本复制 | 直接复用 |
-| 后台 Cron | 无 | 新增 |
-| Recipe 版本 | 无 | 新增 |
-| Run 审计 | 无 | 新增 |
+| 后台 Cron | 已有固定 Published RecipeVersion 的 Schedule 与 queued Run 持久化契约；尚无到期扫描和 Worker | 继续实现 Scheduler/Worker |
+| Recipe 版本 | 已实现 Artifact Lineage、确定性编译、dry run、发布和手动运行 | 直接复用 |
+| Run 审计 | 已有 Recipe 终态制品和 Automation 逻辑 Run 行；尚无持久化查询 API / Runs Inbox | 继续实现状态机、执行与 UI |
+
+截至 2026-08-19，Automation 分支已经把共享目录数据库升级到 schema v3：`RecipeRepository` 与 `AutomationRepository` 共同使用 `AutomationDatabase`，并已落地 `schedules`、`runs`、scope 外键、固定版本、归档保护和 `(schedule_id, scheduled_for)` 唯一入队。这里的 queued Run 只是后台执行的持久化起点；Scheduler tick、lease Worker、状态转换、恢复、API 和 Runs Inbox 尚未实现，不能据此宣称后台自动化闭环已经可用。
 
 ## 会话恢复不是执行
 
@@ -100,7 +102,7 @@ SQL View 通过 DuckDB 重新采样；Python 派生表把已保存代码和服�
 - 通过浏览器打印流程生成 PDF。
 - 报告 HTML + 纯文本复制。
 
-当前没有 Recipe、Run 审计包、定时投递，以及 Excel/Parquet/JSON 表格导出入口。第一版不把这些相邻需求并入核心闭环。
+当前导出仍没有 Recipe/Run 审计包、定时投递，以及 Excel/Parquet/JSON 表格导出入口。第一版不把这些相邻需求并入核心闭环。
 
 源码：
 

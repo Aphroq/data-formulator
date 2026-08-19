@@ -219,11 +219,13 @@ SQLite 第一版只保留四张主表：
 
 `runs` 对 `(schedule_id, scheduled_for)` 建唯一约束，防止重复入队。
 
-Recipe Core 当前已经拥有 schema v1/v2。M3 增加 schema v3 前，必须把连接配置和顺序 migration 收口为一个共享数据库入口，供 Recipe、Schedule 和 Run repository 共同使用；不能让两个 repository 分别判断 schema 版本，否则旧的 Recipe repository 会把合法的新版本视为未知 migration。
+schema v3 已由 `data_formulator.automation.db.AutomationDatabase` 统一拥有；`RecipeRepository` 和 `AutomationRepository` 都通过它解析绝对路径、打开 WAL/foreign keys/`busy_timeout` 连接并执行 v1 → v2 → v3 顺序 migration。v2 原地升级、重复打开、事务回滚和未知未来版本失败关闭都有合同测试，任何 repository 都不得重新维护自己的 schema version 或 migration 分支。
 
 Schedule v1 持久化规范化的五段 Cron 表达式和 IANA timezone；“每日”只是 UI 对 Cron 的受控简化。`version_id` 创建后不可修改，切换 RecipeVersion 必须新建 Schedule。存在 enabled Schedule 时归档其 RecipeVersion 必须失败关闭，用户需先显式停用 Schedule；已绑定 archived version 的 Schedule 不允许重新启用。`next_run_at` 统一按 UTC 持久化，解析和展示时才使用 Schedule timezone。
 
 持久化 Run 使用独立的队列状态，不复用 Recipe Core 的终态制品枚举。Run 至少保存明确 scope、固定 version、触发类型、`scheduled_for`、尝试次数、下一次可领取时间、lease owner/token/expiry、取消请求、最终安全错误和可校验 artifact reference。逻辑 `run_id` 与每次 Executor 尝试的 artifact run id 分开，避免崩溃恢复或重试与已有的不完整/不可变运行目录冲突。SQLite 不保存参数值、连接参数、凭据或绝对 artifact 路径；v1 Schedule 只运行固定 Recipe/default binding。
+
+当前 repository 基础已支持创建/启停 Schedule 和按 `(schedule_id, scheduled_for)` 幂等创建 queued Run；schema 同时预留 lease、取消、错误和最终 artifact reference 字段。到期扫描、推进 `next_run_at`、合法状态转换、claim/fencing、恢复和执行仍属于后续切片，不得用直接 enqueue API 冒充 Scheduler 已完成。
 
 ### Scheduler 与 Worker
 

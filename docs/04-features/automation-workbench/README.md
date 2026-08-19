@@ -8,7 +8,7 @@
 | Worktree | `D:\projects\dfm-wt-automation` |
 | 本机实例 | `automation`：后端 5570、Vite 5176、数据目录 `D:\projects\dfm-runtime\automation` |
 | 基线 | Recipe Core `3cd7ee12`；6 个 M3-A 提交已线性重放，M3-A tip 为 `fd1f347c` |
-| 当前阶段 | P0 签名回归和 Recipe/配方术语收口已完成；开始 M3-B1 共享 migration 契约 |
+| 当前阶段 | M3-B1 共享数据库/schema v3 与最小 Schedule/queued Run 契约已完成；进入 Scheduler/Run 状态机切片 |
 | 交接 | [Automation Workbench 分支交接](./HANDOFF.md) |
 
 ## 目标
@@ -33,7 +33,7 @@
 
 Recipe Core 已经可以保存、校验、发布和手动运行 Recipe，但入口仍以“Recipes”技术对象为中心。M3-A 建立一个易发现、不过度设计的 Automation 工作台：入口复用 Data Formulator 现有的工作区侧栏，与会话、数据连接器和知识处于同一层级；不再增加一层 `App / Automation` 导航，也不改名或重组原有 Workflow Replay、知识和会话概念。
 
-最初实现曾把一个 Recipe identity 称为 Automation project。2026-08-19 的跨层核对确认该术语会与现有项目/Workspace 概念冲突，产品模型现已收口为 `Workspace → Recipe → RecipeVersion → Run/Schedule`。当前源码的数据结构本来就是 Recipe，尚待修改的只有中英文文案和对应测试名称，不增加 Project id、容器或 repository。
+最初实现曾把一个 Recipe identity 称为 Automation project。2026-08-19 的跨层核对确认该术语会与现有项目/Workspace 概念冲突，产品模型现已收口为 `Workspace → Recipe → RecipeVersion → Run/Schedule`。源码的数据结构和当前中英文文案都已统一为 Recipe，不增加 Project id、容器或 repository。
 
 本阶段的用户路径只有一条：
 
@@ -125,17 +125,17 @@ Recipe Core 已经可以保存、校验、发布和手动运行 Recipe，但入�
 | P0 | `tests/conftest.py` 为所有测试默认注入 `DF_CODE_SIGNING_SECRET` | 已增加显式删除两种稳定 key 的交互、API、Service、Compiler 和 Executor 回归 |
 | P1 | `recipes.json`、`Recipes.tsx` 测试标题和列表标签曾出现 `Projects / 自动化项目` | 已收口为 `Recipes / 配方`，数据模型仍只有 Recipe/RecipeVersion |
 | P1 | 当前实现只有 `/automation`，`/recipes` 已重定向；旧系统设计仍写两个最终页面 | 已同步产品和系统设计为单一入口，不恢复独立 Recipes 导航 |
-| P1 | `RecipeRepository.SCHEMA_VERSION == 2`，初始化会拒绝任何未知更高 migration | schema v3 前必须抽共享 DB/migration owner；不能让 Automation 单独升级后再由旧 Recipe repository 打开同一库 |
+| P1 | 原 `RecipeRepository.SCHEMA_VERSION == 2`，初始化会拒绝任何未知更高 migration | 已抽取唯一 `AutomationDatabase` owner 并升级到 schema v3；Recipe/Automation repository 可交替打开同一库 |
 
 Recipe 修复验证：聚焦后端 67 passed、1 skipped；全量后端 2251 passed、16 skipped、1 xfailed；Recipe 前端 399 passed，生产构建通过。Automation 术语收口聚焦前端 11 passed。
 
-## M3-B 开工契约：Schedule 与持久化 Run
+## M3-B 实施契约：Schedule 与持久化 Run
 
 ### 单一数据库与 schema v3
 
 - `DATA_FORMULATOR_HOME/automation/automation.db` 仍是唯一目录数据库。
-- 抽取一个小型共享 DB 入口，统一绝对路径、WAL、foreign keys、`busy_timeout`、显式事务和 v1 → v2 → v3 顺序 migration；`RecipeRepository` 与新增 Automation repository 共同使用。
-- v3 在现有 `recipes` / `recipe_versions` 上增加 `schedules` / `runs`，覆盖空库初始化、v2 原地升级、重复初始化、事务回滚和未知未来版本失败关闭。
+- `AutomationDatabase` 已统一绝对路径、WAL、foreign keys、`busy_timeout`、显式事务和 v1 → v2 → v3 顺序 migration；`RecipeRepository` 与 `AutomationRepository` 共同使用。
+- v3 已在现有 `recipes` / `recipe_versions` 上增加 `schedules` / `runs`；合同测试覆盖空库初始化、v2 原地升级、重复初始化、事务回滚和未知未来版本失败关闭。
 - 所有查询和写入都带 `identity_id + workspace_id`；Schedule 外键固定同 scope 的 RecipeVersion，创建时必须验证其状态为 `published`。
 
 ### Schedule 契约
@@ -165,9 +165,9 @@ running ── retryable failure / expired lease, attempts < 3 ──→ queued
 
 ### M3-B 实施切片
 
-1. **B1 迁移所有权**：先写 v2 → v3、重复初始化和未来版本拒绝测试，再抽共享 DB helper；不注册 route。
-2. **B2 Schedule repository**：Published version/scope 校验、不可变 version、enable/disable 和到期扫描契约。
-3. **B3 Run repository**：唯一入队、合法状态迁移、claim/fencing/renew、取消和过期 lease 恢复；全部使用注入时钟，无真实 sleep。
+1. [x] **B1 迁移所有权**：唯一 DB helper、v1 → v2 → v3、重复初始化、失败回滚、未来版本拒绝；未注册 route。
+2. [ ] **B2 Schedule repository**：Published version/scope、不可变 version 和 enable/disable 已完成；尚需列表/编辑、Cron 计算、到期扫描与原子推进 `next_run_at`。
+3. [ ] **B3 Run repository**：Automation Run enum、持久化字段和唯一 queued 入队已完成；尚需合法状态转换、claim/fencing/renew、取消和过期 lease 恢复，全部使用注入时钟且无真实 sleep。
 4. **B4 单次 tick/execute**：先实现 `scheduler.tick()` 与 `worker.run_once()`，复用显式 Workspace/connector opener 和 `RecipeExecutor`；常驻 CLI、heartbeat 和 UI 后接。
 
 M3-B 的第一个提交不引入 Cron 第三方依赖、常驻线程、API、UI 或并发 2。需要 Cron 解析实现时先用合同测试锁定时区、DST 和停机补偿语义，再决定最小实现。
@@ -176,7 +176,7 @@ M3-B 的第一个提交不引入 Cron 第三方依赖、常驻线程、API、UI 
 
 1. [x] Recipe Core 修复稳定签名配置回归，Automation rebase 到新基线并完成三项基础验证。
 2. [x] 本分支完成“自动化项目 → Recipe/配方”术语收口及聚焦前端测试。
-3. 完成 M3-B 的共享 migration、Schedule/Run repository 和单次 tick/execute 闭环。
+3. 完成 M3-B 剩余的 Schedule/Run repository、单次 scheduler tick 和 `worker.run_once()` 闭环。
 4. 增加 lease heartbeat、步骤边界取消、有限重试、恢复和 `data_formulator_worker`。
 5. 增加 Schedule/Run API、Runs Inbox 和 Needs Review 处置，再做页面关闭及进程重启验证。
 
@@ -196,6 +196,9 @@ M3-B 的第一个提交不引入 Cron 第三方依赖、常驻线程、API、UI 
 | 2026-08-18 | M3-A UI 收口 | 删除 Automation 页头残留的“打开应用”按钮，并移除空状态中对 App 层级的表述 | Automation 聚焦测试、生产构建、真实页面检查 | `fix: remove redundant automation app action` |
 | 2026-08-19 | M3-A 基线同步 | 将 5 个既有 Automation 提交线性 rebase 到 Recipe Core M2-D；解决页面/测试重叠，保留详细运行结果并继承防串请求、URL 版本和刷新失败语义 | Automation 页面 7 passed；前端 49 files / 405 tests；后端 2239 passed、16 skipped、1 xfailed；生产构建和相关 ESLint 通过 | `fix: align automation with recipe core` |
 | 2026-08-19 | M3-B 开发准备 | 核对分支拓扑、单一 Automation 入口、schema v2 迁移冲突和 Worker/Executor 复用点；在 Recipe 关闭签名 P0，Automation 线性同步新基线并把 Project 术语收口为 Recipe | Recipe 聚焦 67 passed、1 skipped；全量后端 2251 passed、16 skipped、1 xfailed；Recipe 前端 399 passed、生产构建通过；Automation 聚焦前端 11 passed；文档检查通过 | `fix: prepare automation persistence` |
+| 2026-08-19 | M3-B1 持久化契约 | 抽取唯一 `AutomationDatabase` migration owner 并升级 schema v3；增加固定 Published RecipeVersion 的 Schedule、归档保护、独立 Automation Run 状态/字段及按计划时刻幂等 queued 入队；未接 route、线程或 Worker | 聚焦 22 passed；Recipe/Automation 119 passed、2 skipped；全量后端 2262 passed、16 skipped、1 xfailed；前端 49 files / 405 tests；生产构建和 wheel 构建通过 | `9f3056ef feat: establish automation persistence contracts` |
+
+M3-B1 全量验证第一次继承 Codex 终端的 `cp936` / `TERM=dumb`，触发 7 个既有插件编码和 spinner 环境相关失败；未修改这些非本 Feature 文件。显式使用 `PYTHONUTF8=1`、`TERM=xterm` 后，相关 8 项及全量 2279 项收集均通过。
 
 ## 已确认决策
 
@@ -212,17 +215,18 @@ M3-B 的第一个提交不引入 Cron 第三方依赖、常驻线程、API、UI 
 - 当前 Worktree 已基于 Recipe Core `3cd7ee12` 重放 Automation 提交；后续 Schedule/Run 工作不得回写 Recipe Core 分支。
 - Web、Worker 和 SQLite 直接在本机运行，不提供 Docker 或 Compose 方案。
 - SQLite 数据库和 artifact store 必须由 Web/Worker 解析到相同绝对路径。
+- 当前只提供直接、幂等的 scheduled Run 入队原语；尚无 Cron 求值、到期 tick 或 `next_run_at` 推进，不能通过循环调用 repository 伪造 Scheduler。
 - 进程崩溃、过期 lease 和运行中取消需要专门的恢复测试。
 
 ## 合并前检查
 
 - [x] Recipe Core 的签名回归已修复并同步，Automation 关闭且无稳定 key 时原有交互分析可用。
 - [x] Automation 列表术语为 Recipe/配方，没有 Project id、容器或 repository。
-- [ ] schema v2 可原地升级到 v3，Recipe 与 Automation repository 可交替打开同一数据库。
+- [x] schema v2 可原地升级到 v3，Recipe 与 Automation repository 可交替打开同一数据库。
 - [ ] 页面关闭后 Schedule 仍能创建 Run。
 - [ ] 重启后 queued/running Run 可恢复。
-- [ ] 同一计划时间不会重复入队。
+- [x] 同一 Schedule/计划时间的直接入队幂等且受数据库唯一约束保护；重复 tick 仍待 Scheduler 合同测试。
 - [ ] Schema drift 进入 Needs Review。
 - [ ] Automation flag 关闭时 Worker、API、UI 均不可用。
 - [ ] 正常 Run 路径没有 LLM/TrustGraph 调用。
-- [ ] `uv run pytest`、`yarn test`、`yarn build` 通过。
+- [x] `uv run pytest`、`yarn test`、`yarn build` 通过。
