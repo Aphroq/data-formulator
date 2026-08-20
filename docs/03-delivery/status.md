@@ -4,13 +4,13 @@
 
 ## 阶段
 
-Recipe Core 的稳定签名 P0 已由 `3cd7ee12` 关闭并推送。Automation Workbench 已完成 M3-A 至 M3-D，以及 M4 的运行中 Worker 强杀、过期 attempt 回收和第二次尝试恢复；当前提交 tip 为 `d064dcf0`。当前工作树又完成可重复验收加固、typed values、参数创作体验和成功 Run 的只读分析报告。仓库 3,201 行 Movies 除了 load filter Drama/Comedy 与 transform `top_n=3/7`，现在还覆盖四参数、两层 Transform 的导演组合分析，以及同 schema 源数据刷新；中间表、最终表、步骤事件、冻结值、binding hash 和旧制品不可变性都有精确断言，运行路径仍完全无 LLM。报告主界面已移除重复文本，参数保存助手已改为 Workflow 语义优先，并已用服务端全局配置的 SiliconFlow `Qwen/Qwen3.5-27B` 完成一次真实推荐到 Automation Run 的闭环。
+Recipe Core 的稳定签名 P0 已由 `3cd7ee12` 关闭并推送。Automation Workbench 已完成 M3-A 至 M3-D，以及 M4 的运行中 Worker 强杀、过期 attempt 回收和第二次尝试恢复；参数化 Workbench 的交付提交为 `1db48fca`。该提交收口可重复验收加固、typed values、参数创作体验和成功 Run 的只读分析报告。仓库 3,201 行 Movies 除了 load filter Drama/Comedy 与 transform `top_n=3/7`，现在还覆盖四参数、两层 Transform 的导演组合分析，以及同 schema 源数据刷新；中间表、最终表、步骤事件、冻结值、binding hash 和旧制品不可变性都有精确断言，运行路径仍完全无 LLM。报告主界面已移除重复文本，参数保存助手已改为 Workflow 语义优先，并已用服务端全局配置的 SiliconFlow `Qwen/Qwen3.5-27B` 完成一次真实推荐到 Automation Run 的闭环。
 
 | 分支 | 已验证基线 | 状态 |
 | --- | --- | --- |
 | `feat/analysis-integrations` | `5d012eb1` | 已有独立实现提交；本轮未审计该分支在途工作 |
 | `feat/recipe-core` | `3cd7ee12` | 签名 P0 已修复、完整验证并与 `origin/feat/recipe-core` 一致 |
-| `feat/automation-workbench` | `d064dcf0` | M4 强杀恢复 tip；当前有未提交的真实数据/竞争/migration、typed values、Run 结果和文档加固，仍无远端分支 |
+| `feat/automation-workbench` | `1db48fca` | 参数化 Workbench、复杂真实数据回归、Run 报告和 SiliconFlow live 验收已提交；分支跟踪 `origin/feat/automation-workbench` |
 
 ## 已确认事实
 
@@ -64,4 +64,4 @@ Recipe Core 的稳定签名 P0 已由 `3cd7ee12` 关闭并推送。Automation Wo
 
 ## 阻塞
 
-当前没有已知代码阻塞。Recipe 修复已推送；Automation 分支仍无远端。浏览器自动化需要选择并落地测试运行时，真实外部 connector 验收需要用户已有端点，这两项是明确未完成条件，不用 skip-only 或 loopback 测试冒充完成。
+当前没有已知代码阻塞。Recipe 修复和 Automation Workbench 均已发布到各自的 `origin` 功能分支。浏览器自动化需要选择并落地测试运行时，真实外部 connector 验收需要用户已有端点，这两项是明确未完成条件，不用 skip-only 或 loopback 测试冒充完成。

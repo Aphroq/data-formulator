@@ -4,7 +4,7 @@
 
 ## 一句话状态
 
-M3-A 至 M3-D 均已完成，M4 又完成运行中 Worker 强杀、过期 attempt 回收和第二次尝试恢复。当前工作树完成验收加固、typed values、参数创作、报告瘦身、显式 AI 解读与 Workflow 语义优先参数推荐。默认测试不只覆盖 `top_n=3/7` 和 Drama/Comedy：3,201 行 Movies 还会走 `load → 两层 transform → chart`，以四个 typed slot 跑三种导演组合分析口径，并验证同 schema 源数据刷新改变新结果但不改旧制品；复杂推荐联动又从四个候选中语义选择三个输入，重新编译后跑通定时/手动真实结果，未推荐门槛保持冻结。保存对话框候选默认不选，AI 只预选推荐子集；成功报告紧凑展示本次元信息、图表/表格和按需明细，正常 Run 仍无 LLM。2026-08-21 又通过现有 `.env`/全局模型链路接入 SiliconFlow `Qwen/Qwen3.5-27B`，默认关闭 thinking，并完成真实模型推荐到复杂 Automation Run 的显式 live 验收；仓库仍没有默认浏览器 E2E，Web/桌面应用也不自动托管 Worker。
+M3-A 至 M3-D 均已完成，M4 又完成运行中 Worker 强杀、过期 attempt 回收和第二次尝试恢复。提交 `1db48fca` 收口验收加固、typed values、参数创作、报告瘦身、显式 AI 解读与 Workflow 语义优先参数推荐。默认测试不只覆盖 `top_n=3/7` 和 Drama/Comedy：3,201 行 Movies 还会走 `load → 两层 transform → chart`，以四个 typed slot 跑三种导演组合分析口径，并验证同 schema 源数据刷新改变新结果但不改旧制品；复杂推荐联动又从四个候选中语义选择三个输入，重新编译后跑通定时/手动真实结果，未推荐门槛保持冻结。保存对话框候选默认不选，AI 只预选推荐子集；成功报告紧凑展示本次元信息、图表/表格和按需明细，正常 Run 仍无 LLM。2026-08-21 又通过现有 `.env`/全局模型链路接入 SiliconFlow `Qwen/Qwen3.5-27B`，默认关闭 thinking，并完成真实模型推荐到复杂 Automation Run 的显式 live 验收；仓库仍没有默认浏览器 E2E，Web/桌面应用也不自动托管 Worker。
 
 ## Git 与 Worktree 快照
 
@@ -20,9 +20,10 @@ M3-A 至 M3-D 均已完成，M4 又完成运行中 Worker 强杀、过期 attemp
 | M3-C runtime tip | `61eba9eb feat: run automation worker service` |
 | M3-D API/UI tip | `1f5f181d feat: complete automation workbench APIs` |
 | M4 hard-kill tip | `d064dcf0 feat: recover abandoned automation attempts` |
+| 参数化 Workbench tip | `1db48fca feat: complete parameterized automation workbench` |
 | Recipe 基线 | `3cd7ee12 fix: preserve interactive signing fallback` |
-| 实现拓扑 | `d064dcf0` 是当前提交 tip，merge-base 为 `3cd7ee12`；工作树另有未提交的测试与文档加固 |
-| 远端 | 当前分支没有 upstream，`origin/feat/automation-workbench` 尚未创建 |
+| 实现拓扑 | 参数化 Workbench 交付提交为 `1db48fca`，merge-base 为 `3cd7ee12` |
+| 远端 | 本地分支跟踪 `origin/feat/automation-workbench` |
 | Recipe 远端 | 本地 `feat/recipe-core` 与 `origin/feat/recipe-core` 均指向 `3cd7ee12` |
 
 M3-A 的 6 个提交按时间从旧到新为：
@@ -51,6 +52,7 @@ ac66d59e docs: record automation worker milestone
 ecb6498a docs: record automation workbench API milestone
 d63170b4 docs: record automation product e2e
 d064dcf0 feat: recover abandoned automation attempts
+1db48fca feat: complete parameterized automation workbench
 ```
 
 这是独立 Worktree，不要在 Recipe 目录里来回切分支。进入本分支应使用：
@@ -274,19 +276,15 @@ Workspace / 原有项目概念
 
 后续实现继续遵守该方向：不要重新增加独立 Recipes 导航，也不要再增加 `应用 → 自动化` 包装层。
 
-### P2：Automation 分支尚未发布到远端
+### 已处理：Automation 分支首次发布
 
-本分支目前没有 upstream；Recipe 修复提交 `3cd7ee12` 已推送。完成当前实现和最终验证后再决定是否首次推送 Automation；命令为：
-
-```powershell
-git push -u origin feat/automation-workbench
-```
+参数化 Workbench 交付提交为 `1db48fca`；本地分支跟踪 `origin/feat/automation-workbench`。后续只使用普通 fast-forward push，不覆盖远端历史。
 
 ## 推荐继续顺序
 
 1. 选择并落地默认可运行的浏览器 E2E，把已通过的真实参数推荐闭环固化到 UI，并补报告 AI 解读 live 验收。
 2. 使用用户已有真实外部 connector 端点补验；之后再决定 Web/桌面 Worker 监督、长期运行和并发 2。
-3. 提交拆分时把 transform slot/spec/compiler/Recipe route/helper/Sandbox 契约形成可回迁 Recipe Core 的基础提交，再提交 Automation/Save UI 消费端；之后决定首次推送。
+3. 如果要把 transform slot/spec/compiler/Recipe route/helper/Sandbox 契约回迁 Recipe Core，另开经过评审的独立提交，不从 Automation 分支改写或覆盖 Recipe Core 历史。
 
 实现 M3 时注意：
 
