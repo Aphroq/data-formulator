@@ -21,6 +21,7 @@ export function getUrls() {
         LIST_GLOBAL_MODELS: `/api/agent/list-global-models`,
         CHECK_AVAILABLE_MODELS: `/api/agent/check-available-models`,
         TEST_MODEL: `/api/agent/test-model`,
+        BUSINESS_CONTEXT_STATUS: `/api/agent/business-context-status`,
 
         SORT_DATA_URL: `/api/agent/sort-data`,
         DATA_LOADING_CHAT_URL: `/api/agent/data-loading-chat`,

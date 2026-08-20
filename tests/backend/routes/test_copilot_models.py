@@ -79,6 +79,14 @@ def test_only_identity_qualified_chat_models_enter_public_results(flask_client):
     ):
         initial = flask_client.get("/api/agent/list-global-models").get_json()["data"]
         checked = flask_client.post("/api/agent/check-available-models", json={}).get_json()["data"]
+        checked_from_cache = flask_client.post(
+            "/api/agent/check-available-models",
+            json={},
+        ).get_json()["data"]
+        force_checked = flask_client.post(
+            "/api/agent/check-available-models",
+            json={"force_retest": True},
+        ).get_json()["data"]
         cached = flask_client.get("/api/agent/list-global-models").get_json()["data"]
 
     assert initial == []
@@ -89,8 +97,13 @@ def test_only_identity_qualified_chat_models_enter_public_results(flask_client):
         "streaming": True,
         "tools": True,
     }
+    assert checked_from_cache == checked
+    assert force_checked == checked
     assert cached == [{key: value for key, value in checked[0].items() if key not in {"status", "error"}}]
-    assert constructed == [("gpt-4.1", "browser:identity-a", True)]
+    assert constructed == [
+        ("gpt-4.1", "browser:identity-a", True),
+        ("gpt-4.1", "browser:identity-a", True),
+    ]
 
 
 @patch.dict(os.environ, COPILOT_ENV, clear=True)

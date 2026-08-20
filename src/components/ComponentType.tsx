@@ -49,6 +49,8 @@ export interface ContextItem {
     uri: string;
     title?: string;
     provider?: string;
+    /** Missing on historical sessions and interpreted as a document source. */
+    kind?: 'source' | 'trace';
 }
 
 export interface ClarificationOption {

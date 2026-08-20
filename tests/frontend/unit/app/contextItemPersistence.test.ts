@@ -5,11 +5,20 @@ import { getSerializableState } from '../../../../src/app/useAutoSave';
 
 describe('context item persistence', () => {
     it('survives workspace serialization and restore on text turns and interactions', () => {
-        const contextItems = [{
-            uri: 'https://example.com/evidence',
-            title: 'Evidence',
-            provider: 'trustgraph',
-        }];
+        const contextItems = [
+            {
+                uri: 'https://example.com/evidence',
+                title: 'Evidence',
+                provider: 'trustgraph',
+                kind: 'source' as const,
+            },
+            {
+                uri: 'urn:trustgraph:agent:session-one',
+                title: 'Retrieval trace',
+                provider: 'trustgraph',
+                kind: 'trace' as const,
+            },
+        ];
         const saved = {
             activeWorkspace: { id: 'ws-1', displayName: 'Workspace 1' },
             derivedTables: [{

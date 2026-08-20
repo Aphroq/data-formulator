@@ -816,9 +816,9 @@ export const fetchCodeExpl = createAsyncThunk(
     }
 );
 
-/** Fast fetch: returns the list of server-configured models instantly (no
- *  connectivity check).  The UI renders them immediately with a "testing"
- *  spinner so the admin can see every configured model right away. */
+/** Fast fetch: returns server-configured models without a connectivity check.
+ *  Copilot models appear only after this identity has a cached, qualified
+ *  capability result. */
 export const fetchGlobalModelList = createAsyncThunk(
     "dataFormulatorSlice/fetchGlobalModelList",
     async () => {
@@ -827,11 +827,11 @@ export const fetchGlobalModelList = createAsyncThunk(
     }
 );
 
-/** Slow fetch: runs parallel connectivity checks on all server-configured
- *  models and returns each model's connected / disconnected status. */
+/** Connectivity fetch: checks ordinary models in parallel and reuses an
+ *  identity-scoped Copilot capability result unless explicitly retested. */
 export const fetchAvailableModels = createAsyncThunk(
     "dataFormulatorSlice/fetchAvailableModels",
-    async () => {
+    async (options: { forceCopilotRetest?: boolean } | undefined = undefined) => {
         const controller = new AbortController()
         // Copilot qualification deliberately runs independent buffered chat,
         // streaming, and streamed-tool probes. Leave room for all three
@@ -842,7 +842,9 @@ export const fetchAvailableModels = createAsyncThunk(
             const { data } = await apiRequest(getUrls().CHECK_AVAILABLE_MODELS, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({}),
+                body: JSON.stringify({
+                    force_retest: options?.forceCopilotRetest === true,
+                }),
                 signal: controller.signal,
             });
             return data;

@@ -49,6 +49,13 @@ import { Theme } from '@mui/material/styles';
 import { useTranslation } from 'react-i18next';
 import { shouldAutoFocusGeneratedChart } from '../app/agentInteractionPolicy';
 import { ContextItemAccumulator } from '../app/contextItems';
+import {
+    applyBusinessContextToolProgress,
+    beginBusinessContextProgress,
+    createBusinessContextProgressState,
+    settleBusinessContextProgress,
+    settleLatestProgressStep,
+} from '../app/agentProgress';
 import { ClarificationPanel, ExplanationPanel } from './AgentPausePanel';
 import { CARD_WIDTH } from './threadLayout';
 import { iconVar, textVar } from '../app/layout';
@@ -991,6 +998,7 @@ export const SimpleChartRecBox: FC<{ onInputFocus?: () => void }> = function ({ 
         const STEP_SEP = '\x1E';
         let thinkingSteps: string[] = [];
         let pendingThought: string = '';
+        const businessProgressState = createBusinessContextProgressState();
 
         // ── Live report streaming (AnalystAgent only) ──
         // The unified agent can write a report inside the same run: it emits an
@@ -1253,6 +1261,13 @@ export const SimpleChartRecBox: FC<{ onInputFocus?: () => void }> = function ({ 
                     thinkingSteps.push(t('dataThread.inspectingChart'));
                 } else if (result.tool === "load_skill") {
                     thinkingSteps.push(t('dataThread.loadingSkill', { skill: result.skill || '' }));
+                } else if (beginBusinessContextProgress(
+                    thinkingSteps,
+                    result.tool,
+                    t,
+                    businessProgressState,
+                )) {
+                    // The initial row is updated in place by tool_progress.
                 } else if (result.tool === "search_data_tables" || result.tool === "search_knowledge") {
                     const query = result.query || '';
                     thinkingSteps.push(t('dataThread.searching') + (query ? ` "${query}"` : ''));
@@ -1264,14 +1279,30 @@ export const SimpleChartRecBox: FC<{ onInputFocus?: () => void }> = function ({ 
                 }
             }
 
+            // ── tool_progress: bounded, user-safe phases from streaming tools ──
+            if (result.type === "tool_progress") {
+                const updated = applyBusinessContextToolProgress(
+                    thinkingSteps,
+                    result,
+                    t,
+                    businessProgressState,
+                );
+                if (updated && currentDraftId) {
+                    dispatch(dfActions.updateDraftRunningPlan({ draftId: currentDraftId, plan: thinkingSteps.join(STEP_SEP) }));
+                }
+            }
+
             // ── tool_result: mark the last tool step as done ──
             if (result.type === "tool_result") {
                 const isError = result.status === "error" || !!result.error;
-                for (let i = thinkingSteps.length - 1; i >= 0; i--) {
-                    if (!thinkingSteps[i].startsWith('✓') && !thinkingSteps[i].startsWith('✗')) {
-                        thinkingSteps[i] = (isError ? '✗ ' : '✓ ') + thinkingSteps[i];
-                        break;
-                    }
+                if (result.tool === 'query_business_context') {
+                    settleBusinessContextProgress(
+                        thinkingSteps,
+                        businessProgressState,
+                        isError,
+                    );
+                } else {
+                    settleLatestProgressStep(thinkingSteps, isError);
                 }
                 if (isError && result.error) {
                     const errPreview = String(result.error).split('\n').pop()?.trim() || String(result.error).slice(0, 120);

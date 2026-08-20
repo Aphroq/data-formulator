@@ -140,8 +140,9 @@ describe('CopilotConnectionPanel', () => {
         expect(screen.queryByRole('link')).toBeNull();
     });
 
-    it('reports persisted connection state and disconnects to refresh models', async () => {
+    it('checks persisted connection state, retests explicitly, and reports disconnect', async () => {
         const onConnectionChange = vi.fn();
+        const onRetest = vi.fn();
         mockApiRequest
             .mockResolvedValueOnce({ data: { connected: true } })
             .mockResolvedValueOnce({ data: { status: 'disconnected' } });
@@ -150,11 +151,14 @@ describe('CopilotConnectionPanel', () => {
             <CopilotConnectionPanel
                 active
                 onConnectionChange={onConnectionChange}
+                onRetest={onRetest}
             />,
         );
         await screen.findByText('model.copilotConnected');
 
         expect(onConnectionChange).toHaveBeenLastCalledWith(true);
+        fireEvent.click(screen.getByRole('button', { name: 'model.retest' }));
+        expect(onRetest).toHaveBeenCalledOnce();
         fireEvent.click(screen.getByRole('button', { name: 'model.copilotDisconnect' }));
         await act(async () => { await Promise.resolve(); });
 

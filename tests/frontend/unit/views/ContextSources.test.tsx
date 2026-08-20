@@ -7,6 +7,7 @@ vi.mock('react-i18next', () => ({
     useTranslation: () => ({
         t: (key: string, params?: Record<string, unknown>) => {
             if (key === 'contextSources.title') return `Sources (${String(params?.count)})`;
+            if (key === 'contextSources.traceTitle') return `Retrieval trace (${String(params?.count)})`;
             if (key === 'contextSources.open') return `Open source: ${String(params?.title)}`;
             return key;
         },
@@ -39,5 +40,27 @@ describe('ContextSources', () => {
         expect(link).toHaveAttribute('rel', 'noopener noreferrer');
         expect(screen.getByText('Internal record').closest('a')).toBeNull();
         expect(screen.queryByText('Unsafe')).toBeNull();
+    });
+
+    it('separates retrieval traces from document sources and never opens a trace', () => {
+        render(<ContextSources items={[
+            {
+                uri: 'https://example.com/evidence',
+                title: 'Document evidence',
+                kind: 'source',
+            },
+            {
+                uri: 'https://trustgraph.example/trace/one',
+                title: 'Agent session',
+                provider: 'trustgraph',
+                kind: 'trace',
+            },
+        ]} />);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Sources (1)' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Retrieval trace (1)' }));
+
+        expect(screen.getByText('Document evidence').closest('a')).not.toBeNull();
+        expect(screen.getByText('Agent session').closest('a')).toBeNull();
     });
 });

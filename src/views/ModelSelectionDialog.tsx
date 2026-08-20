@@ -123,6 +123,9 @@ export const ModelSelectionButton: React.FC<ModelSelectionButtonProps> = ({ appe
             void dispatch(fetchGlobalModelList());
         }
     }, [dispatch]);
+    const retestCopilotModels = useCallback(() => {
+        void dispatch(fetchAvailableModels({ forceCopilotRetest: true }));
+    }, [dispatch]);
 
     let updateModelStatus = (model: ModelConfig, status: 'ok' | 'error' | 'testing' | 'unknown', message: string) => {
         dispatch(dfActions.updateModelStatus({id: model.id, status, message}));
@@ -788,6 +791,7 @@ export const ModelSelectionButton: React.FC<ModelSelectionButtonProps> = ({ appe
                     <CopilotConnectionPanel
                         active={modelDialogOpen}
                         onConnectionChange={refreshCopilotModels}
+                        onRetest={retestCopilotModels}
                     />
                 )}
                 {modelManagerView}

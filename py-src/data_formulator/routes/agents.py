@@ -77,6 +77,38 @@ agent_bp = Blueprint('agent', __name__, url_prefix='/api/agent')
 PREVIEW_ROW_LIMIT = 50
 
 
+@agent_bp.route('/business-context-status', methods=['GET'])
+def business_context_status():
+    """Return request-local TrustGraph readiness without network I/O."""
+
+    enabled = os.environ.get("TRUSTGRAPH_ENABLED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not enabled:
+        return json_ok({"status": "disabled"})
+
+    workspace_id = get_active_workspace_id()
+    if not workspace_id:
+        return json_ok({"status": "unavailable"})
+
+    try:
+        from data_formulator.analyst.business_context.trustgraph_provider import (
+            resolve_trustgraph_provider,
+        )
+        from data_formulator.analyst.skills.base import SkillAuthorization
+
+        resolve_trustgraph_provider(SkillAuthorization(
+            identity_id=get_identity_id(),
+            workspace_id=workspace_id,
+        ))
+    except Exception:
+        return json_ok({"status": "unavailable"})
+    return json_ok({"status": "available"})
+
+
 @agent_bp.route('/data-operation-preview', methods=['POST'])
 def preview_data_operation():
     """Return bounded display rows for an opaque operation plan."""
@@ -316,10 +348,10 @@ def get_client(
 
 @agent_bp.route('/list-global-models', methods=['GET', 'POST'])
 def list_global_models():
-    """Return all globally configured models instantly, without connectivity checks.
+    """Return globally configured models without starting connectivity checks.
 
-    The frontend calls this first to render the model list immediately (with a
-    'checking' status), then calls /check-available-models to get real statuses.
+    Non-Copilot models are returned immediately. Copilot models remain hidden
+    until an identity-scoped capability result has qualified them.
     """
     public_models = model_registry.list_public()
     copilot_models = [model for model in public_models if _is_copilot_config(model)]
@@ -347,10 +379,16 @@ def check_available_models():
 
     Connectivity checks run in parallel (ThreadPoolExecutor) so the total
     wall-clock time equals the slowest single model, not the sum of all.
+    Identity-scoped Copilot results are reused unless force_retest is true.
     Sensitive credentials (api_key) are never sent to the client.
     """
     import time
     from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    options = request.get_json(silent=True) if request.method == "POST" else {}
+    force_retest = bool(
+        isinstance(options, dict) and options.get("force_retest") is True
+    )
 
     all_public = model_registry.list_public()
     has_copilot = any(_is_copilot_config(model) for model in all_public)
@@ -373,17 +411,23 @@ def check_available_models():
         error = None
 
         if _is_copilot_config(public_info):
-            result = copilot_capability_store.probe(
-                identity_id,
-                model_id,
-                public_info["model"],
-                lambda: get_client(
-                    full_config,
-                    trusted=True,
-                    identity_id=identity_id,
-                    allow_unqualified_copilot=True,
-                ),
+            result = (
+                None
+                if force_retest
+                else copilot_capability_store.get(identity_id, model_id)
             )
+            if result is None:
+                result = copilot_capability_store.probe(
+                    identity_id,
+                    model_id,
+                    public_info["model"],
+                    lambda: get_client(
+                        full_config,
+                        trusted=True,
+                        identity_id=identity_id,
+                        allow_unqualified_copilot=True,
+                    ),
+                )
             logger.info(
                 "  [%s] Copilot capabilities chat=%s streaming=%s tools=%s errors=%s",
                 model_id,

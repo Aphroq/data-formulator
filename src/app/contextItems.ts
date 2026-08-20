@@ -55,12 +55,20 @@ export function normalizeContextItems(value: unknown): ContextItem[] {
         const source = candidate as Record<string, unknown>;
         const uri = normalizeUri(source.uri);
         if (!uri || seen.has(uri)) continue;
+        if (
+            source.kind !== undefined
+            && source.kind !== 'source'
+            && source.kind !== 'trace'
+        ) continue;
 
         const item: ContextItem = { uri };
         const title = normalizeOptionalText(source.title, MAX_TITLE_CHARS);
         const provider = normalizeOptionalText(source.provider, MAX_PROVIDER_CHARS);
         if (title) item.title = title;
         if (provider) item.provider = provider;
+        if (source.kind === 'source' || source.kind === 'trace') {
+            item.kind = source.kind;
+        }
 
         seen.add(uri);
         normalized.push(item);

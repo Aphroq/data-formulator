@@ -8,7 +8,7 @@
 | Worktree | `D:\projects\dfm-wt-analysis` |
 | 本机实例 | `analysis`：后端 5568、Vite 5174、数据目录 `D:\projects\dfm-runtime\analysis` |
 | 基线 | 共享文档提交，父提交为 Data Formulator `5477f0e` |
-| 当前阶段 | A12 产品代码、离线合同和真实原生 Agent 验收均已完成：外层只保留一个高层业务上下文工具；服务器只读组使用 `knowledge_query`/`structured_query`，ontology 定义和关系已作为可查询知识导入验收 collection；中文、一轮检索和自动两轮补查场景均通过，未接入行级语义匹配 |
+| 当前阶段 | A13 主路径、A14 `agent_explain` 实时查询步骤、A15 IOF 制造业知识验收和 A16 Collection/Profile 收敛均已完成。`structured_query` 继续保留，不接入行级语义匹配 |
 
 ## 目标
 
@@ -18,9 +18,9 @@
 
 - 通用结果、结构化引用和稳定错误契约。
 - 一个 `query_business_context(question, context?)` 工具；`context` 只携带当前决策、相关数据源/表角色、字段/类型、少量非敏感代表值或脱敏值模式和用户明确约束。
-- TrustGraph 原生 Agent 通过服务器绑定的 Flow、collection 和只读工具组自行执行知识与结构化查询；六个底层查询不再暴露给外层模型。
-- TrustGraph 最终答案和真实检索轨迹；不解析隐藏思考链，不递归收集任意 URI 冒充文档来源。
-- TrustGraph 管理和完整可视化复用官方 `trustgraph-ui`；Data Formulator 不实现行语义搜索、文档摄取或 Context Core 写操作。
+- TrustGraph 原生 Agent 通过服务器知识 Profile 绑定的 Flow 和只读工具组自行执行一轮或多轮 collection-bound 查询；group 列出该 workspace 内本轮可见的长期知识域，Agent 在当前问题到来后选择一个或多个工具，不为未知问题预先组合跨域总集合。现有组继续保留 `structured_query`，Data Formulator 不把它设为第一版依赖，后续用受治理结构化记录场景单独验收；六个底层查询不再暴露给外层模型。
+- TrustGraph 最终答案、官方明确返回的文档来源和独立检索轨迹；通过 `agent_explain` 把真实多轮 provenance 压缩成有限的实时查询步骤，不解析或展示隐藏思考链、observation 正文、工具参数、原始 triples，也不递归收集任意 URI 冒充文档来源。
+- TrustGraph 管理和完整可视化复用官方 `trustgraph-ui` Portal；Portal 是自行持有认证、WebSocket、workspace、路由和主题的完整应用，并非可嵌入组件，当前也没有按既有 explain/session 标识打开的稳定深链。TrustKit 只作为 ExplainTimeline 交互参考，不作为项目依赖。Data Formulator 不使用 Portal iframe，也不实现行语义搜索、文档摄取或 Context Core 写操作。
 - `SkillContext` identity/workspace 与 `ToolResult` citation 契约。
 - Citation 在 Data Thread 中的持久化展示。
 - LiteLLM Copilot `oauth_device`、provider 解析和能力探测。
@@ -28,7 +28,7 @@
 
 不包含 Recipe、Schedule、Run 或 Worker。
 
-详细契约、切片、测试矩阵与停止线见 [Analysis Integrations 实施方案](implementation-plan.md)。
+详细契约、切片、测试矩阵与停止线见 [Analysis Integrations 实施方案](implementation-plan.md)；固定 IOF 来源、装载合同和真实结果见 [TrustGraph 制造业知识准备与验收](trustgraph-manufacturing-knowledge.md)。
 
 ## 实施顺序
 
@@ -47,6 +47,10 @@
 11. **A10 知识准备（已取消）**：不在 Data Formulator 增加文档上传、processing 或 Context Core 装卸入口。
 12. **A11 真实业务验收与 MCP 兼容（历史验证完成）**：六个底层接口和外层 Qwen 手工编排已证明传输与数据可用，但暴露方式不作为最终产品架构。MCP 仍仅作可选外部兼容。
 13. **A12 原生 Agent 收敛（已完成）**：改为一个高层业务上下文查询；复用 provider-neutral `BusinessContextQuery`，由 TrustGraph 原生 Agent 完成多轮检索，并以真实 provenance trace 取代任意 URI 来源提取。真实 Qwen/GraphRAG/librarian/Data Formulator reader 链路已成功验收。
+14. **A13 最小产品化收口（主路径与真实验收已完成）**：未增加新系统；已完成默认目标、当前 Workspace 配置状态与请求时就绪判断、tool-only Skill 发现和完整用户输入回归、单一进度提示、source/trace 与续接证据，以及 Copilot capability 缓存复用。当前 Qwen/TrustGraph 已重跑自动查询、跳过和运行期失败路径；生产候选知识验收继续作为部署前独立条件。
+15. **A14 `agent_explain` 实时步骤（已完成）**：服务端使用官方 WebSocket explain iterator，把 provenance 映射为 `tool_progress`；浏览器继续消费现有 `/analyst-streaming` NDJSON，前端复用 `thinkingSteps`，成功 trace 只增加查询轮数摘要。当前 HTTPS 验证入口已支持 `/api/v1/socket` Upgrade；未新增 `socket_base`、TrustKit 依赖、浏览器直连或第二套 Agent runtime。
+16. **A15 IOF 制造业知识验收（已完成）**：固定 IOF `Release_202602` 的 Annotation Vocabulary、Core 和 Production Planning，保留文件哈希、原始 RDF 和来源关系；真实中文数据清洗输入自动加载 Skill，同一个 TrustGraph Agent 两轮检索后区分生产订单、生产计划和制造操作。公共本体不冒充企业生产知识。
+17. **A16 Collection/Profile 收敛（已完成）**：workspace/bearer 负责授权和所有权隔离，当前调用不跨 workspace；group 只筛选其中的 Agent 可见工具。collection 按生命周期和知识连通性形成长期知识域，由 Agent 在查询时选择领域工具。Knowledge Core 仅在同一域内组合来源。领域工具保持稳定，发布时切换其绑定的 collection 版本。Profile 仍是现有 target 配置；代码已硬切 `trace_collection`、按实际工具描述形成通用任务帧，并从官方 provenance 类型生成与 action 名无关的实时步骤。真实单域、双域和版本切换/回滚均已通过。
 
 ## 开发记录
 
@@ -83,9 +87,17 @@
 | 2026-08-19 | 本机端到端与交付门禁 | 创建隔离验证 Workspace 和 4 行通用工作项数据；配置 TrustGraph 独立 feature flag、精确 Workspace target、只绑定本机的 HTTPS 入口和 CA。在 Agent 统一 tool-call 分发边界对 provider 参数只解析一次；只接受 JSON 对象，不猜补畸形内容，不把无效字符串交给任何 Skill/Action 或写回 assistant history，失败后由模型下一轮重试 | TrustGraph 配置合同 5/5；实际 `/api/agent/analyst-streaming` 自动加载 Skill 并尝试目录查询，因 vault 无有效 bearer 安全返回 `not_configured` 后澄清，未编造业务含义；真实 Qwen 重跑完成 `load_skill` 和三次 TrustGraph 查询并正常结束，参数错误与思考内容均为 0；相关聚焦 136 项通过。UTF-8/PTY 后端全量除 Windows 无符号链接权限用例外 2362 项通过、13 项跳过、1 项 xfailed；前端 406 项和生产构建通过。Copilot vault/请求隔离通过，但 GitHub token exchange 当天返回临时不可用/无效响应，未虚报真实 3/3 成功 | 待提交 |
 | 2026-08-20 | 本机配置复检 | 将 Git 忽略的本机 `.env` 中两个 JSON 对象改为整体单引号包裹，避免 `uv --env-file` 去除内部双引号；应用自己的 `python-dotenv` 读取方式保持兼容。未改变模型参数、TrustGraph target 或凭据边界 | 两种加载路径均成功解析 target 与 `enable_thinking=false`；TrustGraph 非秘密配置验收 5/5，HTTPS 匿名 401 且缺凭据稳定失败关闭；真实 Qwen chat/stream/tools 与两种 Agent 场景 15/15，模糊语义自动多轮查询、明确规则不查询、思考内容与非法工具参数均为 0。有效 bearer 仍未提供，因此没有伪报真实知识装载和六工具数据语义验收完成 | 待提交 |
 | 2026-08-20 | A11 合成知识真实链路 | 从现有 `deploy-openai` 安装配置经官方 `whoami` 合法恢复管理员操作能力，仅用其创建一年期专用 `reader` API key；Data Formulator 只在 `local:lenovo` identity 的加密 vault 中保存 reader key，未保存 admin token。创建并启动专用 TrustGraph workspace/`default` Flow，装载通用合成 ontology、schema、collection、document、RDF、实体向量和 rows；修正仓库外验收装载器在 Windows/WSL 下 `localhost` 优先 IPv6导致的 WebSocket 超时，未改产品运行时代码 | reader `whoami` 仅返回 `reader`；装载 55 个四元组、6 个实体向量和 3 行结构化数据。真实 Skill → Provider → 官方 SDK 六工具 6/6：目录 1 个目标 collection、实体 3、本体 5 classes、rows 3、triples 10、SPARQL `ASK=true`；真实 `/api/agent/analyst-streaming` 使用 Qwen 自动完成 `load_skill`、实体检索和两轮三元组查询，TrustGraph 结果均为 `ok`、错误 0、最终 `completion`。这些证据证明真实技术链路，不代替生产业务数据的语义确认 | 待提交 |
-| 2026-08-20 | A12 原生 Agent 架构更正 | 复核锁定 SDK 和 TrustGraph `2.8.14` 源码后确认原生 Agent 已支持工具组、`knowledge-query`、`structured-query` 和 Explainability；撤回六个底层产品工具，改为一个 provider-neutral 业务上下文查询。系统提示和 Skill 只提交一个聚焦问题及可选最小上下文；服务器绑定 Flow、collection、只读工具组和凭据。真实环境已把 `knowledge-query`/`structured-query` 绑定到专用只读组和目标 collection，Flow 模型切为 `Qwen/Qwen3.5-27B`，部署配置使用 Qwen variant、`thinking=off` 并安全写入已有 SiliconFlow key | 聚焦 120 项、Analyst/Agent 699 项通过；UTF-8/TTY 后端全量 2327 通过、13 跳过、1 xfailed，仅排除 1 个 Windows 符号链接权限项；Node `24.19.0` 下前端 49 文件/406 项与生产构建通过；compileall、`uv pip check`、`uv lock --check`、`git diff --check` 通过。真实 Data Formulator reader bearer → HTTPS → `service/agent` 已到达 TrustGraph，当前稳定返回 `unavailable`；独立 text-completion 探针确认唯一阻塞是运行进程尚未重载新环境，仍返回 `401 Invalid token`；未使用 Docker 命令、未伪报真实 Agent 成功 | 待提交 |
-| 2026-08-20 | A12 重载与真实原生 Agent 验收 | 按用户明确要求只重载仓库外 existing `deploy-openai` 的 text-completion 与 control 服务：前者载入既有 SiliconFlow 凭据，后者恢复 Flow 重建后丢失的 librarian RabbitMQ binding；清理误创建的重复 text-completion 实例，最终只保留 active project 中一个实例。根据真实响应确认 TrustGraph `2.8.14` HTTP gateway 返回终态 AgentResponse，而同步 SDK 仍读取旧 `{answer}`，在适配器边界增加严格双形状规范化，拒绝 thought/observation/partial answer。验收知识原来只有 triples/`rdfs:comment`，补充官方 entity contexts 索引和 GraphRAG 可遍历的领域中立业务关系，不在 Data Formulator 写死术语或答案 | Qwen 文本补全真实返回 `TG_OK`；Graph embeddings 命中 engagement/coverage，GraphRAG 返回权威定义、不可互换和实体键/范围/单位/报告期对齐规则；真实 Data Formulator `query_business_context` 返回 `ok`，ReAct 第 1 轮自动调用 graph-rag、第 2 轮完成回答，librarian 保存 thought/observation/answer，trace 为官方 session URI。Client 44 项、四文件聚焦 118 项、Analyst/Agent 706 项、后端全量 2334 项和前端 406 项通过，生产构建及 Python/依赖/锁文件/diff 门禁通过；13 项跳过、1 项 xfailed，仅排除 1 个 Windows 符号链接权限用例；未改仓库 Docker/Compose 文件 | 待提交 |
-| 2026-08-20 | A12 本体/图谱统一检索 | 真实验证确认 ontology 配置只指导摄取，不会被 Agent 直接当作业务知识搜索；按现有图谱建模方式把类定义、object/datatype property、domain/range、`businessDefinition` 和来源边实际导入同一 collection，并补齐图实体上下文。Data Formulator 固定任务帧明确只用本轮工具：定义/编码/分类/状态/范围/单位/规则/关系走 `knowledge_query`，结构化事实才走 `structured_query`，禁止通用 search/browse 和行级语义匹配；多部分证据不足时允许原生 Agent 缩窄问题再查。未修改 TrustGraph 源码 | 验收 collection 共导入 105 条 RDF/quads 和 16 个图实体上下文；SPARQL 精确确认 WorkItem 定义及 5 个 domain/range，GraphRAG 返回定义。普通清洗场景 1 次 `knowledge_query` 完成；跨定义、不可互换与比较规则的场景由同一 Agent 自动 2 次 `knowledge_query`，librarian trace 保存两轮 thought/observation；中文输入通过。临时 MCP triples/SPARQL 配置因 `2.8.14` 出站客户端签名不兼容已删除，未注册死工具；聚焦回归 91 项、后端全量 2334 项、前端 406 项和生产构建通过 | 待提交 |
+| 2026-08-20 | A12 原生 Agent 架构更正 | 复核锁定 SDK 和 TrustGraph `2.8.14` 源码后确认原生 Agent 已支持工具组、`knowledge-query`、`structured-query` 和 Explainability；撤回六个底层产品工具，改为一个 provider-neutral 业务上下文查询。系统提示和 Skill 只提交一个聚焦问题及可选最小上下文；服务器绑定 Flow、collection、只读工具组和凭据。真实环境已把 `knowledge-query`/`structured-query` 绑定到专用只读组和目标 collection，Flow 模型切为 `Qwen/Qwen3.5-27B`，部署配置使用 Qwen variant、`thinking=off` 并安全写入已有 SiliconFlow key | 聚焦 120 项、Analyst/Agent 699 项通过；UTF-8/TTY 后端全量 2327 通过、13 跳过、1 xfailed，仅排除 1 个 Windows 符号链接权限项；Node `24.19.0` 下前端 49 文件/406 项与生产构建通过；compileall、`uv pip check`、`uv lock --check`、`git diff --check` 通过。真实 Data Formulator reader bearer → HTTPS → `service/agent` 已到达 TrustGraph，当前稳定返回 `unavailable`；独立 text-completion 探针确认唯一阻塞是运行进程尚未重载新环境，仍返回 `401 Invalid token`；未使用 Docker 命令、未伪报真实 Agent 成功 | `3d345091` |
+| 2026-08-20 | A12 重载与真实原生 Agent 验收 | 按用户明确要求只重载仓库外 existing `deploy-openai` 的 text-completion 与 control 服务：前者载入既有 SiliconFlow 凭据，后者恢复 Flow 重建后丢失的 librarian RabbitMQ binding；清理误创建的重复 text-completion 实例，最终只保留 active project 中一个实例。根据真实响应确认 TrustGraph `2.8.14` HTTP gateway 返回终态 AgentResponse，而同步 SDK 仍读取旧 `{answer}`，在适配器边界增加严格双形状规范化，拒绝 thought/observation/partial answer。验收知识原来只有 triples/`rdfs:comment`，补充官方 entity contexts 索引和 GraphRAG 可遍历的领域中立业务关系，不在 Data Formulator 写死术语或答案 | Qwen 文本补全真实返回 `TG_OK`；Graph embeddings 命中 engagement/coverage，GraphRAG 返回权威定义、不可互换和实体键/范围/单位/报告期对齐规则；真实 Data Formulator `query_business_context` 返回 `ok`，ReAct 第 1 轮自动调用 graph-rag、第 2 轮完成回答，librarian 保存 thought/observation/answer，trace 为官方 session URI。Client 44 项、四文件聚焦 118 项、Analyst/Agent 706 项、后端全量 2334 项和前端 406 项通过，生产构建及 Python/依赖/锁文件/diff 门禁通过；13 项跳过、1 项 xfailed，仅排除 1 个 Windows 符号链接权限用例；未改仓库 Docker/Compose 文件 | `3d345091` |
+| 2026-08-20 | A12 本体/图谱统一检索 | 真实验证确认 ontology 配置只指导摄取，不会被 Agent 直接当作业务知识搜索；按现有图谱建模方式把类定义、object/datatype property、domain/range、`businessDefinition` 和来源边实际导入同一 collection，并补齐图实体上下文。Data Formulator 固定任务帧明确只用本轮工具：定义/编码/分类/状态/范围/单位/规则/关系走 `knowledge_query`，结构化事实才走 `structured_query`，禁止通用 search/browse 和行级语义匹配；多部分证据不足时允许原生 Agent 缩窄问题再查。未修改 TrustGraph 源码 | 验收 collection 共导入 105 条 RDF/quads 和 16 个图实体上下文；SPARQL 精确确认 WorkItem 定义及 5 个 domain/range，GraphRAG 返回定义。普通清洗场景 1 次 `knowledge_query` 完成；跨定义、不可互换与比较规则的场景由同一 Agent 自动 2 次 `knowledge_query`，librarian trace 保存两轮 thought/observation；中文输入通过。临时 MCP triples/SPARQL 配置因 `2.8.14` 出站客户端签名不兼容已删除，未注册死工具；聚焦回归 91 项、后端全量 2334 项、前端 406 项和生产构建通过 | `3d345091` |
+| 2026-08-20 | A13 最小产品化设计 | 复核 A12 当前实现和真实验收后，将剩余工作收敛为主路径产品化：默认目标加精确 workspace 覆盖、请求时本地就绪判断、tool-only Skill 可发现、完整用户输入回归、单一进度提示、`source`/`trace` 区分、有界 `resume_text`、生产候选知识验收和 Copilot capability 复用。生产基线只要求 `knowledge_query`；现有只读组中的 `structured_query` 保留，另找真实受治理结构化记录场景验收，不因 A13 暂未使用而移除 | 产品范围、现有能力、系统设计、交付计划和 Feature 实施方案已同步；未改产品代码、TrustGraph 部署或凭据，文档一致性与 diff 检查见本次工作区验证 | 待提交 |
+| 2026-08-20 | A13 最小产品化实现 | 复用现有 resolver、Skill registry、Agent trajectory、Data Thread 引用通道和 capability store：增加精确 workspace → `default` 目标解析、当前 Workspace 本地配置状态、请求级目标/reader 就绪过滤、tool/action 对称发现、单一业务知识进度、`source`/`trace` 分组、最大 1 Mi 字符的模型续接证据，以及 Copilot 成功/失败 capability 缓存复用和显式复测；固定 TrustGraph 帧只指导 `knowledge_query`，没有新增查询工具、服务或管理 UI，也未移除服务器组的 `structured_query` | 聚焦后端 106 项、前端 19 项通过；Windows UTF-8/TTY 后端全量 2346 项通过、13 项跳过、1 项 xfailed、1 项 deselected（仅既有符号链接权限项）；内置 Node 下前端 51 文件/412 项与 Vite `7.3.3` 生产构建通过；compileall、`uv lock --check`、`uv pip check`、locale JSON、Markdown 链接/围栏、凭据扫描和 `git diff --check` 通过。真实 `Qwen/Qwen3.5-27B`、`thinking=off` 链路中新 Workspace 通过 `default` 显示已配置；多部分输入产生 2 次外层查询，两个 session 内分别执行 2 次和 1 次 `knowledge_query`；明确规则 0 次查询；临时坏 Flow 返回 `protocol_error` 后模型保留原值。临时配置已清理，合成知识不冒充生产知识 | 待提交 |
+| 2026-08-20 | A14 `agent_explain` 实时步骤设计 | 核对锁定 `trustgraph-base==2.8.14` 的 `agent_explain`/explainability 类型、官方 TrustKit/React packages 和现有 Skill/NDJSON/`thinkingSteps` 路径，将方案收敛为服务端单 WebSocket、一个 `tool_progress` 事件、有限阶段映射和 trace 查询轮数摘要；不安装 TrustKit，不新增浏览器 WebSocket、路由、状态库或完整 ReAct UI | 真实 reader 直连同一 Gateway 完成一次普通中文多部分问题：17 个 provenance 事件、2 轮 `grounding → exploration → focus → synthesis → observation`、最终 `Conclusion`；同时观察到 185 个 Thought 和 243 个 Answer 分片，确认它们必须丢弃/仅服务端聚合。当时 9443 Upgrade 返回 400，已由后续 A14 实现修通 | 已由 A14 实现落地 |
+| 2026-08-20 | A14 Portal 补充调研 | 核对官方 `@trustgraph/portal` package、入口、认证壳、路由、Agent/Explain 页面和 UI service。Portal 是 2026-08-13 从 demo 改名的 `private: true` React 19/Vite 完整 Workbench，不是第四个发布库；它组合 TrustKit/provider/state 并自行拥有登录、Socket、workspace、QueryClient、Router、主题和插件运行时。当前 `/agent`、`/explain` 不接受既有 query/session/explain id 深链，因此不安装、不复制、不 iframe；继续作为独立管理/完整追踪界面。其 `/api/v1/socket` 同源 Upgrade 代理只用于佐证 A14 的单 `api_base` WSS 前置 | 官方源码与 npm registry 交叉核对；`@trustgraph/portal` 未发布、`@trustgraph/trustkit@2.0.3` 要求 React 19；未修改产品代码或外部服务 | 已收口 |
+| 2026-08-20 | A14 `agent_explain` 实时步骤实现 | 将 TrustGraph 实际网络路径改为官方 `Api.socket().flow(...).agent_explain(...)`，`query()` 只消费同一生成器；新增 provider-neutral `BusinessContextProgress`、Skill/Agent `tool_progress` 合同、有限阶段压缩、终态答案聚合、socket 关闭、`query_count` 和现有 `thinkingSteps` 原位更新。Thought、Observation 正文、action 参数、triples 和 answer 分片不进入 NDJSON；同步 Skill、引用、续接和错误合同保持不变 | 聚焦后端 97 项通过；Windows UTF-8/TTY 后端全量 2339 项通过、13 项跳过、1 项 xfailed、1 项 deselected（仅既有符号链接权限项）；内置 Node 下前端 51 文件/414 项与 Vite `7.3.3` 生产构建通过；compileall、`uv lock --check`、`uv pip check` 和 `git diff --check` 通过。仓库外 9443 代理已支持 WSS Upgrade；真实 provider 自动两轮并返回 `query_count=2`，真实 `/analyst-streaming` 自动加载 Skill、完成一轮及包含两轮的查询并正常 completion。独立公开流扫描确认 progress 字段有界、bearer/explain 原始字段 0 泄漏、公开工具结果仍为安全摘要；真实浏览器会话显示“业务知识已配置”，并实际经历通用等待、检索、证据完成和结论阶段，最终答案及独立不可点击的“检索轨迹（1）”正常落入会话 | 待提交 |
+| 2026-08-20 | A15 IOF 制造业知识与真实清洗验收 | 从 IOF 官方仓库固定 `Release_202602`/提交 `4c905ad2`，装载 Annotation Vocabulary、Core、Production Planning 三个 RDF 文档；原始知识进入 GraphRAG 默认知识图，固定 GitHub blob、文件哈希和 RDF-star 派生关系进入来源图，218 个实体上下文仅由上游定义/关系构造。固定 Agent 任务帧增加通用跨语言补查规则，Skill 明确查询失败不能由模型记忆替代；未修改 TrustGraph 源码或增加 Data Formulator 摄取面 | 4,835 条上游 RDF triples，验证目标共 6,878 条知识/来源/溯源记录、3 个原始文档和 218 个实体上下文；精确 SPARQL、英文语义检索及直接 GraphRAG 均命中 IOF 定义。真实中文 `/analyst-streaming` 使用生产订单/计划/操作/设备/数量/时间字段，自动完成 `load_skill`、单个 `query_business_context` 内两轮检索和 completion，无 Python/图表调用；聚焦后端 58 项通过。锁定 Agent 协议不透传 GraphRAG sources，因此只保留真实两轮 trace，不伪造 citation | 待提交 |
+| 2026-08-20 | A16 Collection/Profile 设计纠偏 | 复核 TrustGraph workspace、collection、Knowledge Core、工具配置和 Agent group 后，撤销“默认组合一个 serving collection”的结论：Core 只解决同一治理域内的来源复用，未知问题由 Agent 在 collection-bound 工具间实时路由。最终架构不新增组件：workspace/bearer 授权，group 筛选本轮可见工具，Profile 只是现有 target；领域工具名和描述保持稳定，发布时只切换其 collection 版本。A16 代码仅更正 `trace_collection`、任务帧工具名和进度 action 三处语义硬编码，并按字段合同、单域、双域、版本切换和完整门禁实施。大量动态 collection 需要 TrustGraph 侧 catalog/router，当前不伪装成已支持 | 产品范围、现有能力、系统设计、交付计划、Feature 实施方案和制造业部署说明已同步；本节点仅文档设计，未修改代码、TrustGraph 配置或凭据 | 待提交 |
+| 2026-08-21 | A16 Collection/Profile 实现与真实验收 | 目标合同直接删除 `collection` 并只接受必填 `trace_collection`，无旧字段兼容；任务帧依据本轮实际只读工具的名称与描述选择最小充分集合，不写死 action；实时步骤按官方 `Analysis` 类型和 GraphRAG 阶段计数。真实混合类型工具事件虽被锁定 SDK 解析成 `Reflection`，适配器也只精确识别该事件自身的 `tg:Analysis` 类型，不公开 action、thought、参数或 triples。TrustGraph 验收组使用稳定业务术语工具、制造业本体工具并保留 `structured_query`，没有行级语义工具 | 干净业务术语 Core 装入 `dfm-business-glossary-v3`，固定 IOF Core 装入 `dfm-iof-release-202602-v2`；A-only 只调用术语工具，B-only 只调用本体工具，A+B 各调用一次并得到两轮完整实时步骤。由同一 Core 发布 `dfm-business-glossary-v4` 后，仅切换稳定工具绑定即可在 Data Formulator 请求不变时查询成功，随后已切回 `v3`。外部文本补全消费者曾因中止请求留下队列工作，精确重载该处理组后恢复；锁定 SDK 缺少总请求取消仍列为运维风险。聚焦后端 101 项、Analyst 后端 94 项通过；Windows UTF-8/TTY 全量后端 2343 项通过、13 项跳过、1 项 xfailed、1 项 deselected（仅既有 symlink 权限项）；内置 Node `24.19.0` 下前端 51 文件/414 项和 Vite `7.3.3` 生产构建通过；compileall、`uv lock --check`、`uv pip check` 通过 | 待提交 |
 
 ## 已确认决策
 
@@ -99,18 +111,25 @@
 - 引用 URI 只接受 `http`、`https` 和 `urn`，Agent router 再校验、按 URI 去重并限制每个工具事件最多 50 项；Reasoning log 只记录数量和 provider。
 - `ToolResult.public_summary` 是外部工具正文的可选安全替代，只用于前端工具事件和运维摘要，完整正文仍只作为模型观察。
 - Skill frontmatter 的通用 `enabled_if` 是后端 availability 门；flag 关闭时对应 Skill 不进入 registry，Python 模块也不导入。
-- TrustGraph 使用 `TRUSTGRAPH_TARGETS_JSON` 将 Data Formulator workspace 精确映射到非 secret 目标；`credential_ref` 必须在独立 `trustgraph:` namespace 中，并通过现有 identity-scoped vault 解析 `bearer_token`。
-- 浏览器需要接收可恢复 trajectory 时，带 `public_summary` 的工具正文会被替换为摘要；模型当前内存中的完整观察不变，恢复后可按需重新查询。
+- TrustGraph 使用 `TRUSTGRAPH_TARGETS_JSON` 保存非 secret 目标；解析顺序固定为当前 Data Formulator workspace 的精确 key 优先、保留 key `default` 后备。`credential_ref` 必须在独立 `trustgraph:` namespace 中，并通过现有 identity-scoped vault 解析 `bearer_token`。
+- 每次构造 Agent registry 时复用同一目标解析器做本地就绪判断；只有目标和当前 identity 的 reader 凭据均存在才提供 TrustGraph Skill，不做外部健康探测。当前 Workspace 菜单通过只读状态 endpoint 显示同一配置判断，不能据此声称服务在线；Provider 调用时仍重新授权并失败关闭。
+- `ToolResult.public_summary` 继续只服务公开工具事件和日志；有界 `resume_text` 只把最终答案和官方明确来源用于模型 trajectory 续接，不保存 hidden thought、原始响应或凭据，也不增加服务端恢复数据库。
 - 前端引用字段只做可选增量，不提升 Session schema 版本；旧 Session 缺字段时保持原对象形状和 UI，现有自动保存、恢复以及 ZIP 导出/导入会原样保留结构化引用。
-- 来源在前端再次规范化、按 URI 去重并限制 50 项；只有无 userinfo 的 HTTP(S) 生成 `target="_blank"`、`rel="noopener noreferrer"` 链接，URN 保留为不可点击标识。
+- 来源在前端再次规范化、按 URI 去重并限制 50 项；可选 `ContextItem.kind` 区分 `source` 与 `trace`，旧数据默认 `source`。只有无 userinfo 的 HTTP(S) 文档来源生成 `target="_blank"`、`rel="noopener noreferrer"` 链接，trace 即使是 HTTP(S) 也不作为文档链接，并单独展示。
 - 外部上下文作为不可信数据处理。
 - capability probe 至少覆盖 chat、streaming 和 tools。
 - TrustGraph 产品内部主通道固定使用官方 `trustgraph-base==2.8.14` 的原生 Agent；外层只提供一个 `query_business_context`，底层目录、graph embeddings、ontology/triples/SPARQL/GraphQL 不再注册为六个模型工具。
+- 通用 Skill registry 分别描述 tool 和 action；tool-only Skill 不再显示“无 action”后让模型误以为没有能力。验收从真实用户输入和当前未预加载 registry 开始，不以测试中手工注入 `_loaded_skills` 代替发现链路。
 - 高层查询只发送聚焦问题和可选最小上下文。最小上下文包括当前操作/决策、相关数据源或表的角色、字段名和类型、少量非敏感代表值或脱敏值模式、用户明确约束；不发送整表、无关行、原始敏感值、完整聊天、代码、路径、identity/workspace 或目标配置。
-- TrustGraph Agent 使用服务器绑定的单个只读工具组，配置稳定名称的 `knowledge_query` 和 `structured_query`；不向该组加入 row embeddings/行级语义匹配、通用文本补全、写操作、摄取或管理工具。
-- ontology 配置用于指导摄取流程；Agent 搜索的是 collection 中已经导入的知识。需要自动核对的类型定义、属性、domain/range 和关系必须由部署方连同来源实际写入目标 collection，并建立图实体上下文。
-- Data Formulator 只消费最终答案和 provenance trace，不展示或依赖 TrustGraph Agent 的隐藏思考链。只有官方响应明确返回的文档 URI 才进入 citation；Agent trace 使用准确标题单独标识，实体/谓词 IRI 不是来源。
-- TrustGraph UI 不进入 Data Formulator：官方 `trustgraph-ui`/`@trustgraph/trustkit` 已覆盖图谱浏览、Ontology、SPARQL、GraphQL 和摄取工作流。`trustkit@2.0.3` 已发布但要求 React 19，Data Formulator React 18 不直接嵌入、不升级；完整 UI 独立使用。
+- TrustGraph workspace 是授权/所有权边界，collection 是其中的扁平知识分区，不是目录或自动检索层级；各 RAG/structured 工具自己绑定一个 collection。Knowledge Core 是 workspace 级独立抽取制品，可通过 `load_kg_core(id, flow, collection)` 在同一治理域内复用和组合来源；它不是未知问题的路由机制，也不要求把所有领域预先合并。锁定 SDK 的 `AgentRequest.collection` 用于 session provenance trace，不能作为全部内部工具的 retrieval 路由。
+- bearer 绑定的 TrustGraph workspace 是授权和所有权边界；Agent group 只是该 workspace 内本轮模型可见工具的路由清单，不新增 IAM。组内按发布生命周期和知识连通性配置一个或少量 collection-bound 工具，Agent 根据当前问题选择并可多轮调用。领域工具名、范围描述和 group 标签保持稳定，发布时只切换其 collection 版本；固定任务帧遵循当前 group 实际工具，不硬编码 `knowledge_query`。现有组继续保留 `structured_query`，后续再用受治理结构化记录做独立验收。不向该组加入 row embeddings/行级语义匹配、通用文本补全、写操作、摄取或管理工具。
+- Data Formulator 的服务端知识 Profile 只绑定 TrustGraph workspace、Flow、单个 Agent group、trace collection 和凭据引用；不保存 retrieval collection 数组，不动态扫描 workspace，不 fan-out，也不自行合并跨 collection 排名。用户、前端和模型不能选择 Profile 或原始 collection id。
+- Core 装载和各知识域 collection 的版本发布只发生在查询前的 TrustGraph 控制面；每次 `query_business_context` 只读取 group 已绑定的已发布集合，绝不临时创建 collection、调用 `load_kg_core`、枚举 Core 或切换 group。当前产品源码也不存在这些写路径。
+- ontology 配置用于指导摄取流程；Agent 搜索的是工具所绑定 collection 中已经导入的知识。需要自动核对的类型定义、属性、domain/range 和关系必须由部署方连同来源实际装载到相应知识域，并建立图实体上下文。
+- 公共制造业验收使用固定版本 IOF 文件和哈希：知识 triples 进入 GraphRAG 默认知识图，来源元数据进入 `urn:graph:source`，原始文件保存在 Library。跨语言首轮缺证时只允许保持原含义再补查一次，不维护硬编码制造业翻译表。
+- Data Formulator 只消费最终答案、provenance trace 和 explain 事件类型归一化出的有限状态，不展示或依赖 TrustGraph Agent 的隐藏思考链。只有官方响应明确返回的文档 URI 才进入 `source`；Agent provenance URI 进入 `trace`，实体/谓词 IRI 不是来源。前端按真实轮次更新“业务知识检索”步骤，但不转发 Thought、Observation 正文、工具参数、原始 triples 或 token 级答案。
+- TrustGraph UI 不进入 Data Formulator：官方 `trustgraph-ui`/`@trustgraph/trustkit` 已覆盖图谱浏览、Ontology、SPARQL、GraphQL 和摄取工作流。`trustkit@2.0.3` 已发布但要求 React 19，完整 `AgentWithTimelineView` 还拥有自己的 Agent/session/state 链；Data Formulator 只借鉴 ExplainTimeline 的紧凑交互，不安装包、不复制源码、不升级 React，完整 UI 独立使用。
+- A14 继续使用现有服务器目标、reader bearer 和 `/analyst-streaming` NDJSON。TrustGraph WebSocket 只存在于后端；同一 `api_base` 必须支持 `/api/v1/socket` WSS Upgrade，不为当前本机代理问题增加第二套 endpoint 配置。
 - 官方 MCP server 暴露了大量查询和管理工具，但产品后端不再叠加 MCP 客户端；MCP 只作为外部自动化兼容面。`2.8.14` 生成部署中 MCP 默认 gateway 端口与实际 API Gateway 存在 `8888/8088` 差异，且 flow 镜像的出站 `mcp-tool` 仍使用已失效的 `headers=` 客户端签名；启用时必须由 TrustGraph 上游修复/升级后单独验收，不能在本项目局部打补丁。
 - TrustGraph 请求体中的 `workspace` 只用于路由，bearer token 仍是目标 workspace 的授权边界；Data Formulator workspace 必须先经过服务端允许目标映射，不能由前端直接指定 Flow、collection、Agent group 或 token。
 - LiteLLM `1.91.3` 已包含 `github_copilot/*` 的 chat、streaming、tools 和短期 Copilot token 刷新代码，但其内置 Authenticator 会在进程用户目录保存 token，并在普通模型调用中同步执行 device flow；它不能直接作为多 identity 的 Data Formulator 凭据层。
@@ -124,7 +143,7 @@
 - 现有 `AnalystAgent` 使用 Chat Completions；LiteLLM 标记为 Responses-only 的 Copilot 模型第一版不注册，不能只因模型出现在 catalog 中就宣称可用。
 - Copilot 候选只从 `GITHUB_COPILOT_MODELS` 显式读取，不接受通用 `{PROVIDER}_API_KEY`/`API_BASE` 路径；静态模式预筛直接读取 LiteLLM `model_cost`，禁止调用会实例化交互式 Authenticator 的 `get_model_info()`。
 - A5 适配器只在 `Client` 已收到当前 identity 的 vault token 时安装；精确匹配 LiteLLM 版本和两段源码 SHA-256，升级或合同漂移时失败关闭。长期/短期 token 不进入 `Client.params`，惰性 stream 每次 `next()` 也在独立 `ContextVar` scope 中解析，yield 前即清除。
-- capability cache 是有上限的 identity/model 进程内布尔结果，不保存 token、prompt 或原始错误；连接完成、断开或凭据缺失会按 identity 清除。普通请求与 UI 都要求当前 identity 已通过 buffered chat、streaming 和 streamed tool-call 三项探针，不能通过手工 payload 绕过。
+- capability cache 是有上限的 identity/model 进程内布尔结果，不保存 token、prompt 或原始错误；连接完成、断开或凭据缺失会按 identity 清除。普通请求与 UI 都要求当前 identity 已通过 buffered chat、streaming 和 streamed tool-call 三项探针，不能通过手工 payload 绕过；模型对话框优先复用已有结果，只在缓存缺失、连接变化或用户显式复测时重新访问网络。
 - `TRUSTGRAPH_ENABLED` 不能只隐藏前端：关闭时 Skill 不得进入可调用工具集合。`GITHUB_COPILOT_ENABLED` 关闭时模型注册表不得发现或实例化 Copilot endpoint。
 - GitHub 官方 npm CLI/SDK 仅用于仓库外真实账号探针；产品仍通过锁定的 LiteLLM provider 和现有 `AnalystAgent`，不把 SDK 引入运行时或仓库依赖。
 
@@ -141,6 +160,13 @@
 - Vite `7.3.3` 要求 Node `^20.19.0 || >=22.12.0`；本机默认 Node `20.15.1` 不满足要求，历史门禁使用隔离的 Linux Node `22.14.0`，本次分支收口使用 Codex 内置 Node `24.19.0`。
 - A8/A9 的底层接口测试和真实数据只保留为历史技术证据；A12 产品运行时不再注册或直接调用这些接口。最终语义验收以单个 `query_business_context` → TrustGraph 原生 Agent 链路为准。
 - 本机 TrustGraph 文本补全和 control 已按用户明确要求完成重载，Qwen 原生 Agent 成功场景已重跑。剩余部署风险是生产环境是否已把受治理的 ontology/术语、定义和关系作为可查询知识导入目标 collection，而不是模型或传输链路。
+- A13 主路径和 A15 IOF 公共制造业知识已在当前外部环境重跑；剩余外部风险不是公共本体是否可检索，而是生产环境是否已准备组织自己的受治理术语、编码、规则、来源、reader、collection 与只读工具组。IOF Production Planning 上游仍是 provisional，不能替代企业语义确认。
+- A14 的真实 `agent_explain` 已通过同一个 allowlisted 9443 HTTPS/WSS 入口验证；本机代理透传 Upgrade，并以组合 CA bundle 同时信任公共模型端点和本地 TrustGraph 证书。没有浏览器直连、关闭 TLS 校验或第二套目标配置。
+- 锁定版本的真实工具调用事件会同时声明 `Analysis`、`ToolUse`、`Reflection` 和 `Thought`，但 SDK 优先解析为 `Reflection`。适配器只精确识别该事件自身的官方 `tg:Analysis` 类型来启动通用进度，不读取 action、hidden thought、参数或原始 triples；UI 只承诺“第 N 次业务知识检索”。
+- 锁定版本的直接 GraphRAG 返回文档来源，但高层 `AgentAnswer` 不透传内部 source 列表。Data Formulator 当前只显示 session trace，不通过第二条查询或答案 URL 猜 citation；这属于 TrustGraph Agent 协议边界。
+- 当前 active group 的业务术语工具绑定干净的 `dfm-business-glossary-v3`，制造业本体工具绑定 `dfm-iof-release-202602-v2`；`structured_query` 仍绑定历史结构化验证集合并保留待验收。这些集合证明按域路由和版本发布机制，不是组织自己的生产候选知识。
+- 分域 group 的父 Agent trace 可以固定写入 `trace_collection`，但锁定协议不保证把每个 collection-bound 子查询的文档来源完整透传到父 `AgentAnswer`。A16 先真实验证单域选择、跨域多轮和 session trace；协议缺口只如实记录，不在 Data Formulator 增加低层二次查询或自制 trace 聚合器。
+- 锁定 SDK 的 `timeout` 只覆盖认证/连通探针，不是 `agent_explain` 整体 deadline；客户端中止也不会取消已经进入 TrustGraph RabbitMQ 的服务端工作。本次中止请求曾使文本补全处理组积压，精确重载该组后恢复。当前不在 Data Formulator 用线程超时制造更多孤儿任务；生产部署需监控队列和消费者，并在 TrustGraph 提供正式取消/总 deadline 合同后再接入。
 
 ## 合并前检查
 
@@ -161,3 +187,14 @@
 - [x] A12 关闭六工具产品面，完成单工具、最小上下文、scope/target 绑定、原生 Agent 请求、错误清洗和 trace 引用的离线合同。
 - [x] A12 真实环境完成 reader bearer、目标 collection、专用只读工具组、Qwen Flow 与 non-thinking 部署配置；未执行 Docker 命令。
 - [x] 仓库外 TrustGraph 已重载并完成原生 Agent 一轮、自动两轮和中文输入的真实成功场景；ontology/图谱统一检索生效且无行级语义匹配工具。
+- [x] A13 完成 `default` 目标后备、请求时就绪过滤和 tool-only Skill registry，并从完整用户输入验证自动查、跳过和证据不足三类路径。
+- [x] A13 为当前 Workspace 提供不访问 TrustGraph 网络的“已配置/未配置”状态，并验证精确目标和默认目标均可解析。
+- [x] A13 完成单一业务知识进度、`source`/`trace` 分组和有界 `resume_text`，旧会话保持兼容。
+- [x] A14 后端通过官方 `agent_explain` 聚合最终答案并把真实一轮/两轮 provenance 压缩为有限 `tool_progress`；Thought、Observation 正文、参数、triples 和 answer token 不进入 NDJSON。
+- [x] A14 前端复用现有运行步骤实时更新轮次/阶段，成功 trace 显示实际查询轮数；不安装 TrustKit 或新增前端状态栈。
+- [x] 当前 allowlisted TrustGraph HTTPS 入口支持 `/api/v1/socket` WSS Upgrade，并完成真实 Data Formulator 全链路验收。
+- [x] 固定版本 IOF Core/Production Planning 已按来源清单导入，精确查询、语义检索、GraphRAG 和真实中文数据清洗的自动两轮路径均通过。
+- [x] A16 已完成 Collection/Profile 架构设计并同步事实文档；明确按治理域配置 collection-bound 工具、由 Agent 查询时路由，以及 `trace_collection` 语义。
+- [x] A16 完成 `trace_collection` 字段硬切并拒绝 `collection`、通用工具提示、无 action 名硬编码的通用进度，以及单知识域、双知识域 A-only/B-only/A+B 路由和稳定工具 collection 版本切换/回滚的真实验收。
+- [ ] 使用生产候选知识完成定义、关系和多部分问题验收；确认只读组不含 row embeddings、写操作或管理工具，并为已保留的 `structured_query` 补充一个真实受治理结构化记录场景。
+- [x] Copilot 模型对话框复用现有 capability 结果，并保留显式复测入口。

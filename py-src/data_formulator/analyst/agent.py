@@ -37,7 +37,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
+from types import GeneratorType, SimpleNamespace
 from typing import Any, Generator
 
 from data_formulator.agent_config import reasoning_effort_for
@@ -70,6 +70,13 @@ logger = logging.getLogger(__name__)
 
 _AGENT_ID = "analyst"
 _MAX_CONTEXT_ITEMS_PER_EVENT = 50
+_TOOL_PROGRESS_PHASES = frozenset({
+    "searching",
+    "filtering",
+    "summarizing",
+    "completed",
+    "finalizing",
+})
 
 # The always-on baseline skill, auto-loaded at the start of every run. It owns
 # the built-in tools (execute_python_script / inspect_source_data) and the always-available
@@ -306,12 +313,11 @@ assumption.
 
 Your baseline capabilities come from the **core** skill, which is **always loaded
 automatically** (you'll see it below as `[SKILL: core]`). Beyond that baseline,
-extra capabilities are packaged as **extension skills** — each one unlocks an
-additional action (and sometimes extra tools), but only after you load it:
+extra capabilities are packaged as **extension skills** — each one provides
+additional tools and/or actions, but only after you load it:
 1. Call the `load_skill("<name>")` tool — this reads the skill's instructions into
-   your context and unlocks its action(s) and any tools it provides.
-2. Follow those instructions and call the action it unlocks (its tool only
-   appears once the skill is loaded).
+   your context and exposes the tools and/or actions it provides.
+2. Follow those instructions and use the relevant exposed capability.
 
 Calling an extension skill's action **before** loading the skill will not
 execute — you'll be asked to load it first. Extension skills available this run
@@ -352,7 +358,6 @@ class AnalystAgent:
     ):
         self.client = client
         self.workspace = workspace
-        self.registry = skill_registry or build_registry()
         self.agent_exploration_rules = agent_exploration_rules
         self.agent_coding_rules = agent_coding_rules
         self.language_instruction = language_instruction
@@ -365,6 +370,9 @@ class AnalystAgent:
             )
             if identity_id is not None and workspace_id is not None
             else None
+        )
+        self.registry = skill_registry or build_registry(
+            authorization=self._skill_authorization,
         )
 
         from data_formulator.agents.reasoning_log import (
@@ -409,8 +417,11 @@ class AnalystAgent:
         self._suppress_stream_channel: str | None = None
         # Full sensitive tool observations remain in the model trajectory. If a
         # later action pauses and sends a resumable trajectory to the browser,
-        # these call IDs are replaced with their bounded public summaries.
+        # these call IDs are replaced with bounded safe representations.
         self._public_tool_result_summaries: dict[str, str] = {}
+        # Model-facing evidence is distinct from the public event/log summary.
+        # It is used only when serializing a resumable browser trajectory.
+        self._resume_tool_result_texts: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Helpers
@@ -449,6 +460,7 @@ class AnalystAgent:
                     uri=item.uri,
                     title=item.title,
                     provider=item.provider,
+                    kind=item.kind,
                 )
             except (AttributeError, TypeError, ValueError):
                 continue
@@ -501,7 +513,8 @@ class AnalystAgent:
         Yields event dicts with ``type`` in:
             ``"action"``        – the agent's committed action (for UI)
             ``"result"``        – a visualization result (data + chart)
-            ``"tool_start"`` / ``"tool_result"`` – inspection tool activity
+            ``"tool_start"`` / ``"tool_progress"`` / ``"tool_result"``
+                                    – inspection tool activity
             ``"skill_loaded"``  – a skill's gate opened
             ``"completion"``    – the run's final answer (ends the run)
             ``"error"``         – error information
@@ -538,6 +551,7 @@ class AnalystAgent:
             "skill_state": {},
         }
         self._public_tool_result_summaries = {}
+        self._resume_tool_result_texts = {}
 
         try:
             rlog.log(
@@ -990,6 +1004,48 @@ class AnalystAgent:
                 ev = gen.send(None)
         except StopIteration as stop:
             return stop.value  # the skill's observation string (or None)
+
+    @staticmethod
+    def _route_skill_tool_events(
+        gen: Generator[Event, None, ToolResult],
+        tool_name: str,
+    ) -> Generator[Event, None, ToolResult]:
+        """Forward only the bounded progress contract from a streaming tool."""
+
+        try:
+            while True:
+                try:
+                    event = next(gen)
+                except StopIteration as stop:
+                    if not isinstance(stop.value, ToolResult):
+                        raise ValueError(
+                            "streaming skill tool did not return ToolResult",
+                        )
+                    return stop.value
+
+                if not isinstance(event, dict) or event.get("type") != "tool_progress":
+                    continue
+                phase = event.get("phase")
+                query_index = event.get("query_index")
+                if phase not in _TOOL_PROGRESS_PHASES:
+                    continue
+                if phase == "finalizing":
+                    if query_index is not None:
+                        continue
+                elif (
+                    isinstance(query_index, bool)
+                    or not isinstance(query_index, int)
+                    or query_index < 1
+                ):
+                    continue
+                yield {
+                    "type": "tool_progress",
+                    "tool": tool_name,
+                    "query_index": query_index,
+                    "phase": phase,
+                }
+        finally:
+            gen.close()
 
     def _set_action_observation(
         self, messages: list[dict], tool_call_id: str | None, observation: str | None,
@@ -1790,6 +1846,9 @@ class AnalystAgent:
                             yield {
                                 "type": "skill_loaded",
                                 "skill": skill_name,
+                                "tools": list(
+                                    self.registry.metas[skill_name].tool_names
+                                ) if self.registry.has(skill_name) else [],
                                 "unlocks": list(
                                     self.registry.metas[skill_name].action_names
                                 ) if self.registry.has(skill_name) else [],
@@ -1811,11 +1870,22 @@ class AnalystAgent:
                             # Preserve a non-object parse result for the Skill's
                             # strict input boundary.  ``tool_args`` remains the
                             # safe object used only for event/log metadata.
-                            result = skill.handle_tool(
+                            handler_result = skill.handle_tool(
                                 tool_name,
                                 parsed_tool_args,
                                 skill_ctx,
                             )
+                            if isinstance(handler_result, GeneratorType):
+                                result = yield from self._route_skill_tool_events(
+                                    handler_result,
+                                    tool_name,
+                                )
+                            else:
+                                result = handler_result
+                            if not isinstance(result, ToolResult):
+                                raise ValueError(
+                                    "skill tool did not return ToolResult",
+                                )
                         except Exception as exc:
                             logger.warning(
                                 "[AnalystAgent] Skill tool %r failed (%s)",
@@ -1843,6 +1913,7 @@ class AnalystAgent:
                                         "uri": item.uri,
                                         "title": item.title,
                                         "provider": item.provider,
+                                        "kind": item.kind,
                                     }
                                     for item in context_items
                                 ],
@@ -1852,7 +1923,7 @@ class AnalystAgent:
                         if public_tool_content is None and context_items:
                             public_tool_content = (
                                 "Business context retrieved with "
-                                f"{len(context_items)} source(s)."
+                                f"{len(context_items)} context reference(s)."
                             )
                         context_log_fields = {
                             "context_item_count": len(context_items),
@@ -1868,6 +1939,10 @@ class AnalystAgent:
                         if public_tool_content is not None:
                             self._public_tool_result_summaries[tc.id] = (
                                 public_tool_content
+                            )
+                        if result.resume_text is not None:
+                            self._resume_tool_result_texts[tc.id] = (
+                                result.resume_text
                             )
                         tool_result_event = {
                             "type": "tool_result",
@@ -2266,8 +2341,8 @@ class AnalystAgent:
         """Build the browser-safe resumable trajectory.
 
         Image payloads are removed and external/sensitive tool observations are
-        replaced by the public summaries recorded when those tools ran. The
-        in-memory model trajectory is left unchanged.
+        replaced by their model-facing resume evidence when present, otherwise
+        by their public summaries. The in-memory model trajectory is unchanged.
         """
         stripped: list[dict] = []
         for msg in trajectory:
@@ -2280,13 +2355,15 @@ class AnalystAgent:
                 else:
                     public_msg["content"] = "[image removed]"
             tool_call_id = msg.get("tool_call_id")
-            if (
-                msg.get("role") == "tool"
-                and tool_call_id in self._public_tool_result_summaries
-            ):
-                public_msg["content"] = self._public_tool_result_summaries[
-                    tool_call_id
-                ]
+            if msg.get("role") == "tool":
+                if tool_call_id in self._resume_tool_result_texts:
+                    public_msg["content"] = self._resume_tool_result_texts[
+                        tool_call_id
+                    ]
+                elif tool_call_id in self._public_tool_result_summaries:
+                    public_msg["content"] = self._public_tool_result_summaries[
+                        tool_call_id
+                    ]
             stripped.append(public_msg)
         return stripped
 

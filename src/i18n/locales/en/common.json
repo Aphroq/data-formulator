@@ -34,6 +34,7 @@
   },
   "contextSources": {
     "title": "Sources ({{count}})",
+    "traceTitle": "Retrieval trace ({{count}})",
     "open": "Open source: {{title}}"
   },
   "appBar": {
@@ -462,6 +463,12 @@
     "inspectingData": "inspecting source data...",
     "inspectedData": "inspected source data",
     "inspectingChart": "reading chart...",
+    "checkingBusinessKnowledge": "checking business knowledge...",
+    "businessKnowledgeSearching": "query {{index}}: retrieving business knowledge...",
+    "businessKnowledgeFiltering": "query {{index}}: narrowing relevant evidence...",
+    "businessKnowledgeSummarizing": "query {{index}}: summarizing evidence...",
+    "businessKnowledgeCompleted": "query {{index}}: evidence retrieved",
+    "businessKnowledgeFinalizing": "forming the business-knowledge conclusion...",
     "loadingSkill": "loading skill: {{skill}}...",
     "rulesLoaded": "Reading rules: {{rules}}",
     "knowledgeLoaded": "Reading knowledge: {{knowledge}}",
@@ -750,6 +757,9 @@
     "expiredReadOnly": "This temporary session has expired on the server. You are viewing a read-only browser snapshot.",
     "deletedSession": "Deleted session \"{{name}}\"",
     "sessionTooltip": "Session: {{name}}",
+    "businessKnowledgeAvailable": "Business knowledge configured",
+    "businessKnowledgeUnavailable": "Business knowledge not configured",
+    "businessKnowledgeUnknown": "Business knowledge status unknown",
     "newSessionTooltip": "New Session",
     "exit": "Exit",
     "exitSessionTooltip": "Exit session",

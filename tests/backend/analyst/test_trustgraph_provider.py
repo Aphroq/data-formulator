@@ -7,10 +7,12 @@ import json
 from typing import Any
 
 import pytest
+from trustgraph.api.types import AgentAnswer
 
 from data_formulator.analyst.business_context.base import (
     BusinessContextError,
     BusinessContextErrorCategory,
+    BusinessContextProgress,
     BusinessContextQuery,
     BusinessContextResult,
 )
@@ -27,23 +29,22 @@ _ALLOWLIST = "https://trustgraph.example/*"
 _TOKEN = "trustgraph-test-token"
 
 
-class _Response:
-    status_code = 200
-
-    def __init__(self, payload: Any = None) -> None:
-        self.payload = payload or {"answer": "Applicable business rule."}
-
-    def json(self) -> Any:
-        return self.payload
-
-
-class _Session:
+class _ExplainFactory:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.calls: list[tuple[Any, str, str, str]] = []
+        self.closed = 0
 
-    def post(self, url: str, **kwargs: Any) -> _Response:
-        self.calls.append((url, kwargs))
-        return _Response()
+    def __call__(self, target, token, question, session_id):
+        self.calls.append((target, token, question, session_id))
+
+        def close() -> None:
+            self.closed += 1
+
+        return iter([AgentAnswer(
+            content="Applicable business rule.",
+            end_of_message=True,
+            end_of_dialog=True,
+        )]), close
 
 
 class _Vault:
@@ -66,6 +67,7 @@ class _Vault:
 class _RecordingClient:
     def __init__(self) -> None:
         self.calls: list[tuple[BusinessContextQuery, str]] = []
+        self.stream_calls: list[tuple[BusinessContextQuery, str]] = []
 
     def query(
         self,
@@ -76,13 +78,23 @@ class _RecordingClient:
         self.calls.append((request, bearer_token))
         return BusinessContextResult(text='{"operation":"business_context"}')
 
+    def query_stream(
+        self,
+        request: BusinessContextQuery,
+        *,
+        bearer_token: str,
+    ):
+        self.stream_calls.append((request, bearer_token))
+        yield BusinessContextProgress(1, "searching")
+        return BusinessContextResult(text='{"operation":"business_context"}')
+
 
 def _target_config(**overrides: Any) -> dict[str, Any]:
     config = {
         "name": "governed-business-context",
         "api_base": "https://trustgraph.example",
         "flow_id": "policy-flow",
-        "collection": "governed-terms",
+        "trace_collection": "business-context-traces",
         "agent_group": "data-formulator-readonly",
         "trustgraph_workspace": "knowledge-workspace",
         "credential_ref": "trustgraph:governed-context",
@@ -145,27 +157,107 @@ def test_resolver_uses_authorized_scope_server_target_and_vault_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("DF_ALLOWED_API_BASES", _ALLOWLIST)
-    session = _Session()
+    factory = _ExplainFactory()
     vault = _Vault({"bearer_token": _TOKEN})
 
     provider = resolve_trustgraph_provider(
         _authorization(),
         environment=_environment(),
         vault_getter=lambda: vault,
-        session=session,
+        explain_iterator_factory=factory,
     )
     result = provider.query(_query())
 
     assert json.loads(result.text)["answer"] == "Applicable business rule."
     assert vault.calls == [("user:42", "trustgraph:governed-context")]
-    assert len(session.calls) == 1
-    _, kwargs = session.calls[0]
-    assert kwargs["headers"]["Authorization"] == f"Bearer {_TOKEN}"
-    assert kwargs["json"]["workspace"] == "knowledge-workspace"
-    assert kwargs["json"]["collection"] == "governed-terms"
-    assert kwargs["json"]["group"] == ["data-formulator-readonly"]
-    assert "user:42" not in kwargs["json"]["question"]
-    assert "workspace-good" not in kwargs["json"]["question"]
+    assert len(factory.calls) == 1
+    target, token, question, _ = factory.calls[0]
+    assert token == _TOKEN
+    assert target.trustgraph_workspace == "knowledge-workspace"
+    assert target.trace_collection == "business-context-traces"
+    assert target.agent_group == "data-formulator-readonly"
+    assert "user:42" not in question
+    assert "workspace-good" not in question
+    assert factory.closed == 1
+
+
+def test_resolver_uses_default_target_when_workspace_has_no_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DF_ALLOWED_API_BASES", _ALLOWLIST)
+    vault = _Vault({"bearer_token": _TOKEN})
+
+    provider = resolve_trustgraph_provider(
+        _authorization(workspace_id="workspace-without-override"),
+        environment=_environment({"default": _target_config(
+            credential_ref="trustgraph:default-context",
+        )}),
+        vault_getter=lambda: vault,
+    )
+
+    assert isinstance(provider, TrustGraphProvider)
+    assert vault.calls == [
+        ("user:42", "trustgraph:default-context"),
+    ]
+
+
+def test_resolver_prefers_exact_workspace_target_over_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DF_ALLOWED_API_BASES", _ALLOWLIST)
+    vault = _Vault({"bearer_token": _TOKEN})
+
+    provider = resolve_trustgraph_provider(
+        _authorization(),
+        environment=_environment({
+            "default": _target_config(
+                credential_ref="trustgraph:default-context",
+            ),
+            "workspace-good": _target_config(
+                credential_ref="trustgraph:workspace-context",
+            ),
+        }),
+        vault_getter=lambda: vault,
+    )
+
+    assert isinstance(provider, TrustGraphProvider)
+    assert vault.calls == [
+        ("user:42", "trustgraph:workspace-context"),
+    ]
+
+
+def test_resolver_rejects_collection_instead_of_treating_it_as_an_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DF_ALLOWED_API_BASES", _ALLOWLIST)
+    target = _target_config()
+    target["collection"] = target.pop("trace_collection")
+
+    with pytest.raises(BusinessContextError) as captured:
+        resolve_trustgraph_provider(
+            _authorization(),
+            environment=_environment({"workspace-good": target}),
+            vault_getter=lambda: _Vault({"bearer_token": _TOKEN}),
+        )
+
+    assert captured.value.category is BusinessContextErrorCategory.NOT_CONFIGURED
+
+
+def test_resolver_requires_trace_collection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DF_ALLOWED_API_BASES", _ALLOWLIST)
+    target = _target_config()
+    target.pop("trace_collection")
+
+    with pytest.raises(BusinessContextError) as captured:
+        resolve_trustgraph_provider(
+            _authorization(),
+            environment=_environment({"workspace-good": target}),
+            vault_getter=lambda: _Vault({"bearer_token": _TOKEN}),
+        )
+
+    assert captured.value.category is BusinessContextErrorCategory.NOT_CONFIGURED
 
 
 def test_provider_delegates_one_provider_neutral_query() -> None:
@@ -184,6 +276,27 @@ def test_provider_delegates_one_provider_neutral_query() -> None:
     assert client.calls == [(request, _TOKEN)]
     assert repr(provider) == "TrustGraphProvider()"
     assert _TOKEN not in repr(provider)
+
+
+def test_provider_delegates_progress_and_stream_result() -> None:
+    authorization = _authorization()
+    client = _RecordingClient()
+    provider = TrustGraphProvider(
+        client,  # type: ignore[arg-type]
+        bearer_token=_TOKEN,
+        authorization=authorization,
+    )
+    request = _query()
+    stream = provider.query_stream(request)
+
+    assert next(stream) == BusinessContextProgress(1, "searching")
+    with pytest.raises(StopIteration) as completed:
+        next(stream)
+
+    assert json.loads(completed.value.value.text) == {
+        "operation": "business_context",
+    }
+    assert client.stream_calls == [(request, _TOKEN)]
 
 
 @pytest.mark.parametrize(
@@ -234,7 +347,7 @@ def test_provider_rejects_scope_substitution_before_client_call(
         )}),
     ],
 )
-def test_invalid_or_legacy_target_mapping_fails_closed(
+def test_invalid_target_mapping_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
     environment: dict[str, str],
 ) -> None:

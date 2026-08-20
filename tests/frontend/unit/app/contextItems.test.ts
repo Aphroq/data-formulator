@@ -13,9 +13,12 @@ describe('context item normalization', () => {
                 uri: ' https://example.com/evidence?id=1 ',
                 title: ' Quarterly filing ',
                 provider: ' trustgraph ',
+                kind: 'source',
             },
             { uri: 'https://example.com/evidence?id=1', title: 'duplicate' },
             { uri: 'urn:example:internal-record', title: 'Internal record' },
+            { uri: 'urn:example:trace', title: 'Trace', kind: 'trace' },
+            { uri: 'urn:example:unknown', title: 'Unknown', kind: 'citation' },
             { uri: 'javascript:alert(1)', title: 'unsafe' },
             { uri: 'https://user:secret@example.com/private', title: 'credentials' },
             { uri: 'https://example.com\\redirect', title: 'backslash' },
@@ -27,10 +30,16 @@ describe('context item normalization', () => {
                 uri: 'https://example.com/evidence?id=1',
                 title: 'Quarterly filing',
                 provider: 'trustgraph',
+                kind: 'source',
             },
             {
                 uri: 'urn:example:internal-record',
                 title: 'Internal record',
+            },
+            {
+                uri: 'urn:example:trace',
+                title: 'Trace',
+                kind: 'trace',
             },
         ]);
     });

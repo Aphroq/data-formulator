@@ -45,6 +45,8 @@ interface CopilotConnectionPanelProps {
     active: boolean;
     /** Refresh the identity-scoped qualified model list after auth changes. */
     onConnectionChange?: (connected: boolean) => void;
+    /** Explicitly rerun model capability qualification. */
+    onRetest?: () => void;
 }
 
 const SAFE_VERIFICATION_URI = 'https://github.com/login/device';
@@ -63,12 +65,14 @@ const safeErrorMessage = (error: unknown, fallback: string): string => (
 export const CopilotConnectionPanel: React.FC<CopilotConnectionPanelProps> = ({
     active,
     onConnectionChange,
+    onRetest,
 }) => {
     const { t } = useTranslation();
     const [connected, setConnected] = useState<boolean | null>(null);
     const [pending, setPending] = useState<DeviceAuthorization | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const copilotFailedMessage = t('model.copilotFailed');
 
     useEffect(() => {
         if (!active) return;
@@ -85,12 +89,11 @@ export const CopilotConnectionPanel: React.FC<CopilotConnectionPanelProps> = ({
             .catch(requestError => {
                 if (!cancelled) {
                     setConnected(false);
-                    setError(safeErrorMessage(requestError, t('model.copilotFailed')));
-                    onConnectionChange?.(false);
+                    setError(safeErrorMessage(requestError, copilotFailedMessage));
                 }
             });
         return () => { cancelled = true; };
-    }, [active, onConnectionChange]);
+    }, [active, copilotFailedMessage, onConnectionChange]);
 
     useEffect(() => {
         if (!active || !pending) return;
@@ -124,7 +127,6 @@ export const CopilotConnectionPanel: React.FC<CopilotConnectionPanelProps> = ({
                 }
                 setPending(null);
                 setConnected(false);
-                onConnectionChange?.(false);
                 setError(t(`model.copilot${data.status[0].toUpperCase()}${data.status.slice(1)}`));
             } catch (requestError) {
                 if (!cancelled) setError(safeErrorMessage(requestError, t('model.copilotFailed')));
@@ -208,9 +210,16 @@ export const CopilotConnectionPanel: React.FC<CopilotConnectionPanelProps> = ({
                 {connected === null ? (
                     <CircularProgress size={iconVar.sm} aria-label={t('model.copilotChecking')} />
                 ) : connected ? (
-                    <Button size="small" variant="outlined" disabled={busy} onClick={disconnect}>
-                        {t('model.copilotDisconnect')}
-                    </Button>
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                        {onRetest && (
+                            <Button size="small" variant="text" disabled={busy} onClick={onRetest}>
+                                {t('model.retest')}
+                            </Button>
+                        )}
+                        <Button size="small" variant="outlined" disabled={busy} onClick={disconnect}>
+                            {t('model.copilotDisconnect')}
+                        </Button>
+                    </Box>
                 ) : !pending ? (
                     <Button
                         size="small"

@@ -115,6 +115,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import { useTranslation } from 'react-i18next';
 import { syncVegaLocale } from '../i18n/vega-locale';
 import { buttonVar, iconVar, textVar } from './layout';
+import { BusinessContextStatus } from '../views/BusinessContextStatus';
 
 // Discord Icon Component
 const DiscordIcon: FC<{ sx?: any }> = ({ sx }) => (
@@ -648,6 +649,7 @@ const WorkspaceMenu: React.FC = () => {
                     <KeyboardArrowDownIcon className="ws-chevron" sx={{ fontSize: iconVar.md, color: 'text.secondary', opacity: 0.4, transition: 'opacity 0.15s' }} />
                 </Box>
             </Tooltip>
+            <BusinessContextStatus workspaceId={activeWorkspace.id} />
             <WorkspacePickerDialog open={pickerOpen} onClose={() => setPickerOpen(false)} />
         </>
     );

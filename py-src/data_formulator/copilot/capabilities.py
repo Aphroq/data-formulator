@@ -304,7 +304,7 @@ class CopilotCapabilityStore:
         self._put(identity_id, result)
         return result
 
-    def get_qualified(
+    def get(
         self,
         identity_id: str,
         model_id: str,
@@ -320,7 +320,15 @@ class CopilotCapabilityStore:
                 self._entries.pop(key, None)
                 return None
             self._entries.move_to_end(key)
-            return result if result.qualified else None
+            return result
+
+    def get_qualified(
+        self,
+        identity_id: str,
+        model_id: str,
+    ) -> CopilotCapabilityResult | None:
+        result = self.get(identity_id, model_id)
+        return result if result is not None and result.qualified else None
 
     def invalidate_identity(self, identity_id: str) -> None:
         with self._lock:

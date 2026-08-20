@@ -3,27 +3,28 @@
 
 """Resolve an identity-scoped, read-only TrustGraph provider.
 
-``TRUSTGRAPH_TARGETS_JSON`` maps Data Formulator workspace IDs to validated
-server-owned TrustGraph routes.  It stores a credential reference, never a
-bearer token; the token is resolved from the existing identity-scoped vault.
+``TRUSTGRAPH_TARGETS_JSON`` maps Data Formulator workspace IDs (with an
+optional reserved ``default`` fallback) to validated server-owned TrustGraph
+routes. It stores a credential reference, never a bearer token; the token is
+resolved from the existing identity-scoped vault.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Mapping
 import json
 import os
 from typing import TYPE_CHECKING, Any
 
-import requests
-
 from data_formulator.analyst.business_context.base import (
     BusinessContextError,
     BusinessContextErrorCategory,
+    BusinessContextProgress,
     BusinessContextQuery,
     BusinessContextResult,
 )
 from data_formulator.analyst.business_context.trustgraph import (
+    ExplainIteratorFactory,
     TrustGraphClient,
     TrustGraphTarget,
     is_trustgraph_enabled,
@@ -41,7 +42,7 @@ _TARGET_FIELDS = frozenset({
     "name",
     "api_base",
     "flow_id",
-    "collection",
+    "trace_collection",
     "agent_group",
     "trustgraph_workspace",
     "credential_ref",
@@ -77,7 +78,8 @@ def _load_target(
     if not isinstance(targets, dict):
         raise _error(BusinessContextErrorCategory.NOT_CONFIGURED)
 
-    raw_target = targets.get(workspace_id)
+    target_key = workspace_id if workspace_id in targets else "default"
+    raw_target = targets.get(target_key)
     if not isinstance(raw_target, dict):
         raise _error(BusinessContextErrorCategory.NOT_CONFIGURED)
     if any(not isinstance(key, str) for key in raw_target):
@@ -86,7 +88,7 @@ def _load_target(
         raise _error(BusinessContextErrorCategory.NOT_CONFIGURED)
 
     values: dict[str, Any] = dict(raw_target)
-    values.setdefault("name", workspace_id)
+    values.setdefault("name", target_key)
     try:
         return TrustGraphTarget(**values)
     except (TypeError, ValueError) as exc:
@@ -138,6 +140,22 @@ class TrustGraphProvider:
             bearer_token=self._bearer_token,
         )
 
+    def query_stream(
+        self,
+        request: BusinessContextQuery,
+    ) -> Generator[
+        BusinessContextProgress,
+        None,
+        BusinessContextResult,
+    ]:
+        """Stream one scoped query without exposing provider details."""
+
+        self._check_scope(request)
+        return (yield from self._client.query_stream(
+            request,
+            bearer_token=self._bearer_token,
+        ))
+
     def __repr__(self) -> str:
         return f"{type(self).__name__}()"
 
@@ -147,7 +165,7 @@ def resolve_trustgraph_provider(
     *,
     environment: Mapping[str, str] | None = None,
     vault_getter: VaultGetter | None = None,
-    session: requests.Session | None = None,
+    explain_iterator_factory: ExplainIteratorFactory | None = None,
 ) -> TrustGraphProvider:
     """Resolve a validated target and identity-scoped bearer credential."""
 
@@ -188,7 +206,10 @@ def resolve_trustgraph_provider(
         raise _error(BusinessContextErrorCategory.NOT_CONFIGURED)
 
     return TrustGraphProvider(
-        TrustGraphClient(target, session=session),
+        TrustGraphClient(
+            target,
+            explain_iterator_factory=explain_iterator_factory,
+        ),
         bearer_token=bearer_token,
         authorization=authorization,
     )

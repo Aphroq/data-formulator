@@ -40,7 +40,7 @@ fixed upstream baseline
 
 先完成四条可执行探针：
 
-1. TrustGraph：固定 SDK、真实 Flow/collection、只读 Agent 工具组、bearer workspace、原生 Agent 多轮检索、provenance trace、超时和错误格式。
+1. TrustGraph：固定 SDK、真实 Flow、trace collection、collection-bound 只读 Agent 工具组、bearer workspace、原生 Agent 多轮检索、provenance trace、超时和错误格式。
 2. Copilot：LiteLLM `1.91.3` 下的 OAuth device、chat、stream、tool calling 和 token refresh。
 3. Lineage：真实 database load → transform → chart，后端能完整遍历并稳定编译。
 4. Runtime：Worker 无 Flask request 打开相同 Workspace，Web/Worker 共享同一 SQLite 和 artifact store。
@@ -53,9 +53,9 @@ M0 不启动 Docker。数据库和 TrustGraph 合同验证使用已有可访问�
 
 - 通用引用通道，以及 TrustGraph 原生 Agent 的单一只读业务上下文 Skill。
 - identity/workspace/citation 契约及前端持久化显示。
-- TrustGraph Flow、collection、只读 Agent 工具组和 identity/workspace 目标绑定。
-- 聚焦问题 + 最小数据上下文的通用查询合同；TrustGraph Agent 内部按需使用知识和结构化查询工具。
-- 最终答案、真实检索轨迹、故障降级和“不把任意 URI 当来源”的 citation 合同。
+- 服务端知识 Profile 绑定 TrustGraph workspace、Flow、只读 Agent group、trace collection 和 credential reference，并支持“Data Formulator workspace 精确覆盖 → `default`”解析、请求时就绪判断和当前 Workspace 配置状态。
+- 聚焦问题 + 最小数据上下文的通用查询合同；workspace/bearer 负责授权和所有权隔离，同一 workspace 内的只读 group 按治理域提供一个或少量 collection-bound 查询工具，TrustGraph Agent 在问题到来后自行选择并按需多轮调用。Knowledge Core 只在同一知识域内复用/组合来源，不预先为未知问题制作跨域总集合，也不做跨 workspace 联邦查询。现有组继续保留 `structured-query`，但不作为 Data Formulator 第一版验收前置，后续以受治理结构化记录场景单独验收。
+- 最终答案、文档来源、独立检索轨迹、由 `agent_explain` provenance 压缩出的实时查询轮次/阶段、会话续接和故障降级合同。
 - TrustGraph 官方 UI 继续承担摄取、Context Core 管理和完整知识图谱工作台；Data Formulator 不复制这些能力。
 - Copilot OAuth endpoint 和能力探测。
 
@@ -76,17 +76,18 @@ M0 不启动 Docker。数据库和 TrustGraph 合同验证使用已有可访问�
 
 ### M4：稳定化
 
-- TrustGraph 原生 Agent 在真实业务上下文场景中的端到端产品收口；需要管理 UI 时打开官方 `trustgraph-ui`。
+- TrustGraph 原生 Agent 在真实业务上下文场景中的端到端产品收口；A13 已用未预加载 Skill 的完整用户输入路由覆盖自动查询、跳过查询、服务不可用和续接合同，A14 已用官方 `agent_explain` 把真实多轮查询状态接入现有运行步骤，A15 已用固定版本 IOF Core/Production Planning 完成公开制造业知识的中文真实清洗验收。A16 已硬切 `trace_collection`、泛化任务帧和实时进度，并真实验证单域路由、跨域按需多轮调用和稳定工具 collection 版本切换/回滚。企业自己的生产候选知识及保留的 `structured_query` 真实结构化记录场景仍须独立准备和验收；需要管理 UI 时打开官方 `trustgraph-ui`。
+- Copilot 模型配置复用已取得的 capability 结果，只在连接变化、缓存缺失或显式复测时重新探测。
 - 保留既有授权、引用、错误和大小边界的回归测试，不把它们继续拆成独立功能里程碑。
 - 长时间运行、崩溃恢复、重复调度和重启测试。
 - 中英文 UI、升级说明和发布检查。
 
 ## 第一条纵向切片
 
-只使用一个数据库连接器、一个 TrustGraph collection 和一个支持工具调用的模型：
+只使用一个数据库连接器、一个默认知识 Profile、一个包含少量当前可见知识域工具的 TrustGraph Agent group 和一个支持工具调用的模型：
 
 1. 用户提出依赖未决业务含义的数据任务，Data Formulator 发送一个聚焦问题，以及当前操作、数据源/表角色、相关字段与类型、非敏感代表值或脱敏值模式和用户约束组成的最小上下文。
-2. TrustGraph 原生 Agent 使用绑定的知识/结构化查询工具完成检索，返回答案和 provenance trace；Data Formulator 据此继续本地分析。
+2. TrustGraph 原生 Agent 根据当前问题，从 group 中描述明确的 collection-bound 工具选择一个或多个并完成一轮或多轮检索；界面按真实 provenance 显示“第 N 次业务知识检索”的有限阶段，成功 trace 记录查询轮数，同时分别返回最终答案和官方明确文档来源；Data Formulator 据此继续本地分析。先通过单知识域路径，再验证一个跨两个当前可见知识域的真实问题。
 3. 加载一张数据库表。
 4. 生成一个 transform 和一个 chart。
 5. 从 chart artifact 编译并 dry run Recipe。
@@ -142,9 +143,11 @@ yarn build
 
 必须覆盖：
 
-- TrustGraph 单一高层查询的输入裁剪、scope、只读 Agent 工具组、原生请求、trace、超时和故障降级。
-- 真实场景覆盖：语义会改变结果时自动查询；用户规则明确时跳过；证据不足或服务不可用时失败关闭。
-- Copilot OAuth 生命周期和工具调用能力探测。
+- TrustGraph 单一高层查询的输入裁剪、scope、精确/默认知识 Profile 解析、请求时就绪判断、只读 Agent 工具组、必填 `trace_collection` 与非法 `collection` 字段拒绝、`agent_explain` WSS 请求、最终答案聚合、source/trace、续接、超时和故障降级。
+- Collection 路由覆盖单知识域，以及同一 group 中两个任意合法名称、描述明确的 collection-bound 工具由原生 Agent 按当前问题选择/多轮调用；collection 按治理边界而非预测问题划分。领域工具保持稳定，切换其绑定的版本化 collection 后无需修改 Data Formulator。模型和前端不能提交 collection，Data Formulator 不枚举 workspace、不 fan-out 或自行合并排名。
+- explain 事件压缩覆盖真实一轮和自动两轮：`grounding/exploration/focus/synthesis/observation/Conclusion` 产生有限进度，`AgentThought`、`AgentObservation` 正文、工具参数、原始 triples 和 answer token 不进入前端；连接关闭时释放 socket。
+- 真实场景覆盖：从完整用户输入路径验证语义会改变结果时自动查询、用户规则明确或机械任务时跳过、证据不足或服务不可用时失败关闭；同时验证 tool-only Skill 能被模型正确发现。
+- Copilot OAuth 生命周期、工具调用能力探测和已有 capability 结果复用。
 - Artifact 记录、缺失血缘拒绝和稳定拓扑编译。
 - typed parameter binding 的非法输入和注入尝试。
 - Recipe hash、代码篡改、dry run 和发布状态机。
@@ -155,7 +158,7 @@ yarn build
 ## 每阶段完成条件
 
 - M0：四条探针都有可重复测试和明确结论。
-- M1：上下文来源可追踪，Copilot 不影响其他模型。
+- M1：普通用户输入可按需获得业务知识并在长查询中看到真实轮次；文档来源与检索轨迹不混淆，未就绪目标不向 Agent 宣称可用，Copilot 不影响其他模型。
 - M2：真实 artifact 能稳定编译、dry run、发布和手动运行。
 - M3：页面关闭后 Schedule 仍能创建并执行 Run。
 - M4：所有基础命令通过，重启和 schema drift 场景通过。

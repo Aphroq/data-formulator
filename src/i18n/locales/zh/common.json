@@ -34,6 +34,7 @@
   },
   "contextSources": {
     "title": "来源（{{count}}）",
+    "traceTitle": "检索轨迹（{{count}}）",
     "open": "打开来源：{{title}}"
   },
   "appBar": {
@@ -461,6 +462,12 @@
     "creatingChart": "生成图表中...",
     "inspectingData": "检查数据源中...",
     "inspectingChart": "读取图表中...",
+    "checkingBusinessKnowledge": "正在核对业务知识...",
+    "businessKnowledgeSearching": "第 {{index}} 轮：正在检索业务知识...",
+    "businessKnowledgeFiltering": "第 {{index}} 轮：正在筛选相关证据...",
+    "businessKnowledgeSummarizing": "第 {{index}} 轮：正在汇总证据...",
+    "businessKnowledgeCompleted": "第 {{index}} 轮：已获得证据",
+    "businessKnowledgeFinalizing": "正在形成业务知识结论...",
     "loadingSkill": "加载技能: {{skill}}...",
     "inspectedData": "已检查数据源",
     "rulesLoaded": "读取规则：{{rules}}",
@@ -750,6 +757,9 @@
     "expiredReadOnly": "此临时会话已从服务器过期。当前显示的是浏览器中的只读快照。",
     "deletedSession": "已删除会话「{{name}}」",
     "sessionTooltip": "会话：{{name}}",
+    "businessKnowledgeAvailable": "业务知识已配置",
+    "businessKnowledgeUnavailable": "业务知识未配置",
+    "businessKnowledgeUnknown": "业务知识状态未知",
     "newSessionTooltip": "新建会话",
     "exit": "退出",
     "exitSessionTooltip": "退出会话",

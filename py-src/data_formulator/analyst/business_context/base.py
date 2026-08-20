@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol, runtime_checkable
+from typing import Generator, Literal, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
 
@@ -22,6 +22,14 @@ MAX_CONTEXT_ITEM_URI_CHARS = 2_048
 MAX_CONTEXT_ITEM_TITLE_CHARS = 512
 MAX_CONTEXT_ITEM_PROVIDER_CHARS = 64
 _CONTEXT_ITEM_URI_SCHEMES = frozenset({"http", "https", "urn"})
+ContextItemKind = Literal["source", "trace"]
+BusinessContextPhase = Literal[
+    "searching",
+    "filtering",
+    "summarizing",
+    "completed",
+    "finalizing",
+]
 
 
 def _normalized_required_text(
@@ -93,11 +101,12 @@ class BusinessContextQuery:
 
 @dataclass(frozen=True)
 class ContextItem:
-    """A source reference returned alongside provider context."""
+    """A document source or provider retrieval trace reference."""
 
     uri: str
     title: str | None = None
     provider: str = ""
+    kind: ContextItemKind = "source"
 
     def __post_init__(self) -> None:
         uri = _normalized_required_text(
@@ -149,6 +158,9 @@ class ContextItem:
             raise ValueError("provider contains control characters")
         object.__setattr__(self, "provider", provider)
 
+        if self.kind not in {"source", "trace"}:
+            raise ValueError("kind must be 'source' or 'trace'")
+
 
 @dataclass(frozen=True)
 class BusinessContextResult:
@@ -166,6 +178,34 @@ class BusinessContextResult:
             raise ValueError("context_items must contain ContextItem values")
         object.__setattr__(self, "context_items", items)
         object.__setattr__(self, "truncated", bool(self.truncated))
+
+
+@dataclass(frozen=True)
+class BusinessContextProgress:
+    """One bounded, user-safe phase in a provider's retrieval process."""
+
+    query_index: int | None
+    phase: BusinessContextPhase
+
+    def __post_init__(self) -> None:
+        if self.phase not in {
+            "searching",
+            "filtering",
+            "summarizing",
+            "completed",
+            "finalizing",
+        }:
+            raise ValueError("phase is not supported")
+        if self.phase == "finalizing":
+            if self.query_index is not None:
+                raise ValueError("finalizing must not identify a query")
+            return
+        if (
+            isinstance(self.query_index, bool)
+            or not isinstance(self.query_index, int)
+            or self.query_index < 1
+        ):
+            raise ValueError("query_index must be a positive integer")
 
 
 class BusinessContextErrorCategory(str, Enum):
@@ -234,14 +274,27 @@ class BusinessContextProvider(Protocol):
     def query(self, request: BusinessContextQuery) -> BusinessContextResult:
         ...
 
+    def query_stream(
+        self,
+        request: BusinessContextQuery,
+    ) -> Generator[
+        BusinessContextProgress,
+        None,
+        BusinessContextResult,
+    ]:
+        ...
+
 
 __all__ = [
     "MAX_BUSINESS_CONTEXT_QUERY_CHARS",
     "MAX_BUSINESS_CONTEXT_LOCAL_CONTEXT_CHARS",
     "BusinessContextError",
     "BusinessContextErrorCategory",
+    "BusinessContextPhase",
+    "BusinessContextProgress",
     "BusinessContextProvider",
     "BusinessContextQuery",
     "BusinessContextResult",
     "ContextItem",
+    "ContextItemKind",
 ]

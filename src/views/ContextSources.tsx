@@ -17,23 +17,23 @@ export interface ContextSourcesProps {
     defaultExpanded?: boolean;
 }
 
-/** Compact, defensive renderer shared by interaction entries and TextTurns. */
-export const ContextSources: React.FC<ContextSourcesProps> = ({
+interface ContextItemGroupProps {
+    items: ContextItem[];
+    label: string;
+    defaultExpanded: boolean;
+    openLinks: boolean;
+}
+
+const ContextItemGroup: React.FC<ContextItemGroupProps> = ({
     items,
-    defaultExpanded = false,
+    label,
+    defaultExpanded,
+    openLinks,
 }) => {
     const { t } = useTranslation();
     const [expanded, setExpanded] = useState(defaultExpanded);
-    const sources = useMemo(() => normalizeContextItems(items), [items]);
-
-    if (sources.length === 0) return null;
-
-    const label = t('contextSources.title', { count: sources.length });
     return (
-        <Box
-            sx={{ mt: 0.5, minWidth: 0 }}
-            onClick={(event) => event.stopPropagation()}
-        >
+        <Box sx={{ minWidth: 0 }}>
             <ButtonBase
                 aria-label={label}
                 aria-expanded={expanded}
@@ -60,9 +60,11 @@ export const ContextSources: React.FC<ContextSourcesProps> = ({
             </ButtonBase>
             <Collapse in={expanded}>
                 <Box component="ul" sx={{ listStyle: 'none', m: 0, mt: '2px', p: 0 }}>
-                    {sources.map(source => {
+                    {items.map(source => {
                         const title = source.title || source.uri;
-                        const href = getOpenableContextUri(source.uri);
+                        const href = openLinks
+                            ? getOpenableContextUri(source.uri)
+                            : undefined;
                         const sharedSx = {
                             display: 'flex', alignItems: 'center', gap: '4px',
                             minWidth: 0, py: '1px', px: '2px',
@@ -110,6 +112,43 @@ export const ContextSources: React.FC<ContextSourcesProps> = ({
                     })}
                 </Box>
             </Collapse>
+        </Box>
+    );
+};
+
+/** Compact, defensive renderer shared by interaction entries and TextTurns. */
+export const ContextSources: React.FC<ContextSourcesProps> = ({
+    items,
+    defaultExpanded = false,
+}) => {
+    const { t } = useTranslation();
+    const normalized = useMemo(() => normalizeContextItems(items), [items]);
+    const sources = normalized.filter(item => item.kind !== 'trace');
+    const traces = normalized.filter(item => item.kind === 'trace');
+
+    if (normalized.length === 0) return null;
+
+    return (
+        <Box
+            sx={{ mt: 0.5, minWidth: 0 }}
+            onClick={(event) => event.stopPropagation()}
+        >
+            {sources.length > 0 && (
+                <ContextItemGroup
+                    items={sources}
+                    label={t('contextSources.title', { count: sources.length })}
+                    defaultExpanded={defaultExpanded}
+                    openLinks
+                />
+            )}
+            {traces.length > 0 && (
+                <ContextItemGroup
+                    items={traces}
+                    label={t('contextSources.traceTitle', { count: traces.length })}
+                    defaultExpanded={defaultExpanded}
+                    openLinks={false}
+                />
+            )}
         </Box>
     );
 };

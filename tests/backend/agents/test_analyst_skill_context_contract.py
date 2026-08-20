@@ -41,6 +41,7 @@ class _ContextSkill:
             text="sensitive business answer",
             context_items=self.context_items,
             public_summary="Business context retrieved.",
+            resume_text="bounded business evidence",
         )
 
 
@@ -146,6 +147,7 @@ def test_tool_result_keeps_legacy_positionals_and_freezes_context_items() -> Non
     assert legacy.images == ("data:image/png;base64,abc",)
     assert legacy.context_items == ()
     assert legacy.error_code is None
+    assert legacy.resume_text is None
     assert result.context_items == (item,)
     assert result.public_summary == "Business context retrieved."
 
@@ -157,6 +159,17 @@ def test_tool_result_rejects_invalid_context_and_public_summary() -> None:
         ToolResult(public_summary="x" * 513)
     with pytest.raises(ValueError, match="error_code"):
         ToolResult(error_code="invalid error code")
+    with pytest.raises(ValueError, match="resume_text"):
+        ToolResult(resume_text="x" * 1_048_577)
+    with pytest.raises(ValueError, match="resume_text"):
+        ToolResult(resume_text="unsafe\x00text")
+
+
+def test_context_item_kind_defaults_to_source_and_rejects_unknown_values() -> None:
+    assert ContextItem(uri="urn:document:one").kind == "source"
+    assert ContextItem(uri="urn:trace:one", kind="trace").kind == "trace"
+    with pytest.raises(ValueError, match="kind"):
+        ContextItem(uri="urn:document:one", kind="citation")  # type: ignore[arg-type]
 
 
 def test_skill_context_authorization_cannot_be_overridden_by_payload() -> None:
@@ -211,6 +224,29 @@ def test_resume_trajectory_uses_public_tool_summary_without_mutating_model_copy(
     assert public_trajectory[0]["content"] == "Business context retrieved."
     assert public_trajectory[1]["content"] == "ordinary local result"
     assert trajectory[0]["content"] == "sensitive business answer"
+
+
+def test_resume_trajectory_prefers_model_evidence_over_public_summary() -> None:
+    workspace = MagicMock(user_home=None)
+    agent = AnalystAgent(client=None, workspace=workspace)
+    agent._public_tool_result_summaries = {
+        "context-call": "Business context retrieved.",
+    }
+    agent._resume_tool_result_texts = {
+        "context-call": "[FINAL_EVIDENCE]\nGoverned meaning and sources.",
+    }
+    trajectory = [{
+        "role": "tool",
+        "tool_call_id": "context-call",
+        "content": "full private provider response",
+    }]
+
+    resumed = agent._strip_images(trajectory)
+
+    assert resumed[0]["content"] == (
+        "[FINAL_EVIDENCE]\nGoverned meaning and sources."
+    )
+    assert trajectory[0]["content"] == "full private provider response"
 
 
 def test_context_tool_routes_bounded_citations_without_logging_answer() -> None:
@@ -293,12 +329,16 @@ def test_context_tool_routes_bounded_citations_without_logging_answer() -> None:
         "uri": first.uri,
         "title": first.title,
         "provider": first.provider,
+        "kind": "source",
     }
 
     tool_event = next(event for event in events if event["type"] == "tool_result")
     assert tool_event["stdout"] == "Business context retrieved."
     assert messages[-2]["role"] == "tool"
     assert messages[-2]["content"] == "sensitive business answer"
+    assert agent._strip_images(messages)[-2]["content"] == (
+        "bounded business evidence"
+    )
     assert skill.contexts[0].authorization == SkillAuthorization(
         identity_id="user:42",
         workspace_id="workspace-good",
@@ -363,6 +403,68 @@ def test_skill_tool_exception_is_stable_and_does_not_leak_message() -> None:
         "stdout": "Tool 'lookup_context' failed.",
     }
     assert messages[-2]["content"] == "Tool 'lookup_context' failed."
+
+
+def test_streaming_skill_tool_routes_only_bounded_progress_fields() -> None:
+    closed = False
+
+    def streaming_tool():
+        nonlocal closed
+        try:
+            yield {
+                "type": "tool_progress",
+                "tool": "attacker-controlled-name",
+                "query_index": 1,
+                "phase": "searching",
+                "thought": "secret hidden reasoning",
+            }
+            yield {
+                "type": "tool_progress",
+                "query_index": 1,
+                "phase": "unknown-phase",
+                "observation": "secret raw result",
+            }
+            yield {"type": "not-public", "content": "secret event"}
+            yield {
+                "type": "tool_progress",
+                "query_index": None,
+                "phase": "finalizing",
+                "triples": ["secret triple"],
+            }
+            return ToolResult(text="bounded final result")
+        finally:
+            closed = True
+
+    agent = AnalystAgent(client=None, workspace=MagicMock(user_home=None))
+    routed = agent._route_skill_tool_events(
+        streaming_tool(),
+        "lookup_context",
+    )
+    events = []
+    while True:
+        try:
+            events.append(next(routed))
+        except StopIteration as completed:
+            result = completed.value
+            break
+
+    assert events == [
+        {
+            "type": "tool_progress",
+            "tool": "lookup_context",
+            "query_index": 1,
+            "phase": "searching",
+        },
+        {
+            "type": "tool_progress",
+            "tool": "lookup_context",
+            "query_index": None,
+            "phase": "finalizing",
+        },
+    ]
+    assert result == ToolResult(text="bounded final result")
+    assert closed is True
+    assert "secret" not in json.dumps(events)
 
 
 def test_malformed_action_arguments_are_repaired_before_retry() -> None:

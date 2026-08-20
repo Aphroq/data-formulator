@@ -57,6 +57,7 @@ Event = dict[str, Any]
 
 MAX_SKILL_AUTHORIZATION_ID_CHARS = 512
 MAX_TOOL_RESULT_PUBLIC_SUMMARY_CHARS = 512
+MAX_TOOL_RESULT_RESUME_TEXT_CHARS = 1_048_576
 _TOOL_RESULT_ERROR_CODE_PATTERN = re.compile(
     r"^[a-z][a-z0-9_.-]{0,127}$",
 )
@@ -165,7 +166,9 @@ class ToolResult:
     references routed separately by the shell. ``public_summary`` is an
     optional bounded replacement for external result text in frontend events
     and operational logs; it never replaces the full model observation.
-    ``error_code`` is an optional stable, secret-free failure classification.
+    ``resume_text`` is a separate bounded model-facing replacement used only
+    when a trajectory is serialized for a later continuation. ``error_code``
+    is an optional stable, secret-free failure classification.
     """
 
     text: str = ""
@@ -173,6 +176,7 @@ class ToolResult:
     context_items: tuple[ContextItem, ...] = ()
     public_summary: str | None = None
     error_code: str | None = None
+    resume_text: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.text, str):
@@ -210,6 +214,23 @@ class ToolResult:
             ):
                 raise ValueError("error_code must be a stable lowercase code")
 
+        if self.resume_text is not None:
+            if not isinstance(self.resume_text, str):
+                raise ValueError("resume_text must be a string or None")
+            resume_text = self.resume_text.strip()
+            if not resume_text:
+                object.__setattr__(self, "resume_text", None)
+            else:
+                if len(resume_text) > MAX_TOOL_RESULT_RESUME_TEXT_CHARS:
+                    raise ValueError("resume_text exceeds the maximum length")
+                if any(
+                    (ord(char) < 32 or ord(char) == 127)
+                    and char not in {"\t", "\n", "\r"}
+                    for char in resume_text
+                ):
+                    raise ValueError("resume_text contains control characters")
+                object.__setattr__(self, "resume_text", resume_text)
+
 
 @runtime_checkable
 class Skill(Protocol):
@@ -232,10 +253,12 @@ class Skill(Protocol):
         name: str,
         args: dict[str, Any],
         ctx: SkillContext,
-    ) -> ToolResult:
+    ) -> ToolResult | Generator[Event, None, ToolResult]:
         """Execute an inspection tool the model called. ``name`` is one of this
         skill's ``tools``; ``args`` is the parsed tool arguments. Parallel-safe;
-        returns text (and optional images) for the model to read."""
+        returns text (and optional images) for the model to read. A streaming
+        inspection may first yield bounded frontend events, then return the
+        same final ``ToolResult`` contract."""
         ...
 
     def handle_action(

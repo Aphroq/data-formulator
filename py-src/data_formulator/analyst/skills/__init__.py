@@ -198,7 +198,7 @@ class SkillRegistry:
     def render_registry_block(self) -> str:
         """Tier-1 progressive-disclosure listing for the base prompt.
 
-        One line per gated skill: name, the actions it unlocks, and a short
+        One line per gated skill: name, the tools/actions it provides, and a short
         ``when_to_use``/``description``. Bodies are pulled on demand via
         ``load_skill``; only this cheap index stays resident.
         """
@@ -206,8 +206,13 @@ class SkillRegistry:
         for name in self.gated_skill_names():
             meta = self.metas[name]
             blurb = (meta.when_to_use or meta.description or "").strip().replace("\n", " ")
-            unlocks = ", ".join(meta.action_names) if meta.action_names else "(no actions)"
-            lines.append(f"- **{name}** — unlocks `{unlocks}`. {blurb}")
+            surfaces: list[str] = []
+            if meta.tool_names:
+                surfaces.append(f"tools `{', '.join(meta.tool_names)}`")
+            if meta.action_names:
+                surfaces.append(f"actions `{', '.join(meta.action_names)}`")
+            capabilities = " and ".join(surfaces) or "guidance"
+            lines.append(f"- **{name}** — provides {capabilities}. {blurb}")
         return "\n".join(lines)
 
     def load_body(self, name: str) -> str:
@@ -339,6 +344,7 @@ def build_registry(
     skills_dir: Path | None = None,
     *,
     environment: Mapping[str, str] | None = None,
+    authorization: SkillAuthorization | None = None,
 ) -> SkillRegistry:
     """Scan ``skills_dir`` for ``<name>/SKILL.md``, build the index, eagerly
     instantiate each available skill's code module, and load its ``tools.json``
@@ -365,9 +371,24 @@ def build_registry(
         ):
             continue
         meta = _meta_from_frontmatter(raw, child.name)
+        instance = _instantiate_skill(meta.name)
+        availability = getattr(instance, "is_available", None)
+        if authorization is not None and callable(availability):
+            try:
+                if not availability(
+                    authorization,
+                    environment=source_environment,
+                ):
+                    continue
+            except Exception:
+                logger.warning(
+                    "Failed to evaluate request availability for skill %r",
+                    meta.name,
+                    exc_info=True,
+                )
+                continue
         registry.metas[meta.name] = meta
         registry._doc_paths[meta.name] = doc
-        instance = _instantiate_skill(meta.name)
         if instance is not None:
             registry.skills[meta.name] = instance
         registry.tool_specs[meta.name] = _load_tool_specs(child)
