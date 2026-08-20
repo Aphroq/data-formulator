@@ -331,6 +331,20 @@ class TestFromConfig:
         c = Client.from_config(cfg)
         assert c.model.startswith("gemini/")
 
+    def test_server_request_defaults_are_copied(self):
+        extra_body = {"enable_thinking": False}
+        cfg = {
+            "endpoint": "openai",
+            "model": "vendor-model",
+            "api_key": "k",
+            "extra_body": extra_body,
+        }
+
+        client = Client.from_config(cfg)
+        extra_body["enable_thinking"] = True
+
+        assert client.params["extra_body"] == {"enable_thinking": False}
+
 
 # ---------------------------------------------------------------------------
 # Ollama content-JSON -> tool_call salvage

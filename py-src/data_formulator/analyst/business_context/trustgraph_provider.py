@@ -20,15 +20,12 @@ import requests
 from data_formulator.analyst.business_context.base import (
     BusinessContextError,
     BusinessContextErrorCategory,
+    BusinessContextQuery,
     BusinessContextResult,
 )
 from data_formulator.analyst.business_context.trustgraph import (
     TrustGraphClient,
-    TrustGraphEntitySearch,
-    TrustGraphRowsQuery,
-    TrustGraphSparqlQuery,
     TrustGraphTarget,
-    TrustGraphTripleQuery,
     is_trustgraph_enabled,
 )
 from data_formulator.analyst.skills.base import SkillAuthorization
@@ -45,13 +42,11 @@ _TARGET_FIELDS = frozenset({
     "api_base",
     "flow_id",
     "collection",
+    "agent_group",
     "trustgraph_workspace",
-    "ontology_id",
     "credential_ref",
     "connect_timeout_seconds",
     "read_timeout_seconds",
-    "max_sparql_chars",
-    "max_results",
     "max_response_chars",
     "max_context_items",
 })
@@ -126,69 +121,20 @@ class TrustGraphProvider:
         self._identity_id = authorization.identity_id
         self._workspace_id = authorization.workspace_id
 
-    def _check_scope(self, authorization: SkillAuthorization) -> None:
+    def _check_scope(self, request: BusinessContextQuery) -> None:
         if (
-            not isinstance(authorization, SkillAuthorization)
-            or authorization.identity_id != self._identity_id
-            or authorization.workspace_id != self._workspace_id
+            not isinstance(request, BusinessContextQuery)
+            or request.identity_id != self._identity_id
+            or request.workspace_id != self._workspace_id
         ):
             raise _error(BusinessContextErrorCategory.UNAUTHORIZED)
 
-    def get_ontology(
-        self,
-        authorization: SkillAuthorization,
-    ) -> BusinessContextResult:
-        self._check_scope(authorization)
-        return self._client.get_ontology(bearer_token=self._bearer_token)
+    def query(self, request: BusinessContextQuery) -> BusinessContextResult:
+        """Resolve one focused question inside the bound authorization scope."""
 
-    def inspect_catalog(
-        self,
-        authorization: SkillAuthorization,
-    ) -> BusinessContextResult:
-        self._check_scope(authorization)
-        return self._client.inspect_catalog(bearer_token=self._bearer_token)
-
-    def search_entities(
-        self,
-        query: TrustGraphEntitySearch,
-        authorization: SkillAuthorization,
-    ) -> BusinessContextResult:
-        self._check_scope(authorization)
-        return self._client.search_entities(
-            query,
-            bearer_token=self._bearer_token,
-        )
-
-    def query_rows(
-        self,
-        query: TrustGraphRowsQuery,
-        authorization: SkillAuthorization,
-    ) -> BusinessContextResult:
-        self._check_scope(authorization)
-        return self._client.query_rows(
-            query,
-            bearer_token=self._bearer_token,
-        )
-
-    def query_triples(
-        self,
-        query: TrustGraphTripleQuery,
-        authorization: SkillAuthorization,
-    ) -> BusinessContextResult:
-        self._check_scope(authorization)
-        return self._client.query_triples(
-            query,
-            bearer_token=self._bearer_token,
-        )
-
-    def query_sparql(
-        self,
-        query: TrustGraphSparqlQuery,
-        authorization: SkillAuthorization,
-    ) -> BusinessContextResult:
-        self._check_scope(authorization)
-        return self._client.query_sparql(
-            query,
+        self._check_scope(request)
+        return self._client.query(
+            request,
             bearer_token=self._bearer_token,
         )
 

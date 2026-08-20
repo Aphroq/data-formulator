@@ -4,7 +4,7 @@
 
 本项目直接扩展 Microsoft Data Formulator，形成一个“可信交互分析 + 确定性 Recipe + 轻量后台运行”的单体工作台。
 
-用户继续在现有 Data Thread 中使用唯一的 `AnalystAgent` 探索数据。Agent 可以按需读取本地知识，也可以浏览 TrustGraph 的知识目录和本体、按语义发现图实体、查询 RDF 事实与抽取溯源，并把 TrustGraph 的 GraphQL 行查询结果作为结构化证据用于当前分析。用户还可以选择经 LiteLLM 使用 GitHub Copilot 模型。用户确认结果后，系统从真实 Artifact Lineage 编译不可变 RecipeVersion；手动和定时 Run 只执行该版本，不调用 LLM 或 TrustGraph。
+用户继续在现有 Data Thread 中使用唯一的 `AnalystAgent` 探索数据。分析、清洗或转换若依赖未决且会改变结果的业务含义，Agent 可以把一个聚焦问题和最小必要的数据上下文交给 TrustGraph 原生只读 Agent，由后者使用服务器配置的知识与结构化查询工具完成检索；最终答案仍由 Data Formulator 的 `AnalystAgent` 结合本地数据形成。用户还可以选择经 LiteLLM 使用 GitHub Copilot 模型。用户确认结果后，系统从真实 Artifact Lineage 编译不可变 RecipeVersion；手动和定时 Run 只执行该版本，不调用 LLM 或 TrustGraph。
 
 ## 目标用户
 
@@ -28,9 +28,9 @@ Workflow Replay 保留为灵活的“分析方法复用”；Recipe 是严格的
 
 ## 第一版必须完成
 
-- 在现有 AnalystAgent 中浏览 TrustGraph collection、文档、处理任务和 Context Core 目录，并按需读取业务本体。
-- 通过图实体语义搜索、三元组模式或 SPARQL 查询知识图谱及抽取溯源。
-- 通过 GraphQL 只读查询 TrustGraph 结构化数据；当前阶段只返回结构化查询结果，不写入 Data Formulator 表、Workspace，也不建立同步或刷新链路。
+- 在现有 `AnalystAgent` 中按需调用一个高层业务上下文查询工具；用户不需要了解 TrustGraph、本体、RDF、SPARQL 或 GraphQL。
+- TrustGraph 原生 Agent 使用服务器绑定的只读 `knowledge-query` 和 `structured-query` 自行迭代检索；Data Formulator 不把这些底层操作暴露成一组模型工具，也不接入行级语义匹配。
+- 查询只发送聚焦业务问题和最小相关上下文；上下文仅含当前操作、数据源/表角色、相关字段与类型、非敏感代表值或脱敏值模式及用户约束，不发送整表、无关行、原始敏感值、完整聊天历史、凭据或外部目标配置；结果作为不可信证据返回，并保留真实检索轨迹标识。
 - 可选使用 GitHub Copilot 模型，并验证 OAuth device、刷新、流式和工具调用。
 - 为加载、转换、图表和报告建立后端权威 Artifact Lineage。
 - 从选定产物编译、dry run、发布和手动运行 Recipe。
@@ -51,9 +51,9 @@ Workflow Replay 保留为灵活的“分析方法复用”；Recipe 是严格的
 
 ## 第一版明确不做
 
-- 不增加第二个 Agent 或新的 Agent runtime。
-- 不把 TrustGraph Agent、GraphRAG 或文本补全作为本项目的回答路径；自然语言回答仍由现有 `AnalystAgent` 生成。
-- 不接入 TrustGraph `row_embeddings_query()`，不增加行数据语义搜索。
+- 不增加第二个产品 Agent 或新的 Data Formulator Agent runtime；TrustGraph 原生 Agent 只是外部业务上下文检索提供者，不拥有 Data Thread、Workspace 或本地操作。
+- 不把 TrustGraph Agent 的思考过程、工具调用或外部内容提升为系统指令；Data Formulator 只消费最终答案、可验证来源和轨迹标识。
+- 不把 TrustGraph 的底层目录、本体、RDF、SPARQL、GraphQL 或行向量接口直接注册为 `AnalystAgent` 工具。
 - 不在 Data Formulator 增加文档摄取、Processing 或 Context Core load/unload/bulk 管理入口。
 - 不自建或复制 TrustGraph 工作台；需要管理和可视化时复用官方 `trustgraph-ui`。
 - 不使用 Copilot SDK，不部署 LiteLLM Proxy。
@@ -68,7 +68,7 @@ Workflow Replay 保留为灵活的“分析方法复用”；Recipe 是严格的
 
 ## 完成标准
 
-- 用户能在同一 Data Thread 中发现可用知识域、查看业务本体、语义搜索实体、获得结构化图谱事实和行数据，并把结果用于后续表格与图表分析。
+- 用户能用普通业务语言完成分析、清洗和转换；当结果依赖未决业务含义时，同一 Data Thread 会自动查询权威上下文，并把有依据的结果用于后续表格与图表分析。
 - Save as Recipe 不依赖聊天猜测，能显示完整输入和步骤。
 - 发布前 dry run 成功；版本不可变，Schedule 固定版本。
 - 手动和定时 Run 均不调用 LLM/TrustGraph。

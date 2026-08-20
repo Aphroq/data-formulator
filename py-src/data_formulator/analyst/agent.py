@@ -35,6 +35,7 @@ import logging
 import re
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Generator
@@ -104,6 +105,47 @@ def _rescue_unpack_json_strings(data: dict) -> None:
                 data[key] = json.loads(val)
             except (json.JSONDecodeError, ValueError):
                 pass
+
+
+@dataclass(frozen=True)
+class _NormalizedToolCall:
+    """One provider tool call normalized at the Agent dispatch boundary."""
+
+    id: str
+    name: str
+    arguments: dict[str, Any] | None
+    history_arguments: str
+
+
+def _normalize_tool_call(tool_call: Any, fallback_index: int) -> _NormalizedToolCall:
+    """Parse tool arguments once and keep replay history provider-valid.
+
+    Function-calling schemas require one JSON object.  Models can still end a
+    stream with incomplete JSON or a different JSON type.  Such values are not
+    guessed or dispatched; the tool loop records a safe JSON value and asks the
+    model to retry on its next round.
+    """
+    function = getattr(tool_call, "function", None)
+    name = getattr(function, "name", "") or ""
+    raw_arguments = getattr(function, "arguments", "")
+
+    try:
+        parsed = json.loads(raw_arguments)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        parsed = None
+    arguments = parsed if isinstance(parsed, dict) else None
+    history_arguments = json.dumps(
+        arguments or {},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+    return _NormalizedToolCall(
+        id=getattr(tool_call, "id", "") or f"call_{fallback_index}",
+        name=name,
+        arguments=arguments,
+        history_arguments=history_arguments,
+    )
 
 
 # ── Live tool-argument streaming (design-docs/36 §5) ───────────────────────
@@ -236,18 +278,24 @@ described in the capability sections below.
 
 ## Ground business meaning before acting
 
-During inspection and before committing an action or conclusion, identify any
-term, status, category, identifier, measure, classification, scope, rule, or
-relationship whose meaning could materially change data selection,
-calculation, mapping, joining, grouping, deduplication, units, time boundaries,
-interpretation, or conclusions.
+Before an action or conclusion, check whether an unresolved business meaning
+could materially change selection, calculation, mapping, joining, grouping,
+deduplication, units, time boundaries, interpretation, or conclusions. Do not
+infer a governed meaning solely from a label or observed values.
 
-Do not treat every word or column label as a lookup trigger. If the user has
-already supplied an exact rule, or alternative meanings would not materially
-change the work, continue without an external lookup. Otherwise, when the
-meaning is unresolved, load the relevant extension skill and use its inspection
-tools before acting. Do not infer governed business meaning solely from labels
-or observed values.
+Do not look up every term or column. If the user supplied an exact rule, the
+operation is purely mechanical, or another interpretation would not change the
+result, continue without a lookup. Otherwise, when the capability registry
+offers a relevant extension skill, load it and ask one focused business
+question. If none is available and the choice would change the result, ask the
+user. Include only the context needed to
+disambiguate it: the blocked operation or decision, the relevant source or
+table's role, field names and types, a few non-sensitive representative values
+or masked value patterns, and explicit user constraints. Never send a whole
+table, unrelated data, raw sensitive values, full conversation history,
+generated code, local paths, credentials, or routing details. The external
+provider owns its internal search and any multi-round retrieval; do not
+reproduce that strategy or repeat calls mechanically.
 
 If authoritative context is unavailable or remains ambiguous, do not invent a
 rule. Use `ask_user` when choosing among meanings would materially change the
@@ -1594,14 +1642,18 @@ class AnalystAgent:
 
             choice = response.choices[0]
             content = choice.message.content or ""
-            tool_calls = getattr(choice.message, 'tool_calls', None)
+            provider_tool_calls = getattr(choice.message, "tool_calls", None)
+            tool_calls = [
+                _normalize_tool_call(tool_call, index)
+                for index, tool_call in enumerate(provider_tool_calls or [])
+            ]
             finish_reason = getattr(choice, "finish_reason", "stop")
 
             if tool_calls:
                 rlog.log("llm_response", iteration=outer_iteration,
                          round=round_idx + 1,
                          latency_ms=llm_latency, finish_reason="tool_calls",
-                         tool_calls=[{"name": tc.function.name} for tc in tool_calls])
+                         tool_calls=[{"name": tc.name} for tc in tool_calls])
             else:
                 rlog.log("llm_response", iteration=outer_iteration,
                          round=round_idx + 1,
@@ -1618,9 +1670,9 @@ class AnalystAgent:
                 # ends with exactly ONE action; the harness enforces that here.
                 action_names = self.registry.action_names()
                 action_calls = [tc for tc in tool_calls
-                                if tc.function.name in action_names]
+                                if tc.name in action_names]
                 readonly_calls = [tc for tc in tool_calls
-                                  if tc.function.name not in action_names]
+                                  if tc.name not in action_names]
 
                 # ── Action present → cardinality guard (first-wins) ───────────
                 if action_calls:
@@ -1645,8 +1697,8 @@ class AnalystAgent:
                         "id": tc.id,
                         "type": "function",
                         "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
+                            "name": tc.name,
+                            "arguments": tc.history_arguments,
                         },
                     }
                     for tc in readonly_calls
@@ -1666,16 +1718,9 @@ class AnalystAgent:
                 pending_skill_bodies: list[dict] = []
 
                 for tc in readonly_calls:
-                    tool_name = tc.function.name
-                    try:
-                        parsed_tool_args = json.loads(tc.function.arguments)
-                    except (json.JSONDecodeError, TypeError, ValueError):
-                        parsed_tool_args = None
-                    tool_args = (
-                        parsed_tool_args
-                        if isinstance(parsed_tool_args, dict)
-                        else {}
-                    )
+                    tool_name = tc.name
+                    parsed_tool_args = tc.arguments
+                    tool_args = parsed_tool_args or {}
 
                     yield {
                         "type": "tool_start",
@@ -1691,7 +1736,20 @@ class AnalystAgent:
                     public_tool_content: str | None = None
                     context_log_fields: dict[str, Any] = {}
 
-                    if tool_name == "execute_python_script":
+                    if parsed_tool_args is None:
+                        tool_status = "error"
+                        tool_content = (
+                            "Tool arguments must be one valid JSON object matching "
+                            "the schema. Retry this tool call with valid arguments."
+                        )
+                        yield {
+                            "type": "tool_result",
+                            "tool": tool_name,
+                            "status": tool_status,
+                            "stdout": tool_content,
+                            "error": tool_content,
+                        }
+                    elif tool_name == "execute_python_script":
                         result = self._run_explore_code(
                             tool_args.get("code", ""),
                             input_tables or [],
@@ -1922,16 +1980,11 @@ class AnalystAgent:
         correction so the caller can loop and let the model retry.
         """
         chosen = action_calls[0]
-        chosen_name = chosen.function.name
-        dropped_actions = [tc.function.name for tc in action_calls[1:]]
-        dropped_readonly = [tc.function.name for tc in readonly_calls]
+        chosen_name = chosen.name
+        dropped_actions = [tc.name for tc in action_calls[1:]]
+        dropped_readonly = [tc.name for tc in readonly_calls]
 
-        try:
-            action_data = json.loads(chosen.function.arguments)
-        except json.JSONDecodeError:
-            action_data = {}
-        if not isinstance(action_data, dict):
-            action_data = {}
+        action_data = dict(chosen.arguments or {})
         _rescue_unpack_json_strings(action_data)
         action_data["action"] = chosen_name
 
@@ -1945,32 +1998,42 @@ class AnalystAgent:
             "type": "function",
             "function": {
                 "name": chosen_name,
-                "arguments": chosen.function.arguments,
+                "arguments": chosen.history_arguments,
             },
         }]
         messages.append(assistant_msg)
 
         # Pre-dispatch completeness check (belt-and-suspenders on top of the
-        # skill handler's own validation). Missing fields → correct + retry.
+        # skill handler's own validation). Invalid object or missing fields →
+        # correct + retry through the same failure lane.
         required = self.registry.action_required_fields(chosen_name)
         missing = [f for f in required if not action_data.get(f)]
-        if missing:
-            correction = (
-                f"The '{chosen_name}' action is missing required field(s): "
-                f"{', '.join(missing)}. Call it again with those fields filled in."
-            )
+        invalid_arguments = chosen.arguments is None
+        if invalid_arguments or missing:
+            if invalid_arguments:
+                detail = "Arguments must be a valid JSON object"
+                correction = (
+                    f"The '{chosen_name}' action arguments must be one valid JSON "
+                    "object matching its schema. Call it again with valid arguments."
+                )
+            else:
+                detail = f"Missing fields: {', '.join(missing)}"
+                correction = (
+                    f"The '{chosen_name}' action is missing required field(s): "
+                    f"{', '.join(missing)}. Call it again with those fields filled in."
+                )
             messages.append({
                 "role": "tool",
                 "tool_call_id": chosen.id,
                 "content": f"ERROR: {correction}",
             })
             rlog.log("tool_execution", iteration=outer_iteration, tool=chosen_name,
-                     input_summary="action_missing_fields",
-                     output_summary=", ".join(missing), latency_ms=0, status="error")
-            logger.warning("[AnalystAgent] Action '%s' missing fields %s, requesting retry",
-                           chosen_name, missing)
+                     input_summary="action_invalid",
+                     output_summary=detail, latency_ms=0, status="error")
+            logger.warning("[AnalystAgent] Action '%s' invalid, requesting retry",
+                           chosen_name)
             yield {"type": "tool_result", "tool": chosen_name, "status": "error",
-                   "error": f"Missing fields: {', '.join(missing)}"}
+                   "error": detail}
             return False
 
         # Answer the action's tool call with a placeholder so the trajectory is

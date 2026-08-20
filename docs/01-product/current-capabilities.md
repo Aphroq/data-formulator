@@ -48,18 +48,23 @@ TrustGraph 的 `release/v2.8` 是移动分支。开发、测试和问题复现�
 
 ## TrustGraph 能力与接入判断
 
-当前分支已经通过官方 `trustgraph-base==2.8.14` 接通知识目录、图实体语义检索、绑定本体、类型化 RDF 三元组、命名来源图和 SPARQL。锁定的 Python 包还直接提供以下现成接口：
+锁定的 `trustgraph-base==2.8.14` 已提供原生 `FlowInstance.agent()`、Agent 工具组、`knowledge-query`、`structured-query`、GraphRAG 和 Explainability。此前把目录、实体、rows、本体、triples、SPARQL 六个底层操作直接暴露给 Data Formulator 外层模型，等于在客户端重复实现 TrustGraph 已有的搜索编排；真实验证虽证明传输和各接口可用，但不是合适的产品工具面。
 
-| 能力 | 官方 Python API | 产品判断 |
-| --- | --- | --- |
-| 知识目录 | collection、flow、document、processing、Knowledge Core 列表 | A8 已接入只读 Skill，先让 Agent 知道有哪些知识可用 |
-| 图实体语义搜索 | `graph_embeddings_query` / embeddings + graph-embeddings | A8 已接入只读 Skill，先发现实体再展开关系 |
-| 结构化行 | `rows_query`、`row_embeddings_query`、`structured_query` | 只接入确定性的 GraphQL rows 读取；`row_embeddings_query` 明确不接入，也不导入 Data Formulator 表或做同步 |
-| 文档检索 | `document_embeddings_query` | 在需要原文片段时作为图谱事实的补充，不替代本体/RDF 主路径 |
-| 文档与 Context Core | Library processing、Knowledge Core load/unload、bulk import/export | Data Formulator 不接入写操作；继续由 TrustGraph 官方 UI/CLI 管理，Skill 仅查看只读目录 |
-| TrustGraph 自带回答 | GraphRAG、DocumentRAG、Agent、text completion | 不接入；避免形成第二个回答 runtime |
+当前产品判断改为：
 
-TrustGraph `2.8.14` 的独立 MCP Server 已通过真实 `initialize` 和 `tools/list` 探针，声明 31 个工具，能够向任意外部 MCP 客户端公开查询和管理能力。但它不是本项目获得上述能力的必要条件：当前 Python 后端已经安装官方 SDK，SDK 的结构化查询、行/文档语义搜索、Explainability 和 bulk 接口比该版本 MCP 工具面更完整。现阶段采用“官方 Python SDK 为产品主通道、MCP 为可选外部互操作入口”，不同时维护两条内部调用栈。
+| 能力 | 产品判断 |
+| --- | --- |
+| TrustGraph 原生 Agent | 作为外部只读业务上下文检索提供者；服务器绑定允许的工具组和 collection，Data Formulator 只调用一次高层查询 |
+| `knowledge-query` / `structured-query` | 由 TrustGraph Agent 按需多轮使用，不直接注册到 Data Formulator |
+| Explainability | 返回真实 Agent 检索轨迹标识；只有官方响应明确给出的文档来源才进入 citation，不从任意 RDF IRI 猜来源 |
+| 目录、本体、RDF、SPARQL、GraphQL、向量接口 | 保留为 TrustGraph 自身 UI/CLI 或部署诊断能力，不作为 `AnalystAgent` 的六个产品工具 |
+| 文档摄取与 Context Core | 继续由 TrustGraph 官方 UI/CLI 管理，Data Formulator 不接入写操作 |
+
+TrustGraph 的 `ontology` 配置是给摄取流程使用的规则：它告诉系统允许抽取哪些类型、属性和关系。原生 Agent 的 `knowledge_query` 搜索的是目标 collection 中已经导入的知识，不会直接把配置项当作业务答案。因此，若希望 Agent 回答某个业务类型的定义、允许关系或 property domain/range，部署方还需要把这些定义、关系及其来源实际导入同一 collection，并建立可检索的图实体上下文。此工作属于 TrustGraph 知识准备，不把 ontology/SPARQL 重新暴露成 Data Formulator 工具。
+
+TrustGraph `2.8.14` 的独立 MCP Server 已通过真实 `initialize` 和 `tools/list` 探针，声明 31 个工具，但它不是本项目内部通道。产品继续使用官方 Python SDK 调用原生 Agent；MCP 只作为可选外部互操作入口，不增加第二条内部调用栈。
+
+当前 `2.8.14` flow 镜像的出站 `mcp-tool` 实现仍按旧签名向 `streamable_http_client()` 传 `headers=`，而镜像内 MCP 客户端要求预构造 `http_client=`；真实调用会在查询前抛出参数错误。因此不把 MCP `triples_query`/`sparql_query` 注册到生产 Agent 工具组，也不在本分支修改 TrustGraph 源码或运行时依赖；临时探针配置已删除。
 
 真实探针还发现当前官方生成的 `2.8.14` Compose 中，MCP 默认反向连接 `api-gateway:8888`，而同一部署的 Gateway 实际监听 `8088`；显式覆盖 `--websocket-url ws://api-gateway:8088/api/v1/socket` 后可完成 Gateway 认证。该部署差异应在以后启用 MCP 兼容入口时单独修正，不阻塞 Python SDK 功能切片。
 

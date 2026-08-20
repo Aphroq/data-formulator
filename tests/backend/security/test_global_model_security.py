@@ -27,6 +27,7 @@ SAMPLE_ENV = {
     "OPENAI_ENABLED": "true",
     "OPENAI_API_KEY": "sk-secret-key-12345",
     "OPENAI_MODELS": "gpt-4o",
+    "OPENAI_EXTRA_BODY": '{"enable_thinking": false}',
 }
 
 
@@ -55,6 +56,7 @@ class TestGetClientGlobalResolution:
             })
 
             assert client.params.get("api_key") == "sk-secret-key-12345"
+            assert client.params.get("extra_body") == {"enable_thinking": False}
 
     @patch.dict(os.environ, SAMPLE_ENV, clear=True)
     def test_user_model_keeps_own_credentials(self):
@@ -75,6 +77,26 @@ class TestGetClientGlobalResolution:
             })
 
             assert client.params.get("api_key") == "sk-user-own-key"
+            assert "extra_body" not in client.params
+
+    @patch.dict(os.environ, SAMPLE_ENV, clear=True)
+    def test_user_model_cannot_inject_server_request_defaults(self):
+        registry = ModelRegistry()
+
+        with patch("data_formulator.routes.agents.model_registry", registry):
+            from data_formulator.routes.agents import get_client
+
+            client = get_client({
+                "id": "user-custom-model",
+                "endpoint": "openai",
+                "model": "gpt-4o",
+                "api_key": "sk-user-own-key",
+                "api_base": "",
+                "api_version": "",
+                "extra_body": {"enable_thinking": False},
+            })
+
+            assert "extra_body" not in client.params
 
     @patch.dict(os.environ, SAMPLE_ENV, clear=True)
     def test_global_claim_for_unregistered_id_is_rejected(self):

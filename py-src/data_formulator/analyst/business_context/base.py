@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 
 
 MAX_BUSINESS_CONTEXT_QUERY_CHARS = 8_000
+MAX_BUSINESS_CONTEXT_LOCAL_CONTEXT_CHARS = 16_000
 MAX_CONTEXT_ITEM_URI_CHARS = 2_048
 MAX_CONTEXT_ITEM_TITLE_CHARS = 512
 MAX_CONTEXT_ITEM_PROVIDER_CHARS = 64
@@ -39,7 +40,7 @@ def _normalized_required_text(
         raise ValueError(f"{field_name} exceeds the maximum length")
     allowed_controls = {"\t", "\n", "\r"} if allow_multiline else set()
     if any(
-        ord(char) < 32 and char not in allowed_controls
+        (ord(char) < 32 or ord(char) == 127) and char not in allowed_controls
         for char in normalized
     ):
         raise ValueError(f"{field_name} contains control characters")
@@ -48,11 +49,12 @@ def _normalized_required_text(
 
 @dataclass(frozen=True)
 class BusinessContextQuery:
-    """A query plus backend-authorized Data Formulator scope."""
+    """A focused question, minimal local context, and authorized scope."""
 
     text: str
     identity_id: str
     workspace_id: str
+    context: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -75,6 +77,18 @@ class BusinessContextQuery:
             "workspace_id",
             _normalized_required_text(self.workspace_id, "workspace_id", 512),
         )
+        if not isinstance(self.context, str):
+            raise ValueError("context must be a string")
+        context = self.context.strip()
+        if len(context) > MAX_BUSINESS_CONTEXT_LOCAL_CONTEXT_CHARS:
+            raise ValueError("context exceeds the maximum length")
+        if any(
+            (ord(char) < 32 or ord(char) == 127)
+            and char not in {"\t", "\n", "\r"}
+            for char in context
+        ):
+            raise ValueError("context contains control characters")
+        object.__setattr__(self, "context", context)
 
 
 @dataclass(frozen=True)
@@ -223,6 +237,7 @@ class BusinessContextProvider(Protocol):
 
 __all__ = [
     "MAX_BUSINESS_CONTEXT_QUERY_CHARS",
+    "MAX_BUSINESS_CONTEXT_LOCAL_CONTEXT_CHARS",
     "BusinessContextError",
     "BusinessContextErrorCategory",
     "BusinessContextProvider",

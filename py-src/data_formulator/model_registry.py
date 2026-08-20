@@ -1,12 +1,17 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import json
+import logging
 import os
 from typing import Optional, Dict, List
 
 BUILTIN_PROVIDERS = {'openai', 'azure', 'anthropic', 'gemini', 'ollama'}
 COPILOT_PROVIDER = "github_copilot"
 _TRUE_VALUES = {"1", "true", "yes", "on"}
+_MAX_EXTRA_BODY_LENGTH = 16_384
+
+logger = logging.getLogger(__name__)
 
 
 class ModelRegistry:
@@ -23,6 +28,7 @@ class ModelRegistry:
         {PROVIDER}_API_BASE=<url>
         {PROVIDER}_API_VERSION=<ver>      # optional
         {PROVIDER}_MODELS=model-a,model-b
+        {PROVIDER}_EXTRA_BODY=<json>      # optional server-side request defaults
 
     API keys and credentials live server-side only; the public information
     returned to the frontend contains no sensitive fields.
@@ -62,9 +68,27 @@ class ModelRegistry:
             api_base = os.getenv(f"{env}_API_BASE", "").strip()
             api_version = os.getenv(f"{env}_API_VERSION", "").strip()
             models_str = os.getenv(f"{env}_MODELS", "").strip()
+            extra_body_raw = os.getenv(f"{env}_EXTRA_BODY", "").strip()
 
             if not (api_key or api_base) or not models_str:
                 continue
+
+            extra_body = None
+            if extra_body_raw:
+                try:
+                    if len(extra_body_raw) > _MAX_EXTRA_BODY_LENGTH:
+                        raise ValueError("value is too long")
+                    extra_body = json.loads(extra_body_raw)
+                    if not isinstance(extra_body, dict):
+                        raise ValueError("value must be a JSON object")
+                except (json.JSONDecodeError, ValueError) as exc:
+                    logger.error(
+                        "Skipping global model provider %s: invalid %s_EXTRA_BODY (%s)",
+                        provider,
+                        env,
+                        exc,
+                    )
+                    continue
 
             if provider in BUILTIN_PROVIDERS:
                 endpoint = provider
@@ -84,6 +108,7 @@ class ModelRegistry:
                     "api_key": api_key,
                     "api_base": api_base,
                     "api_version": api_version,
+                    "extra_body": extra_body,
                     "provider_display": provider,
                 }
 
@@ -123,7 +148,7 @@ class ModelRegistry:
     def list_public(self) -> list:
         """
         Return public info for all globally configured models.
-        Sensitive fields (api_key) are intentionally excluded.
+        Sensitive fields and server-only request defaults are excluded.
         """
         return [
             {

@@ -49,6 +49,7 @@ SAMPLE_ENV = _make_env({
         "api_key": "sk-secret-deepseek-key",
         "api_base": "https://api.deepseek.com/v1",
         "models": "deepseek-chat",
+        "extra_body": '{"enable_thinking": false}',
     },
 })
 
@@ -159,6 +160,20 @@ class TestPublicListingSecurity:
         assert config is not None
         assert config["api_key"] == "sk-secret-openai-key"
 
+    @patch.dict(os.environ, SAMPLE_ENV, clear=True)
+    def test_request_defaults_stay_server_side(self):
+        registry = ModelRegistry()
+
+        config = registry.get_config("global-deepseek-deepseek-chat")
+        assert config is not None
+        assert config["extra_body"] == {"enable_thinking": False}
+        public = next(
+            model
+            for model in registry.list_public()
+            if model["id"] == "global-deepseek-deepseek-chat"
+        )
+        assert "extra_body" not in public
+
 
 # ---------------------------------------------------------------------------
 # Tests: custom provider endpoint resolution
@@ -191,5 +206,16 @@ class TestCustomProvider:
         config = registry.get_config("global-myvendor-my-model")
         assert config is not None
         assert config["endpoint"] == "openai"
+
+    @pytest.mark.parametrize("extra_body", ["not-json", "[]", '"text"'])
+    def test_invalid_extra_body_skips_provider(self, extra_body):
+        env = {
+            "MYVENDOR_ENABLED": "true",
+            "MYVENDOR_API_KEY": "key123",
+            "MYVENDOR_MODELS": "my-model",
+            "MYVENDOR_EXTRA_BODY": extra_body,
+        }
+        with patch.dict(os.environ, env, clear=True):
+            assert ModelRegistry().list_public() == []
 
 

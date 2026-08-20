@@ -20,6 +20,11 @@ import litellm
 
 _PROVIDER_PREFIX = "github_copilot/"
 _PROBE_TIMEOUT_SECONDS = 8
+# Output ceilings for tiny health-check responses only.  They do not configure
+# or reduce the model's input context window, and normal Agent requests do not
+# use them.
+_CHAT_PROBE_MAX_OUTPUT_TOKENS = 8
+_TOOL_PROBE_MAX_OUTPUT_TOKENS = 32
 _MAX_STREAM_CHUNKS = 128
 _DEFAULT_MAX_ENTRIES = 256
 _TOOL_NAME = "report_capability"
@@ -247,7 +252,7 @@ class CopilotCapabilityStore:
             response = client.get_completion(
                 _PROBE_MESSAGES,
                 stream=False,
-                max_tokens=8,
+                max_tokens=_CHAT_PROBE_MAX_OUTPUT_TOKENS,
                 timeout=_PROBE_TIMEOUT_SECONDS,
             )
             _validate_buffered_chat(response)
@@ -259,7 +264,7 @@ class CopilotCapabilityStore:
             response = client.get_completion(
                 _PROBE_MESSAGES,
                 stream=True,
-                max_tokens=8,
+                max_tokens=_CHAT_PROBE_MAX_OUTPUT_TOKENS,
                 timeout=_PROBE_TIMEOUT_SECONDS,
             )
             _validate_content_stream(response)
@@ -272,7 +277,7 @@ class CopilotCapabilityStore:
                 _TOOL_MESSAGES,
                 [_PROBE_TOOL],
                 stream=True,
-                max_tokens=32,
+                max_tokens=_TOOL_PROBE_MAX_OUTPUT_TOKENS,
                 timeout=_PROBE_TIMEOUT_SECONDS,
                 parallel_tool_calls=False,
                 tool_choice={

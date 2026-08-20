@@ -1,3 +1,4 @@
+import copy
 import json
 import litellm
 import os
@@ -228,6 +229,7 @@ class Client(object):
         api_key=None,
         api_base=None,
         api_version=None,
+        extra_body=None,
         *,
         copilot_token_manager=None,
     ):
@@ -276,6 +278,10 @@ class Client(object):
             self.params["api_base"] = api_base
         if api_version is not None and api_version != "":
             self.params["api_version"] = api_version
+        if extra_body is not None:
+            if not isinstance(extra_body, dict):
+                raise ValueError("extra_body must be a dictionary")
+            self.params["extra_body"] = copy.deepcopy(extra_body)
 
         if self.endpoint == "openai":
             if not model.startswith("openai/"):
@@ -406,7 +412,8 @@ class Client(object):
             model_config["model"],
             model_config.get("api_key"),
             model_config.get("api_base"),
-            model_config.get("api_version")
+            model_config.get("api_version"),
+            model_config.get("extra_body"),
         )
 
     def ping(self, timeout: int = 10):

@@ -307,6 +307,7 @@ def get_client(
         model_config.get("api_key") or None,
         model_config.get("api_base") or None,
         model_config.get("api_version") or None,
+        model_config.get("extra_body") if trusted else None,
         copilot_token_manager=copilot_token_manager,
     )
 

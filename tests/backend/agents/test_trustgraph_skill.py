@@ -14,14 +14,9 @@ from data_formulator.analyst.agent import AnalystAgent
 from data_formulator.analyst.business_context.base import (
     BusinessContextError,
     BusinessContextErrorCategory,
+    BusinessContextQuery,
     BusinessContextResult,
     ContextItem,
-)
-from data_formulator.analyst.business_context.trustgraph import (
-    TrustGraphEntitySearch,
-    TrustGraphRowsQuery,
-    TrustGraphSparqlQuery,
-    TrustGraphTripleQuery,
 )
 from data_formulator.analyst.skills import (
     SkillAuthorization,
@@ -34,14 +29,7 @@ from data_formulator.analyst.skills.trustgraph.skill import TrustGraphSkill
 
 pytestmark = [pytest.mark.backend]
 
-_TOOLS = (
-    "inspect_trustgraph_catalog",
-    "search_trustgraph_entities",
-    "query_trustgraph_rows",
-    "inspect_trustgraph_ontology",
-    "query_trustgraph_triples",
-    "query_trustgraph_sparql",
-)
+_TOOL = "query_business_context"
 
 
 class _Provider:
@@ -50,40 +38,19 @@ class _Provider:
         result: BusinessContextResult | None = None,
         error: Exception | None = None,
     ) -> None:
-        self.result = result or BusinessContextResult(
-            text=json.dumps({"operation": "triples", "triples": []}),
-        )
+        self.result = result or BusinessContextResult(text=json.dumps({
+            "operation": "business_context",
+            "answer": "Use the governed classification rule.",
+            "sources": [],
+        }))
         self.error = error
-        self.calls: list[tuple[str, object, SkillAuthorization]] = []
+        self.calls: list[BusinessContextQuery] = []
 
-    def _return(self):
+    def query(self, request: BusinessContextQuery) -> BusinessContextResult:
+        self.calls.append(request)
         if self.error is not None:
             raise self.error
         return self.result
-
-    def get_ontology(self, authorization):
-        self.calls.append(("ontology", None, authorization))
-        return self._return()
-
-    def inspect_catalog(self, authorization):
-        self.calls.append(("catalog", None, authorization))
-        return self._return()
-
-    def search_entities(self, query, authorization):
-        self.calls.append(("entities", query, authorization))
-        return self._return()
-
-    def query_rows(self, query, authorization):
-        self.calls.append(("rows", query, authorization))
-        return self._return()
-
-    def query_triples(self, query, authorization):
-        self.calls.append(("triples", query, authorization))
-        return self._return()
-
-    def query_sparql(self, query, authorization):
-        self.calls.append(("sparql", query, authorization))
-        return self._return()
 
 
 class _RecordingLog:
@@ -149,14 +116,20 @@ def _run_agent_tool(
     tool_call = SimpleNamespace(
         id="call-1",
         function=SimpleNamespace(
-            name="query_trustgraph_triples",
+            name=_TOOL,
             arguments=(
                 raw_arguments
                 if raw_arguments is not None
                 else json.dumps({
-                    "subject": "urn:invoice:1",
-                    "graph": "knowledge",
-                    "limit": 5,
+                    "question": (
+                        "Which category should code X7 map to for this "
+                        "standardization?"
+                    ),
+                    "context": (
+                        "Blocked operation: normalize category_code. "
+                        "Relevant field: category_code (string). "
+                        "Representative values: X7, Q2."
+                    ),
                 })
             ),
         ),
@@ -196,100 +169,74 @@ def test_registry_does_not_import_or_expose_trustgraph_when_disabled() -> None:
     )
 
 
-def test_registry_exposes_six_read_only_tools_when_enabled() -> None:
+def test_registry_exposes_exactly_one_high_level_read_only_tool() -> None:
     registry = build_registry(environment={"TRUSTGRAPH_ENABLED": "true"})
 
     assert registry.has("trustgraph")
     meta = registry.metas["trustgraph"]
     assert meta.always_on is False
-    assert meta.tool_names == _TOOLS
+    assert meta.tool_names == (_TOOL,)
     assert meta.action_names == ()
     tools = registry.tools_for(["trustgraph"])
-    assert tuple(tool["function"]["name"] for tool in tools) == _TOOLS
-    for tool in tools:
-        parameters = tool["function"]["parameters"]
-        assert parameters["additionalProperties"] is False
-        assert not {
-            "api_base",
-            "flow_id",
-            "collection",
-            "workspace",
-            "ontology_id",
-            "credential_ref",
-        } & set(parameters.get("properties", {}))
+    assert [tool["function"]["name"] for tool in tools] == [_TOOL]
+    parameters = tools[0]["function"]["parameters"]
+    assert parameters["required"] == ["question"]
+    assert set(parameters["properties"]) == {"question", "context"}
+    assert parameters["additionalProperties"] is False
+    assert not {
+        "api_base",
+        "flow_id",
+        "collection",
+        "agent_group",
+        "workspace",
+        "credential_ref",
+        "sparql",
+        "graphql",
+    } & set(parameters["properties"])
 
 
-def test_registry_guidance_triggers_on_material_task_meaning_not_jargon() -> None:
+def test_registry_guidance_is_general_and_explains_minimal_context() -> None:
     registry = build_registry(environment={"TRUSTGRAPH_ENABLED": "true"})
 
-    catalog = registry.render_registry_block()
-    body = registry.load_body("trustgraph")
-    normalized_body = " ".join(body.split())
+    catalog = " ".join(registry.render_registry_block().split())
+    body = " ".join(registry.load_body("trustgraph").split())
 
-    assert "analysis, data preparation, cleaning, transformation" in catalog
-    assert "unresolved term, status, category, identifier, measure" in catalog
-    assert "does not need to ask a knowledge question or mention TrustGraph" in catalog
-    assert "semantic checkpoint inside the user's original task" in normalized_body
-    assert "Never require the user to know or supply" in normalized_body
-    assert "Do not query merely because a word or column label appears" in normalized_body
-    assert "After every result, reassess the original evidence gap" in normalized_body
-    assert "do not call all tools mechanically" in normalized_body
-    assert "Apply the supported meaning or rule to the original analysis" in normalized_body
+    assert "unresolved business meaning" in catalog
+    assert "user does not need to mention TrustGraph" in catalog
+    assert "purely mechanical" in catalog
+    assert "one high-level query" in body
+    assert "may search more than once internally" in body
+    assert "source or table's role" in body
+    assert "field names and types" in body
+    assert "non-sensitive representative" in body
+    assert "masked value patterns" in body
+    assert "explicit constraints from the user" in body
+    assert "Do not send an entire table" in body
+    assert "raw sensitive values" in body
+    assert "Usually make one call for one semantic gap" in body
+    assert "trace proves which Agent session ran but is not a document source" in body
 
 
-def test_skill_inspects_bound_knowledge_catalog_without_arguments() -> None:
+def test_skill_builds_one_scoped_business_query_from_real_analysis_context() -> None:
     provider = _Provider(BusinessContextResult(
         text=json.dumps({
-            "operation": "catalog",
-            "flows": ["default"],
-            "collections": [],
+            "operation": "business_context",
+            "answer": "X7 maps to the Review category.",
+            "sources": [{"uri": "urn:standard:categories"}],
         }),
-    ))
-
-    result = _skill(provider).handle_tool(
-        "inspect_trustgraph_catalog",
-        {},
-        _context(_authorization()),
-    )
-
-    assert provider.calls == [("catalog", None, _authorization())]
-    assert result.public_summary == "TrustGraph knowledge catalog retrieved."
-    framed = json.loads(result.text.split("\n", 2)[2])
-    assert framed["operation"] == "catalog"
-    assert framed["data"]["flows"] == ["default"]
-
-
-def test_skill_builds_entity_search_from_authorized_context() -> None:
-    provider = _Provider(BusinessContextResult(
-        text=json.dumps({
-            "operation": "entity_search",
-            "entities": [],
-        }),
-    ))
-
-    result = _skill(provider).handle_tool(
-        "search_trustgraph_entities",
-        {"query": "overdue invoice", "limit": 7},
-        _context(_authorization()),
-    )
-
-    operation, query, authorization = provider.calls[0]
-    assert operation == "entities"
-    assert isinstance(query, TrustGraphEntitySearch)
-    assert query.query == "overdue invoice"
-    assert query.limit == 7
-    assert authorization == _authorization()
-    assert result.public_summary == "TrustGraph entities retrieved."
-
-
-def test_skill_builds_read_only_graphql_rows_query_without_workspace_writes() -> None:
-    provider = _Provider(BusinessContextResult(
-        text=json.dumps({
-            "operation": "rows",
-            "data": {"invoices": [{"id": "INV-1"}]},
-            "errors": [],
-            "extensions": None,
-        }),
+        context_items=(
+            ContextItem(
+                uri="urn:standard:categories",
+                title="Category standard",
+                provider="trustgraph",
+            ),
+            ContextItem(
+                uri="urn:trustgraph:agent:session-1",
+                title="TrustGraph retrieval trace (not a document source)",
+                provider="trustgraph",
+            ),
+        ),
+        truncated=True,
     ))
 
     class WorkspaceMustNotBeTouched:
@@ -297,11 +244,19 @@ def test_skill_builds_read_only_graphql_rows_query_without_workspace_writes() ->
             raise AssertionError(f"workspace access is forbidden: {name}")
 
     result = _skill(provider).handle_tool(
-        "query_trustgraph_rows",
+        _TOOL,
         {
-            "query": "query Find($id: ID!) { invoice(id: $id) { id } }",
-            "variables": {"id": "INV-1"},
-            "operation_name": "Find",
+            "question": (
+                "Which governed category should source code X7 map to before "
+                "grouping?"
+            ),
+            "context": (
+                "Blocked operation: normalize category_code, then group counts.\n"
+                "Source/table role: reference-coded observations from an upstream feed.\n"
+                "Relevant fields: category_code (string), observed_at (date).\n"
+                "Non-sensitive representative values: X7, Q2, empty.\n"
+                "User constraint: preserve empty values as unknown."
+            ),
         },
         SkillContext(
             client=None,
@@ -310,129 +265,50 @@ def test_skill_builds_read_only_graphql_rows_query_without_workspace_writes() ->
         ),
     )
 
-    operation, query, authorization = provider.calls[0]
-    assert operation == "rows"
-    assert isinstance(query, TrustGraphRowsQuery)
-    assert query.variables == {"id": "INV-1"}
-    assert query.operation_name == "Find"
-    assert authorization == _authorization()
-    assert result.public_summary == "TrustGraph rows retrieved."
-    framed = json.loads(result.text.split("\n", 2)[2])
-    assert framed["operation"] == "rows"
-
-
-def test_skill_reads_bound_ontology_without_model_arguments() -> None:
-    provider = _Provider(BusinessContextResult(
-        text=json.dumps({
-            "operation": "ontology",
-            "ontology_id": "finance",
-            "ontology": {"classes": []},
-        }),
-    ))
-
-    result = _skill(provider).handle_tool(
-        "inspect_trustgraph_ontology",
-        {},
-        _context(_authorization()),
-    )
-
-    assert provider.calls == [("ontology", None, _authorization())]
-    assert result.public_summary == "TrustGraph ontology retrieved."
-    assert result.text.startswith("[UNTRUSTED_TRUSTGRAPH_DATA]")
-    framed = json.loads(result.text.split("\n", 2)[2])
-    assert framed["operation"] == "ontology"
-    assert framed["data"]["ontology_id"] == "finance"
-
-
-def test_skill_builds_typed_triples_query_from_authorized_context() -> None:
-    provider = _Provider(BusinessContextResult(
-        text=json.dumps({"operation": "triples", "triples": []}),
-        context_items=(ContextItem(
-            uri="urn:invoice:1",
-            provider="trustgraph",
-        ),),
-        truncated=True,
-    ))
-
-    result = _skill(provider).handle_tool(
-        "query_trustgraph_triples",
-        {
-            "subject": "urn:invoice:1",
-            "predicate": "urn:amount",
-            "object": {
-                "kind": "literal",
-                "value": "42.5",
-                "datatype": "http://www.w3.org/2001/XMLSchema#decimal",
-            },
-            "graph": "provenance",
-            "limit": 10,
-        },
-        _context(_authorization()),
-    )
-
-    operation, query, authorization = provider.calls[0]
-    assert operation == "triples"
-    assert isinstance(query, TrustGraphTripleQuery)
-    assert query.subject == "urn:invoice:1"
-    assert query.object.kind == "literal"
-    assert query.graph == "provenance"
-    assert authorization == _authorization()
+    assert len(provider.calls) == 1
+    request = provider.calls[0]
+    assert request.text.startswith("Which governed category")
+    assert "category_code (string)" in request.context
+    assert "X7, Q2, empty" in request.context
+    assert request.identity_id == "user:42"
+    assert request.workspace_id == "workspace-good"
+    assert result.public_summary == "Authoritative business context retrieved."
     assert result.context_items == provider.result.context_items
-    assert result.public_summary == "TrustGraph triples retrieved."
-    assert json.loads(result.text.split("\n", 2)[2])["truncated"] is True
+    framed = json.loads(result.text.split("\n", 2)[2])
+    assert framed["operation"] == "business_context"
+    assert framed["data"]["answer"] == "X7 maps to the Review category."
+    assert framed["truncated"] is True
 
 
-def test_skill_builds_sparql_query_without_target_fields() -> None:
-    provider = _Provider(BusinessContextResult(
-        text=json.dumps({"operation": "sparql", "query_type": "ask"}),
-    ))
+def test_skill_omits_optional_context_without_inventing_it() -> None:
+    provider = _Provider()
 
-    result = _skill(provider).handle_tool(
-        "query_trustgraph_sparql",
-        {"query": "ASK { <urn:s> ?p ?o }", "limit": 3},
+    _skill(provider).handle_tool(
+        _TOOL,
+        {"question": "What is the governed reporting period boundary?"},
         _context(_authorization()),
     )
 
-    operation, query, authorization = provider.calls[0]
-    assert operation == "sparql"
-    assert isinstance(query, TrustGraphSparqlQuery)
-    assert query.query == "ASK { <urn:s> ?p ?o }"
-    assert query.limit == 3
-    assert authorization == _authorization()
-    assert result.public_summary == "TrustGraph SPARQL results retrieved."
+    assert provider.calls[0].context == ""
 
 
 @pytest.mark.parametrize(
-    ("tool_name", "args"),
+    "args",
     [
-        ("inspect_trustgraph_catalog", {"collection": "attacker"}),
-        ("search_trustgraph_entities", {
-            "query": "invoice",
-            "flow_id": "attacker",
-        }),
-        ("query_trustgraph_rows", {
-            "query": "{ invoices { id } }",
-            "collection": "attacker",
-        }),
-        ("inspect_trustgraph_ontology", {"ontology_id": "attacker"}),
-        ("query_trustgraph_triples", {"flow_id": "attacker"}),
-        (
-            "query_trustgraph_sparql",
-            {
-                "query": "ASK { <urn:s> ?p ?o }",
-                "workspace": "attacker",
-            },
-        ),
+        {},
+        {"question": 42},
+        {"question": "valid", "context": ["not", "text"]},
+        {"question": "valid", "flow_id": "attacker"},
+        {"question": "valid", "collection": "attacker"},
+        {"question": "valid", "workspace_id": "attacker"},
+        [],
     ],
 )
-def test_skill_rejects_target_override_fields(
-    tool_name: str,
-    args: dict,
-) -> None:
+def test_skill_rejects_malformed_or_target_override_arguments(args) -> None:
     provider = _Provider()
 
     result = _skill(provider).handle_tool(
-        tool_name,
+        _TOOL,
         args,
         _context(_authorization()),
     )
@@ -441,30 +317,10 @@ def test_skill_rejects_target_override_fields(
     assert result.error_code == "business_context.invalid_request"
 
 
-def test_skill_rejects_non_string_rdf_term_fields_before_provider() -> None:
-    malformed_objects = (
-        {"kind": None, "value": "42"},
-        {"kind": "literal", "value": 42},
-        {"kind": "literal", "value": "42", "datatype": None},
-        {"kind": "literal", "value": "42", "language": None},
-    )
-
-    for rdf_object in malformed_objects:
-        provider = _Provider()
-        result = _skill(provider).handle_tool(
-            "query_trustgraph_triples",
-            {"object": rdf_object},
-            _context(_authorization()),
-        )
-
-        assert provider.calls == []
-        assert result.error_code == "business_context.invalid_request"
-
-
 def test_skill_fails_closed_without_authorization() -> None:
     result = _skill(_Provider()).handle_tool(
-        "inspect_trustgraph_ontology",
-        {},
+        _TOOL,
+        {"question": "What does this code mean?"},
         _context(),
     )
 
@@ -487,17 +343,16 @@ def test_agent_recovers_from_stable_business_context_errors(category) -> None:
 
     events, messages, recording_log = _run_agent_tool(_skill(provider))
 
+    assert len(provider.calls) == 1
+    assert provider.calls[0].identity_id == "user:42"
+    assert provider.calls[0].workspace_id == "workspace-good"
     assert not any(event["type"] == "context_info" for event in events)
     tool_event = next(event for event in events if event["type"] == "tool_result")
     assert tool_event["stdout"] == f"TrustGraph unavailable ({category.value})."
     assert tool_event["status"] == "error"
-    assert tool_event["error"] == tool_event["stdout"]
     assert messages[-2]["role"] == "tool"
     assert category.value in messages[-2]["content"]
     assert events[-1]["final_text"] == "local fallback answer"
-    serialized_log = json.dumps(recording_log.entries)
-    assert category.value in serialized_log
-    assert "urn:invoice:1" not in serialized_log
     tool_log = next(
         entry for entry in recording_log.entries
         if entry["step_type"] == "tool_execution"
@@ -505,21 +360,63 @@ def test_agent_recovers_from_stable_business_context_errors(category) -> None:
     assert tool_log["error_code"] == f"business_context.{category.value}"
 
 
-def test_agent_keeps_no_source_data_out_of_events_and_logs() -> None:
+def test_agent_routes_explicit_sources_but_keeps_answer_out_of_logs() -> None:
     provider = _Provider(BusinessContextResult(
-        text=json.dumps({"sensitive": "no-source answer"}),
+        text=json.dumps({
+            "operation": "business_context",
+            "answer": "Sensitive governed mapping.",
+            "sources": [{"uri": "urn:standard:mapping"}],
+        }),
+        context_items=(ContextItem(
+            uri="urn:standard:mapping",
+            title="Mapping standard",
+            provider="trustgraph",
+        ),),
     ))
 
     events, messages, recording_log = _run_agent_tool(_skill(provider))
 
-    assert not any(event["type"] == "context_info" for event in events)
+    context_event = next(event for event in events if event["type"] == "context_info")
+    assert context_event["context_items"] == [{
+        "uri": "urn:standard:mapping",
+        "title": "Mapping standard",
+        "provider": "trustgraph",
+    }]
     tool_event = next(event for event in events if event["type"] == "tool_result")
-    assert tool_event["stdout"] == "TrustGraph triples retrieved."
-    assert "no-source answer" in messages[-2]["content"]
-    assert "no-source answer" not in json.dumps({
-        "events": events,
-        "logs": recording_log.entries,
-    })
+    assert tool_event["stdout"] == "Authoritative business context retrieved."
+    assert "Sensitive governed mapping" in messages[-2]["content"]
+    serialized_log = json.dumps(recording_log.entries)
+    assert "Sensitive governed mapping" not in serialized_log
+    assert "category_code" not in serialized_log
+
+
+def test_skill_rejects_malformed_provider_result() -> None:
+    provider = _Provider(BusinessContextResult(text="not-json"))
+
+    result = _skill(provider).handle_tool(
+        _TOOL,
+        {"question": "What does X7 mean?"},
+        _context(_authorization()),
+    )
+
+    assert result.error_code == "business_context.protocol_error"
+    assert "not-json" not in result.text
+
+
+def test_skill_rejects_non_result_provider_value() -> None:
+    class InvalidProvider:
+        def query(self, request):
+            return {"answer": "not a BusinessContextResult"}
+
+    skill = TrustGraphSkill(provider_resolver=lambda authorization: InvalidProvider())
+    result = skill.handle_tool(
+        _TOOL,
+        {"question": "What does X7 mean?"},
+        _context(_authorization()),
+    )
+
+    assert result.error_code == "business_context.protocol_error"
+    assert "not a BusinessContextResult" not in result.text
 
 
 def test_agent_cleans_unexpected_provider_exception() -> None:
@@ -546,5 +443,25 @@ def test_agent_rejects_non_object_tool_arguments_and_continues() -> None:
     )
 
     assert provider.calls == []
-    assert "invalid_request" in messages[-2]["content"]
+    assert messages[0]["tool_calls"][0]["function"]["arguments"] == "{}"
+    assert "valid JSON object" in messages[-2]["content"]
+    assert events[-1]["final_text"] == "local fallback answer"
+
+
+def test_agent_repairs_malformed_json_history_and_continues() -> None:
+    provider = _Provider()
+
+    events, messages, _ = _run_agent_tool(
+        _skill(provider),
+        raw_arguments='{"question":"unfinished"',
+    )
+
+    assert provider.calls == []
+    assert messages[0]["tool_calls"][0]["function"]["arguments"] == "{}"
+    assert "valid JSON object" in messages[-2]["content"]
+    tool_result = next(
+        event for event in events
+        if event["type"] == "tool_result"
+    )
+    assert tool_result["status"] == "error"
     assert events[-1]["final_text"] == "local fallback answer"

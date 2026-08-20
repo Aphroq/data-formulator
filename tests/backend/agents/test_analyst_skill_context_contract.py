@@ -105,12 +105,24 @@ def test_system_prompt_requires_material_business_semantics_before_action() -> N
     )
 
     prompt = agent._build_system_prompt()
+    normalized_prompt = " ".join(prompt.split())
 
     assert "## Ground business meaning before acting" in prompt
-    assert "Do not treat every word or column label as a lookup trigger" in prompt
-    assert "load the relevant extension skill" in prompt
-    assert "Do not infer governed business meaning solely from labels" in prompt
-    assert "Use `ask_user` when choosing among meanings" in prompt
+    assert "Do not look up every term or column" in normalized_prompt
+    assert "offers a relevant extension skill, load it" in normalized_prompt
+    assert "If none is available" in normalized_prompt
+    assert "Do not infer a governed meaning solely from a label" in normalized_prompt
+    assert "relevant source or table's role" in normalized_prompt
+    assert "field names and types" in normalized_prompt
+    assert "non-sensitive representative values" in normalized_prompt
+    assert "masked value patterns" in normalized_prompt
+    assert "raw sensitive values" in normalized_prompt
+    assert "Never send a whole table" in normalized_prompt
+    assert (
+        "provider owns its internal search and any multi-round retrieval"
+        in normalized_prompt
+    )
+    assert "Use `ask_user` when choosing among meanings" in normalized_prompt
 
 
 def test_tool_result_keeps_legacy_positionals_and_freezes_context_items() -> None:
@@ -351,3 +363,40 @@ def test_skill_tool_exception_is_stable_and_does_not_leak_message() -> None:
         "stdout": "Tool 'lookup_context' failed.",
     }
     assert messages[-2]["content"] == "Tool 'lookup_context' failed."
+
+
+def test_malformed_action_arguments_are_repaired_before_retry() -> None:
+    agent = AnalystAgent(
+        client=None,
+        workspace=MagicMock(user_home=None),
+    )
+    malformed_call = SimpleNamespace(
+        id="call-1",
+        function=SimpleNamespace(
+            name="ask_user",
+            arguments='{"questions":["unfinished"',
+        ),
+    )
+    responses = [
+        _response(tool_calls=[malformed_call], finish_reason="tool_calls"),
+        _response(content="done"),
+    ]
+
+    def fake_stream_llm(messages, tools):
+        if False:
+            yield None
+        return responses.pop(0)
+
+    agent._stream_llm = fake_stream_llm
+    messages: list[dict] = []
+    events = list(agent._tool_loop(
+        messages, 2, 1, 0, 0, _RecordingLog(), [], 1,
+    ))
+
+    assert messages[0]["tool_calls"][0]["function"]["arguments"] == "{}"
+    assert messages[1]["role"] == "tool"
+    assert "valid JSON object" in messages[1]["content"]
+    assert next(
+        event for event in events if event["type"] == "tool_result"
+    )["status"] == "error"
+    assert events[-1]["final_text"] == "done"

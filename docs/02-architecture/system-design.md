@@ -4,7 +4,7 @@
 
 在不改变 Data Formulator 核心交互模型的前提下，增加可信上下文、确定性 Recipe 和轻量后台运行。
 
-系统只保留一个 `AnalystAgent`。TrustGraph 的只读目录和查询能力作为 Skill 接入；知识摄取、Context Core 管理和完整图谱工作台继续使用 TrustGraph 官方 UI，不在 Data Formulator 建立第二套管理面。GitHub Copilot 是 LiteLLM provider。这些分析集成不进入正常 Recipe Run。
+系统只保留一个产品编排者 `AnalystAgent`。TrustGraph 原生 Agent 通过一个只读业务上下文 Skill 接入，并只充当外部检索提供者；知识摄取、工具组、Context Core 管理和完整图谱工作台继续使用 TrustGraph 官方 UI，不在 Data Formulator 建立第二套管理面。GitHub Copilot 是 LiteLLM provider。这些分析集成不进入正常 Recipe Run。
 
 ## 核心原则
 
@@ -20,7 +20,7 @@
 ```text
 Data Thread / AnalystAgent
   ├─ Local Knowledge
-  ├─ TrustGraph Skill（目录、语义搜索、RDF、SPARQL、结构化行）
+  ├─ TrustGraph Skill（一个高层业务上下文查询）
   └─ LiteLLM Models（可选 Copilot OAuth）
              │
              ▼
@@ -52,48 +52,40 @@ Data Thread / AnalystAgent
 
 ## 分析集成
 
-### TrustGraph 本体与知识图谱
+### TrustGraph 业务上下文检索
 
-TrustGraph 作为现有 AnalystAgent 的可选知识 Skill，不作为第二个 Agent，也不通过 Graph RAG 生成答案。第一版固定使用官方 `trustgraph-base==2.8.14` Python API，复用其 `Api`、`Config`、`Flow`、`Collection`、`Library`、`Knowledge`、RDF schema 和 translator，并调用 TrustGraph 已开放的结构化接口：
+Data Formulator 只保留一个产品编排者：现有 `AnalystAgent`。TrustGraph 原生 Agent 作为外部、只读的业务上下文检索提供者，不拥有 Data Thread、Workspace、本地 Python 执行、图表或任何提交动作，因此不构成第二套 Data Formulator Agent runtime。
 
-- workspace-scoped `config` 的 `list/get`，读取服务器绑定的 `ontology` 配置；
-- collection、flow、document、processing 和 Knowledge Core 列表，形成可发现的知识目录；
-- flow-scoped embeddings 与 `graph-embeddings`，用自然语言发现相关图实体；
-- flow-scoped `triples`，按 subject/predicate/object 和命名图查询 RDF 事实；
-- 官方 `FlowInstance.sparql_query()`，执行 `SELECT`、`ASK`、`CONSTRUCT`、`DESCRIBE`；
-- `rows_query()`，执行只读 GraphQL 结构化查询并返回 JSON；当前阶段不写 Data Formulator 表或 Workspace，不接同步/刷新；
-- `urn:graph:source` 中的 W3C PROV-O 抽取溯源仍通过同一图查询面读取。
+主调用链固定为：
 
-查询 Skill 不暴露 TrustGraph Agent、GraphRAG、DocumentRAG、text completion、`row_embeddings_query()`、通用配置修改、文档摄取或 Knowledge Core 写操作。文档摄取、Processing、Context Core 装卸和完整知识图谱可视化继续由官方 `trustgraph-ui` 负责。读取目录、本体、事实、GraphQL 结构化行和溯源本身不要求 TrustGraph 生成自然语言答案。
+```text
+用户的分析 / 清洗 / 转换请求
+  → AnalystAgent 判断是否存在会改变结果的未决业务含义
+  → query_business_context(question, context?)
+  → 服务端绑定的 TrustGraph Flow + collection + 只读 Agent 工具组
+  → TrustGraph 原生 Agent 按需多轮调用 knowledge-query / structured-query
+  → 最终业务上下文答案 + 真实检索轨迹标识
+  → AnalystAgent 结合本地数据继续执行或请求澄清
+```
 
-#### TrustGraph SDK 与 MCP 边界
+Data Formulator 发给外部提供者的载荷保持简单：
 
-产品内部主通道使用已锁定的官方 Python SDK，而不是再增加一条 MCP 客户端调用栈：
+- `question`：一个可独立回答的聚焦业务问题，例如某个状态、分类、口径、映射、单位、时间边界或关系应如何解释；
+- `context`（可选）：只包含该答案会影响的当前操作、相关数据源或表在任务中的角色、字段名和类型、少量非敏感代表值或脱敏后的值模式，以及用户已经明确的约束。
 
-- Python SDK 已覆盖目录、语义搜索、RDF、SPARQL、GraphQL rows、Library、Knowledge Core、Explainability 和 bulk 接口；本项目只接入既定只读子集；
-- `graph_embeddings_query(text, ...)` 在语义上属于“生成 embedding → 查询 graph embeddings”的组合，`2.8.14` 高层同步实现存在返回形状错误时，只允许用同一官方 `FlowInstance.request()` 拆成这两个官方服务调用，不另写向量算法；
-- 独立 `trustgraph-mcp` 服务适合让其他 MCP 客户端连接 TrustGraph，或未来作为部署兼容模式；它不为当前 Python 后端增加独有的产品知识能力；
-- MCP 的 31 个原始工具包含 prompt、token cost、flow 运维和另一套 Agent 等非分析工具，不能直接全部注入 `AnalystAgent`。
+不发送整表、无关行、原始敏感值、完整聊天历史、代码、文件路径、identity、Data Formulator workspace id、目标 URL、Flow、collection、工具组或凭据。外层模型不负责选择 TrustGraph 内部查询策略，也不生成 SPARQL/GraphQL；一次高层调用通常应由 TrustGraph Agent 自行完成必要的多轮检索。只有出现另一个独立的语义缺口，或返回明确指出缺少某项上下文时，外层才再次调用。
 
-真实 `2.8.14` 探针已完成 MCP `initialize` 与 `tools/list`。当前官方生成部署的 MCP 默认 Gateway 地址为 `api-gateway:8888`，而实际 Gateway 监听 `8088`；覆盖 `--websocket-url` 后认证链路成立。MCP 端到端工具调用在该外部实验环境中仍受消息总线恢复状态影响，因此不作为当前产品主通道的完成证据。
+TrustGraph 目标由服务端把 Data Formulator workspace 显式映射到 HTTPS API base、Flow、collection、单个只读 Agent 工具组、TrustGraph workspace、credential reference、超时和响应大小上限。模型和前端不能覆盖这些值。生产工具组只配置需要的只读 `knowledge-query`、`structured-query`；不配置 row embeddings/行级语义匹配、通用文本补全、写操作、摄取或管理工具。
 
-#### TrustGraph 官方 UI 边界
+服务器工具合同使用稳定名称 `knowledge_query` 和 `structured_query`。Data Formulator 的固定任务帧只负责告诉原生 Agent：业务定义、编码、分类、状态、范围、单位、时间边界、规则或关系优先使用 `knowledge_query`；只有确需受治理的结构化记录事实时才使用 `structured_query`；只能调用本轮明确列出的工具，不能发明通用 `search`/`browse`。若第一次 observation 未覆盖多部分问题的实质缺口，原生 Agent 可缩窄问题继续调用，外层不复制这套循环。
 
-官方 `trustgraph-ui` 是 React 19 + Vite 的独立应用，并提供已发布到 npm 的 `@trustgraph/trustkit` 组件/设计系统、TypeScript client、React provider 和 state hooks。`trustkit@2.0.3` 要求 React 19，与 Data Formulator 的 React 18 基线不一致。第一版不复制组件源码、不升级整个 Data Formulator React 栈，也不把浏览器改为直连 TrustGraph WebSocket；需要管理或完整可视化时直接打开独立官方 UI，Data Formulator 不增加 TrustGraph 前端入口。
+TrustGraph 的 ontology 配置是给摄取流程使用的规则，用来约束可抽取的类型、属性和关系；`knowledge_query` 搜索的则是目标 collection 中已经导入的知识。需要在分析和清洗中自动核对的类定义、属性、domain/range 和业务关系，应由部署方连同来源实际导入同一 collection，并建立可检索的图实体上下文；随后统一由 `knowledge_query`/GraphRAG 检索。Data Formulator 不直读 ontology 配置，也不为此增加 SPARQL 或 triples 产品工具。
 
-TrustGraph 目标配置继续复用已经实现的目标映射，至少包含：
+产品内部继续使用锁定的官方 Python SDK，调用原生 `service/agent`；因为 `2.8.14` 的 REST 高层方法没有暴露 collection 和 session id，适配器只在同一官方 `FlowInstance.request()` 上补齐这两个服务器控制字段，不实现自己的搜索、查询规划或 Agent loop。该版本 HTTP gateway 实际返回终态 `AgentResponse`（`message_type=answer`、`content`、两个完成标志），而同步 SDK 文档仍描述聚合 `answer`；适配器只在协议边界兼容这两种官方形状，并严格拒绝 thought、observation 和未完成的 answer chunk。MCP 只作为独立外部互操作入口；锁定镜像的出站 `mcp-tool` 与其 MCP 客户端签名不兼容，内部 Agent 不依赖该路径。
 
-- API base URL、flow id、collection 和允许的 ontology id；
-- credential reference；
-- Data Formulator workspace 到允许目标的显式映射；
-- 分离的 connect/read timeout；
-- 最大 SPARQL 长度、最大结果数和最大响应大小。
+TrustGraph 返回内容按不可信证据处理。Data Formulator 只消费最终答案，不回传或展示 TrustGraph 的隐藏思考链。每次请求由 Data Formulator 生成 session id，并用官方 Agent provenance URI 形成真实轨迹引用；只有 TrustGraph 官方响应明确给出的文档来源才作为文档 citation，禁止递归收集任意 RDF/RDFS/实体 IRI 冒充来源。若无答案、认证失败、超时、服务错误或协议漂移，查询失败关闭；若答案本身说明证据不足，`AnalystAgent` 不得据此执行会改变语义的数据操作。
 
-真实 TrustGraph workspace 由 bearer token 授权，并由服务端目标映射固定；模型和前端不得指定 base URL、flow、collection、workspace、ontology id 或凭据。SPARQL 在本地用 `rdflib` 确认是查询语句并拒绝 `SERVICE`，再交给 TrustGraph 的只读 query endpoint；三元组查询只接受类型化 RDF term 和有界 limit。
-
-官方 2.8.14 高层 `triples_query()` 不暴露命名图 `g`，因此只有 knowledge/provenance 三元组查询通过官方 `FlowInstance.request()` 补入 `g`；SPARQL 直接使用官方 `FlowInstance.sparql_query()`。真实 `2.8.14` 部署验证 SDK 使用的 `service/sparql` 可用，而在线 REST 路径 `service/sparql-query` 返回 404，以锁定包和真实部署合同为准。官方 `Api.request()` 不提供 Session 注入和禁止重定向选项，项目以受限子类保留其对象模型和请求合同，同时补充 allowlist、TLS、禁止重定向、分离 connect/read timeout 和稳定错误分类。
-
-结果以结构化知识目录、本体、实体匹配、RDF term、triple/quad、SPARQL binding 或 GraphQL rows 进入模型，不把图压平成上游生成的自然语言答案。GraphQL rows 当前只作为查询证据，不进入 Data Formulator 表、Workspace、同步或刷新链路。URI 和溯源项继续使用已经存在的供应商无关引用通道。既有凭据解析、结果边界和引用处理作为基础设施保留，但不再作为后续 TrustGraph 功能切片或验收的主目标。
+TrustGraph 自身 LLM 配置与 Data Formulator LiteLLM 配置相互独立。当前部署使用 OpenAI-compatible Qwen variant，把模型设为 `Qwen/Qwen3.5-27B`，`thinking=off`；API token 和 base URL只存在 TrustGraph 部署环境。官方 `trustgraph-ui` 继续承担工具组、collection、摄取、Context Core、Ontology/SPARQL/GraphQL 和完整图谱管理，Data Formulator 不复制这些页面。
 
 ### 通用引用通道
 

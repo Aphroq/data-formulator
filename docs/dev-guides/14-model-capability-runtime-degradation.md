@@ -31,6 +31,24 @@ class Client:
 - 调用 `litellm.completion(model=..., drop_params=True, ...)`
 - 捕获 image deserialize 错误 → 剥离图片 → 重试
 
+## 全局提供商请求默认值
+
+当 OpenAI 兼容提供商要求一个 LiteLLM 标准参数之外的原生开关时，管理员
+可以给全局提供商配置一个最小 JSON 对象：
+
+```text
+SILICONFLOW_EXTRA_BODY='{"enable_thinking":false}'
+```
+
+`{PROVIDER}_EXTRA_BODY` 只在服务端解析并作为 LiteLLM `extra_body` 传入；
+不会出现在 `/api/list-global-models` 的公开模型信息中。只有从服务端
+`ModelRegistry` 解析成功的 trusted global model 可以使用该值，浏览器请求
+中的同名字段会被忽略。空值表示完全使用提供商默认参数；无效 JSON、非对象
+或超过长度限制的配置会让对应提供商停止注册，避免悄悄丢失关键开关。
+
+这里只放提供商必须显式覆盖的字段，不用它复制 temperature、top_p、
+max_tokens 等已有默认参数，也不在其中保存 API key。
+
 ## reasoning_effort 分层
 
 每个 Agent 的默认 tier 在 `py-src/data_formulator/agent_config.py` 的

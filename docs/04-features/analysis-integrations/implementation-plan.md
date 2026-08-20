@@ -6,10 +6,10 @@
 | --- | --- |
 | 适用分支 | `feat/analysis-integrations` |
 | 固定上游基线 | Data Formulator `0.8.0b1` / `5477f0e236426dc8f74a498ec400414fba7fbc0f` |
-| 当前目标 | 在同一个 `AnalystAgent` 与 Data Formulator 工作区中增加可发现、可查询的 TrustGraph 本体/RDF 知识图谱能力和可选 GitHub Copilot 模型 |
-| 当前实施节点 | A0-A9 已完成并提交为 `acdfb3c5`；行语义搜索、A10 知识准备和 Data Formulator 内 TrustGraph UI 已取消；后续只做真实业务数据验收 |
-| 外部验证节点 | M0-B：Copilot 和仓库外 TrustGraph `2.8.14` 验收均完成；生产目标和真实业务本体/数据仍由部署方后续提供 |
-| 最后更新 | 2026-08-19 |
+| 当前目标 | 在同一个 `AnalystAgent` 与 Data Formulator 工作区中增加一个 TrustGraph 原生 Agent 驱动的业务上下文查询能力和可选 GitHub Copilot 模型 |
+| 当前实施节点 | A12 产品代码、离线合同和真实原生 Agent 验收完成：六个底层 TrustGraph 工具已收敛为一个高层查询，复用原生 Agent 的多轮检索和 provenance |
+| 外部验证节点 | reader bearer、合成知识、专用只读工具组、目标 collection、Qwen Flow 和 non-thinking 部署均已生效；ontology 定义/关系已作为可查询知识导入知识图，真实 Data Formulator 查询覆盖一轮、自动两轮和中文输入并持久化官方 session trace |
+| 最后更新 | 2026-08-20 |
 
 本文把项目级架构约束细化为 Analysis Integrations 分支可执行的代码、测试和验收计划。项目事实来源仍以当前检出源码和测试为准；实现决定变化后，应同时更新本文和同目录工程记录。
 
@@ -19,9 +19,9 @@
 
 1. 建立供应商无关的业务上下文结果、稳定错误和结构化引用契约。
 2. 将 Data Formulator 后端已经授权的 identity 和 workspace 明确传入 Skill，不从模型参数或前端 payload 推断。
-3. 通过官方 Python SDK 展示 TrustGraph Flow、collection、document、processing 和 Knowledge Core 目录，并提供图实体语义发现。
-4. 以只读 Skill 接入 TrustGraph 本体、RDF 三元组、来源图和 SPARQL 查询；不调用 Graph RAG，也不让 TrustGraph 生成自然语言答案。
-5. 通过显式 GraphQL 只读查询 TrustGraph rows；结果保持结构化，但当前阶段不写入 Data Formulator 表或 Workspace，也不做同步。
+3. 通过一个 `query_business_context(question, context?)` 把业务语义缺口交给 TrustGraph 原生 Agent；用户和外层模型不需要掌握图谱查询术语。
+4. TrustGraph Agent 使用服务器绑定的只读工具组和 collection，自行按需多轮调用知识与结构化查询能力。
+5. 查询只发送聚焦问题与最小相关上下文；只消费最终答案和真实 provenance trace，不消费隐藏思考链，也不从任意 URI 猜来源。
 6. 将引用从 Skill 结果送入 Agent 流，并持久化到 Data Thread 的对应消息或产物。
 7. 在现有 LiteLLM Client 路径中接入 GitHub Copilot device flow，不引入 Copilot SDK 或第二套 Agent runtime。
 8. 对 Copilot 模型逐个探测 chat、streaming 和 tools 能力，只注册符合当前 `AnalystAgent` Chat Completions 契约的模型。
@@ -31,7 +31,7 @@
 ### 2.2 明确不做
 
 - 不实现 Recipe、Schedule、Run、Worker 或后台 Executor。
-- 不接入 `row_embeddings_query()`，不增加行数据语义搜索。
+- 不把 `row_embeddings_query()` 或其他 TrustGraph 底层查询直接暴露给 Data Formulator 外层模型。
 - 不在 Data Formulator 暴露文档摄取、processing、Knowledge/Context Core load/unload/bulk 或其他 TrustGraph 写操作。
 - 不复制、vendoring 或重写 TrustGraph 官方工作台组件；需要管理和完整可视化时使用独立官方 `trustgraph-ui`。
 - 不在正常 Recipe Run 中调用 LLM、TrustGraph 或 Workflow Replay。
@@ -41,9 +41,9 @@
 
 ### 2.3 功能优先调整（2026-08-19）
 
-后续实施以用户能直接使用的知识能力为里程碑，不再为凭据隔离、输出大小限制或引用清洗单独开新切片。A0-A7 已形成的相关基础设施保持现状并作为回归边界；A8/A9 已完成知识发现和只读结构化查询。2026-08-19 再次收缩范围：取消行数据语义搜索及 A10 文档/Context Core 知识准备，不实现 TrustGraph rows 入表、同步或刷新，也不自建 TrustGraph UI。
+后续实施以用户能直接使用的知识能力为里程碑，不再为凭据隔离、输出大小限制或引用清洗单独开新切片。A0-A7 已形成的相关基础设施保持现状并作为回归边界；A8/A9/A11 的六个底层接口与真实数据验证保留为历史技术证据，不再定义产品工具面。2026-08-20 的 A12 决定以本节、项目系统设计和 A12 切片为当前事实；后文 A0-A11 中描述的六工具结构只用于解释历史实现与验证，不再约束最终实现。
 
-TrustGraph 内部接入优先复用官方 Python SDK。官方 MCP server 适合给外部 MCP 客户端提供兼容能力，但它没有提供 SDK 无法覆盖的内部产品能力；因此不在 Python 后端再增加 MCP transport、会话和工具参数转换层。
+TrustGraph 内部接入继续复用官方 Python SDK，但改为调用原生 `service/agent`。官方 MCP server 适合给外部 MCP 客户端提供兼容能力；本项目不增加 MCP transport、会话和工具参数转换层，也不在 Data Formulator 重写 TrustGraph 的 Agent loop。
 
 ## 3. 已核对的现状与约束
 
@@ -105,9 +105,11 @@ Copilot 适配以 LiteLLM `1.91.3` 的 [Authenticator](https://github.com/BerriA
   │                                    │
   │                         官方 Python SDK
   │                                    │
-  │            目录/语义/RDF/SPARQL/GraphQL rows
+  │                  TrustGraph 原生 Agent
   │                                    │
-  │                 结构化 JSON + context_items
+  │        只读工具组 → knowledge/structured query
+  │                                    │
+  │               最终答案 + provenance trace
   │                                    │
   └──────────────────────────── Agent event router
                                        │
@@ -117,9 +119,9 @@ Copilot 适配以 LiteLLM `1.91.3` 的 [Authenticator](https://github.com/BerriA
 信任边界规则：
 
 1. identity 和 Data Formulator workspace id 只能来自后端认证/授权路径。
-2. 模型只能选择本体读取、S/P/O/graph/limit 或只读 SPARQL；不得提交 base URL、flow、collection、ontology id、TrustGraph workspace、credential id 或 token。
+2. 模型只能提交聚焦 `question` 和可选最小 `context`；不得提交 base URL、flow、collection、Agent 工具组、TrustGraph workspace、credential id 或 token。
 3. 服务端配置把 Data Formulator workspace 映射到固定目标；没有映射时失败关闭。
-4. 外部返回的文本、title 和 URI 都是不可信数据，先规范化、限长、去重和清洗，再进入模型或前端。
+4. 外部返回的最终答案、title 和 URI 都是不可信数据，先规范化、限长、去重和清洗，再进入模型或前端；隐藏思考链不消费。
 5. 引用是数据，不是控制指令；任何来源内容都不能改变系统提示或工具权限。
 
 ## 5. 核心契约
@@ -144,7 +146,7 @@ class SkillContext:
 
 ### 5.2 通用结果与 TrustGraph Provider
 
-通用层只承载结果、引用和错误；TrustGraph 的主动查询使用结构化类型，不再把自然语言问答当成 provider 合同：
+通用层承载一个聚焦问题、最小上下文、结果、引用和错误；TrustGraph 适配器实现既有 provider-neutral 合同：
 
 ```python
 @dataclass(frozen=True)
@@ -159,38 +161,26 @@ class BusinessContextResult:
     context_items: tuple[ContextItem, ...] = ()
     truncated: bool = False
 
-class TrustGraphProvider(Protocol):
-    def inspect_catalog(
-        self,
-        authorization: SkillAuthorization,
-    ) -> BusinessContextResult: ...
-    def search_entities(
-        self,
-        query: TrustGraphEntitySearch,
-        authorization: SkillAuthorization,
-    ) -> BusinessContextResult: ...
-    def get_ontology(self, authorization: SkillAuthorization) -> BusinessContextResult: ...
-    def query_triples(
-        self,
-        query: TrustGraphTripleQuery,
-        authorization: SkillAuthorization,
-    ) -> BusinessContextResult: ...
-    def query_sparql(
-        self,
-        query: TrustGraphSparqlQuery,
-        authorization: SkillAuthorization,
-    ) -> BusinessContextResult: ...
+@dataclass(frozen=True)
+class BusinessContextQuery:
+    text: str
+    identity_id: str
+    workspace_id: str
+    context: str = ""
+
+class BusinessContextProvider(Protocol):
+    def query(self, request: BusinessContextQuery) -> BusinessContextResult: ...
 ```
 
 约束：
 
-- provider 在每个操作上重新核对 identity/workspace scope；授权上下文只用于服务端解析目标和凭据，Data Formulator identity/workspace 不原样发给外部服务。
-- `inspect_catalog` 无模型可覆盖的目标参数；返回当前 target 及 Flow、collection、document、processing、Knowledge Core 的规范化快照。
-- `TrustGraphEntitySearch` 只接受查询文本和 limit；客户端调用官方 embedding 与 graph-embeddings 服务并返回 RDF term/score。
-- `TrustGraphTripleQuery` 只接受可选 subject/predicate IRI、typed object、`knowledge|provenance` 和有界 limit；`TrustGraphSparqlQuery` 只接受有界查询文本和 limit。
-- `BusinessContextResult.text` 对 TrustGraph 始终是可解析、有大小上限的 JSON；模型看到明确的不可信数据帧，不接收由 TrustGraph 生成的回答文本。
+- provider 每次查询重新核对 identity/workspace scope；授权上下文只用于服务端解析目标和凭据，不原样发给 TrustGraph。
+- `text` 是一个可独立回答的聚焦业务问题；`context` 是可选的简短数据说明，只允许包含当前任务/决策、相关数据源或表在任务中的角色、字段名和类型、少量非敏感代表值或脱敏值模式以及用户明确约束。
+- 工具 schema 不提供查询语言、URL、Flow、collection、workspace、tool group、credential 或 token 字段。
+- provider 构造一个短的固定查询帧，把 `context` 明确标记为不可信本地数据；TrustGraph 原生 Agent 负责内部检索和多轮工具使用。
+- `BusinessContextResult.text` 始终是可解析、有大小上限的 JSON，只包含最终答案和 provenance 元数据；不包含 AgentThought 或隐藏思考链。
 - `ContextItem.uri` 必填，`title` 可空，`provider` 由后端赋值而不是相信外部字段。
-- 来源按规范化 URI 去重，保留首次出现顺序；数量和单字段长度有上限。
+- 当前 `2.8.14` Agent REST 响应不返回原始文档 source，因此只把请求的官方 Agent provenance URI 标成“retrieval trace”；不得递归扫描答案或 RDF payload 中的 URI。未来只有官方明确返回的文档 source 才可增加 citation。
 - 外部正文超限时在明确边界截断并标记 `truncated`，不把完整内容写入日志。
 
 ### 5.3 引用输出与持久化
@@ -234,13 +224,11 @@ DF_ALLOWED_API_BASES=https://trustgraph.example.com/*
     "api_base": "https://trustgraph.example.com",
     "flow_id": "finance-graph",
     "collection": "policies",
+    "agent_group": "data-formulator-readonly",
     "trustgraph_workspace": "finance",
-    "ontology_id": "finance-ontology",
     "credential_ref": "trustgraph:finance-prod",
     "connect_timeout_seconds": 3,
-    "read_timeout_seconds": 30,
-    "max_sparql_chars": 8000,
-    "max_results": 100,
+    "read_timeout_seconds": 120,
     "max_response_chars": 131072,
     "max_context_items": 50
   }
@@ -261,38 +249,34 @@ DF_ALLOWED_API_BASES=https://trustgraph.example.com/*
 - flag 默认关闭；Skill frontmatter 通过通用 `enabled_if` 门控制，关闭时不读取目标 JSON、不解析凭据、不注册或导入 Skill。
 - 启用时配置缺失、目标未映射、base URL 未通过现有 `validate_api_base` allowlist、URL 含 userinfo/query/fragment、非 HTTPS 或 credential 缺失都失败关闭。
 - `api_base` 在生产和测试均只接受 HTTPS；离线测试使用 HTTPS 会话替身，不为测试增加 HTTP 绕过。
+- `agent_group` 是服务端配置的单个只读工具组；Data Formulator 请求时将它作为唯一 group 发送。该组应绑定目标 collection，只包含允许的知识/结构化读取工具。
 - `credential_ref` 必须使用独立的 `trustgraph:` namespace 并通过现有 identity-scoped vault 解析；目标 JSON 不能内嵌 bearer token。
 
 ### 5.5 TrustGraph 请求与响应
 
-M0-A 使用官方 `trustgraph-base==2.8.14` 同步 API，并注入可测试的 `requests.Session`。一个很小的 `Api` 子类只补官方版本未开放的请求安全控制：精确路径白名单、禁止 redirect、connect/read 分离 timeout 和 session 注入；它不是自定义传输协议或网络代理。
+使用官方 `trustgraph-base==2.8.14` 同步 API，并注入可测试的 `requests.Session`。一个很小的 `Api` 子类只补官方版本未开放的请求安全控制：精确路径白名单、禁止 redirect、connect/read 分离 timeout 和 session 注入；它不是自定义传输协议、搜索器或网络代理。
 
-本体读取由官方高层配置 API 构造请求：
-
-```text
-POST {api_base}/api/v1/config
-operation=get, key=(type=ontology, key={server-bound ontology_id})
-```
-
-图查询由官方 `FlowInstance` 完成：
+唯一外部请求是原生 Agent service：
 
 ```text
-POST {api_base}/api/v1/flow/{flow}/service/triples
-POST {api_base}/api/v1/flow/{flow}/service/sparql
+POST {api_base}/api/v1/flow/{flow}/service/agent
 Authorization: Bearer <resolved token>
 ```
 
-三元组请求只含服务端 collection/workspace、`streaming=false`、有界 limit、可选 S/P/O 和 `g`。知识图使用默认图，来源图固定 `g=urn:graph:source`。SPARQL 在发网前由 `rdflib>=7.1,<8` 解析，只允许 `SELECT`、`ASK`、`CONSTRUCT`、`DESCRIBE`，递归拒绝 `SERVICE`；TrustGraph 更新接口不在 Skill 中暴露。
+请求体只包含服务器控制值和经过裁剪的查询：
 
-输入输出复用官方 `TermTranslator` 和 `TripleTranslator`。适配结果保留：
+```json
+{
+  "question": "<固定短帧：聚焦问题 + 可选最小上下文>",
+  "history": [],
+  "group": ["<server-bound read-only group>"],
+  "collection": "<server-bound collection>",
+  "session_id": "<server-generated UUID>",
+  "streaming": false
+}
+```
 
-- IRI 和 blank node；
-- literal value、datatype 和 language；
-- RDF-star quoted triple；
-- named graph；
-- SPARQL query type、variables/rows、ASK boolean 或 graph triples。
-
-结果数量、引用数量和完整 JSON 大小分别受限；超限返回仍是有效 JSON 的截断 envelope，不产生半截 JSON。响应类型、binding 宽度、RDF term 或 ontology 结构漂移统一按稳定 `protocol_error` 处理。
+`FlowInstance.agent()` 是原生能力，但该版本 REST 高层签名没有开放 `collection` 和 `session_id`；适配器使用同一官方 `FlowInstance.request("service/agent", ...)` 补齐，不实现任何查询规划。锁定版本存在官方客户端/网关形状差异：同步 SDK 描述聚合 `{answer}`，`2.8.14` HTTP gateway 实际返回终态 `{message_type, content, end_of_message, end_of_dialog, ...}`。适配器只接受非空聚合 answer，或 `message_type` 为 `answer`/`final-answer` 且两个完成标志都严格为 `true` 的非空 content；thought、observation、partial answer 和其他漂移全部失败关闭。输出被包装为有大小上限的 JSON，其中只把官方 `agent_session_uri(session_id)` 作为检索轨迹，不虚构图标识；过长答案在 JSON 边界内截断。
 
 ### 5.6 稳定错误分类
 
@@ -302,7 +286,7 @@ Authorization: Bearer <resolved token>
 | --- | --- | --- | --- |
 | `disabled` | flag 关闭 | 该能力未启用 | 否 |
 | `not_configured` | workspace 无目标/凭据 | 该 workspace 未配置业务上下文 | 否 |
-| `invalid_request` | 非对象参数、非法 IRI/RDF term、超限、SPARQL 更新或 `SERVICE` | 查询不符合合同 | 否 |
+| `invalid_request` | 非对象参数、空/超限问题或上下文、未知字段、非法 session id | 查询不符合合同 | 否 |
 | `unauthorized` | 401/403 | 业务上下文认证失败 | 需要人工处理 |
 | `timeout` | connect/read/total 超时 | 服务暂时超时 | 是 |
 | `unavailable` | 网络错误、429、5xx | 服务暂时不可用 | 是 |
@@ -488,23 +472,48 @@ GitHub 官方 device-flow 合同见 [Authorizing OAuth apps](https://docs.github
 
 当前进展（2026-08-19）：已用仓库外真实 TrustGraph 服务逐一冒烟六个只读工具。目录返回 1 个 Flow 和 1 个 collection，图实体搜索、knowledge triples 均正常返回空结果，SPARQL `ASK` 正常返回 `true`；GraphQL rows 与 ontology 分别因未装载 schema 和 0 个 ontology 配置返回 `not_configured`。这证明传输、认证、Skill/Provider/SDK 调用和错误边界可用，但不等于真实业务数据验收完成；A11 仍等待带业务 ontology、rows schema 和实体数据的 collection。
 
+### A12：TrustGraph 原生 Agent 收敛（代码与真实验收完成）
+
+撤下 `inspect_trustgraph_catalog`、`search_trustgraph_entities`、`query_trustgraph_rows`、`inspect_trustgraph_ontology`、`query_trustgraph_triples` 和 `query_trustgraph_sparql` 六个外层模型工具，替换为：
+
+```text
+query_business_context(question: string, context?: string)
+```
+
+`question` 说明待解决的业务含义；`context` 只说明当前任务/决策、相关数据源或表在任务中的角色、字段与类型、少量非敏感代表值或脱敏值模式和用户明确约束。TrustGraph 原生 Agent 负责选择服务器配置的知识与结构化查询工具并自行迭代。Data Formulator 保留唯一产品 Agent、授权映射、vault、出站控制、稳定错误和通用引用通道。
+
+完成条件：
+
+- registry 启用后只暴露一个 TrustGraph 工具，关闭态仍无残留；
+- provider-neutral `BusinessContextProvider.query()` 成为实际调用合同，不再定义 Skill 私有的六操作 Protocol；
+- 真实请求只到 `service/agent`，并固定 Flow、collection、只读 group、workspace、credential、session id、空 history 和 `streaming=false`；
+- 单元测试覆盖最小载荷、scope、目标覆盖拒绝、响应/错误边界和 trace 引用；
+- 真实场景覆盖“未决业务含义自动查”“明确用户规则跳过”“无答案或服务不可用失败关闭”；
+- TrustGraph 部署自己的 OpenAI-compatible 配置使用 SiliconFlow、`Qwen/Qwen3.5-27B`、Qwen variant 和 `thinking=off`，不误用 Data Formulator 的 LiteLLM 配置。
+
+实现结果（2026-08-20）：外层 registry 现在只注册 `query_business_context`；Skill 构造 provider-neutral `BusinessContextQuery`，provider 再次核对 identity/workspace scope，客户端只允许官方 `service/agent` 路径和固定请求形状。系统提示只要求在会改变分析结果的未决业务含义上查询，并明确最小上下文为当前操作/决策、相关数据源或表的角色、字段名与类型、少量非敏感代表值或脱敏值模式和用户约束；整表、原始敏感值、完整聊天、代码、路径、凭据和路由信息禁止发送。原生 Agent 的最终答案作为不可信证据进入当前模型观察；只有官方显式返回的 `sources` 才作为文档来源，session provenance 单独标成非文档 trace。
+
+最终离线门禁：Client 44 项、business-context/Client/Provider/Skill 四文件聚焦 118 项、Analyst/Agent 相邻回归 706 项通过；Windows UTF-8/TTY 后端全量 2334 项通过、13 项跳过、1 项 xfailed，仅排除 1 个当前账户无权限创建的符号链接用例；Node `24.19.0` 下前端 49 文件/406 项测试和生产构建通过，compileall、`uv pip check`、`uv lock --check`、`git diff --check` 通过。真实环境已动态配置 `knowledge-query` 和 `structured-query` 到 `data-formulator-readonly`，两者绑定 `dfm-validation-core-v1`；Flow 只覆盖两个模型参数为 `Qwen/Qwen3.5-27B`，其余参数由 blueprint 默认解析；部署文件已设置 Qwen variant、`thinking=off` 和已有 SiliconFlow key。
+
+真实重载验收（2026-08-20）：文本补全以唯一 active `deploy-openai` 实例重新创建后，真实 `Qwen/Qwen3.5-27B`、`thinking=off` 探针返回 `TG_OK`。Flow 更新曾重建 librarian exchange 而保留旧 consumer binding，按用户明确要求只重载仓库外 existing `control` 服务后恢复；未改仓库 Docker 配置。真实调用进一步暴露 `2.8.14` HTTP gateway 的终态消息形状，适配器增加上述严格官方兼容合同。合成业务知识原来只有 triples 和 `rdfs:comment`，不满足 GraphRAG 的实体上下文索引及非 schema 边检索规则；验收数据按 TrustGraph 官方 `load-knowledge` 语义补充 entity contexts，以及领域中立的业务定义、计量基础、比较规则和不可互换关系。最终 Data Formulator reader bearer → HTTPS → 单个 `query_business_context` → 原生 Agent 成功：ReAct 第 1 轮自动调用 graph-rag，第 2 轮给出有证据的定义与对齐规则，librarian 成功持久化 thought/observation/answer，返回真实 session trace 且无文档来源伪造。
+
+本体/图谱统一检索收口（2026-08-20）：进一步确认 TrustGraph 的 ontology config 用于指导摄取，Agent 不会直接把配置项当作业务知识搜索。验收数据按现有 `businessDefinition` 图谱模式，把 class、object/datatype property、domain/range、定义和来源边实际导入目标 collection，并为类和属性建立 graph entity contexts；精确 SPARQL 与 GraphRAG 均验证成功。固定 Agent 任务帧现在明确只用本轮列出的 `knowledge_query`/`structured_query`，不发明 `search`/`browse`，不做 row embeddings；第一轮未覆盖多部分问题时由 TrustGraph Agent 自行缩窄并继续查。真实清洗场景一轮完成，跨“类型定义、两个术语不可互换、比较前提”的场景自动两轮完成，中文输入保持完整。官方 MCP server 虽暴露 triples/SPARQL，但 `2.8.14` flow 镜像的出站 `mcp-tool` 与镜像内 MCP 客户端签名不兼容；临时配置已删除，未修改 TrustGraph 源码或引入旁路。
+
 ## 7. 合同与功能测试矩阵
 
 | 层 | 必测场景 |
 | --- | --- |
-| 值对象 | 非法 IRI、typed literal datatype/language 冲突、空 identity/workspace、空 URI、非法 timeout/limit/response budget |
-| 配置 | flag 未设置/false/非法值；关闭态不读文件；启用态缺目标；workspace 无映射；HTTP/userinfo/query/fragment；origin 不允许 |
-| 请求 | config/triples/官方 SDK sparql 精确路径；bearer；服务端 workspace/collection/ontology；knowledge/provenance graph；模型参数不能覆盖目标 |
-| SPARQL | `SELECT`/`ASK`/`CONSTRUCT`/`DESCRIBE`；拒绝 update、`SERVICE`、语法错误和超限查询 |
-| 响应 | IRI、blank node、typed/language literal、RDF-star、named graph；SELECT binding、ASK boolean、graph triples；类型漂移 |
-| 大小 | SPARQL、结果数、完整 JSON、title、URI、引用数量边界；UTF-8/中文不破坏 |
+| 值对象 | 空/超限 question、可选 context、空 identity/workspace、非法 source URI、timeout/response/context-item budget |
+| 配置 | flag 未设置/false；关闭态不读 vault；workspace 无目标；旧六工具字段拒绝；HTTPS/userinfo/query/fragment/origin；reader credential 缺失 |
+| 提示与 Skill | 仅一个高层工具；未决含义会改变结果才查询；明确规则/机械操作跳过；定义/编码/分类/状态/范围/单位/规则/关系指向 `knowledge_query`，结构化事实才用 `structured_query`；不得发明 search/browse；不做行级语义匹配；最小上下文字段齐全；不发送整表/原始敏感值/完整聊天/代码/路径/凭据/路由 |
+| 请求 | 官方 `service/agent` 精确路径；bearer；服务端 workspace/Flow/collection/group；session id；空 history；`streaming=false`；模型参数不能覆盖目标 |
+| 响应与引用 | 非空聚合 answer，或两个完成标志均为 `true` 的官方终态 answer/content；拒绝 thought、observation 和 partial answer；仅接收官方显式 `sources`；答案中的任意 URI 不生成 citation；session trace 明确标成非文档来源；其他类型漂移失败关闭 |
+| 大小 | question/context、wire prompt、答案 JSON、source title/URI、引用数量和截断后 JSON 边界；UTF-8/中文不破坏 |
 | 错误 | connect/read timeout；401/403；429；5xx；连接失败；无效 JSON；SDK/REST 合同漂移 |
 | 清洗 | token、URL query、response body、外部异常文本不出现在稳定错误、流或日志字段中 |
 | 兼容 | 不导入 TrustGraph Skill 时现有 registry 不变；现有 `ToolResult(text, images)` 构造保持兼容 |
-| 知识目录 | Flow、collection、document、processing、Knowledge Core 正常/空列表、时间与可选字段规范化、SDK 返回形状漂移 |
-| 语义检索 | query/limit 校验；embeddings → graph-embeddings 两次官方调用；RDF entity/score、空向量、非有限数、空结果与超限 |
-| 结构化查询 | 显式 GraphQL、variables、operation name、data/errors/extensions 与协议漂移；断言不创建 table、不写 Workspace、不做同步 |
-| 范围边界 | Skill 不出现 `row_embeddings_query`、Library/processing 或 Knowledge/Context Core 写工具；Data Formulator 不新增自制 TrustGraph 工作台 |
+| 真实场景 | 清洗/映射/分组前的业务含义缺口；明确用户规则跳过；证据不足/服务不可用不编造；同一语义缺口不机械重复外层调用 |
+| 范围边界 | Skill 不出现目录/RDF/SPARQL/GraphQL/row-embeddings/摄取/管理工具；不触碰 Workspace；Data Formulator 不新增自制 TrustGraph 工作台 |
 
 ## 8. 验证策略
 
@@ -548,10 +557,10 @@ GitHub 官方 device-flow 合同见 [Authorizing OAuth apps](https://docs.github
 
 以下条件不能通过本分支自行假设或绕过：
 
-- TrustGraph 真实 base URL、允许的 flow/collection/workspace/ontology 和测试 bearer token。
+- TrustGraph 真实 base URL、允许的 Flow/collection/workspace/只读工具组和测试 bearer token。
 - 生产 origin allowlist、credential vault 生命周期和管理员配置方式的最终确认。
 
-GitHub Copilot 测试 identity 条件和仓库外 TrustGraph 的真实结构化调用/错误边界冒烟均已完成；有数据的 GraphQL rows 与业务语义验收尚未完成。生产 TrustGraph 的真实 business ontology、collection、workspace、rows schema 和 bearer 仍是部署条件，不硬编码到本分支。当前保留的只读目录与查询能力不需要为摄取流程配置 SiliconFlow 模型。若后续官方 SDK、REST 文档与真实服务再次不一致，先记录精确差异并更新合同测试，不增加无边界兼容猜测。
+GitHub Copilot 测试 identity 条件和仓库外 TrustGraph 的历史结构化接口冒烟均已完成。A12 的原生 Agent target、reader bearer、合成 collection、只读工具组、Qwen 配置、部署重载以及一轮/自动两轮/中文成功场景均已完成。生产业务知识、collection、workspace、工具组和 bearer 仍是部署条件，尤其必须把需要查询的 ontology 定义、关系及来源实际导入目标知识图；这些值不硬编码到本分支。若后续官方 SDK、REST 文档与真实服务再次不一致，先记录精确差异并更新合同测试，不增加无边界兼容猜测。
 
 ## 12. 当前执行顺序
 
@@ -574,10 +583,12 @@ GitHub Copilot 测试 identity 条件和仓库外 TrustGraph 的真实结构化�
 15. 完成 A8/A9 的真实空环境非破坏性冒烟：目录、图实体搜索、triples、SPARQL 真实链路通过；rows 缺少 schema 与 ontology 缺少配置均准确返回 `not_configured`；新增 rows 正反合同后聚焦 111 项通过。
 16. 按用户确认取消 A10、行数据语义搜索和 Data Formulator 内 TrustGraph UI；保留官方 TrustGraph UI 独立使用。
 
-当前执行：
+17. 完成 A12 单个 `query_business_context`、`BusinessContextProvider.query()`、TrustGraph 原生 Agent 客户端、最小上下文提示和 120 项聚焦合同。
+18. 完成专用只读 Agent group、目标 collection、reader bearer、Qwen Flow、Qwen variant、`thinking=off` 和 SiliconFlow key 配置；真实请求已到 Agent，准确暴露运行进程旧 token 的 `unavailable`。
 
-17. A11 等待带业务 ontology、GraphQL rows schema 和实体数据的真实 collection 后完成结果语义验收；MCP 仅在出现明确外部客户端需求时补兼容说明。
+19. 按用户明确授权完成仓库外 TrustGraph text-completion/control 重载，重跑原生 Agent 真实成功场景和 Data Formulator 完整交互。
+20. 完成 ontology/图谱统一检索的数据准备、精确 SPARQL/GraphRAG 验证、Agent 一轮与自动两轮 trace、中文输入，以及无 row embeddings/MCP 死配置的收口。
 
-分支实现与测试已提交为 `acdfb3c5`；除上述外部业务数据验收外，没有剩余产品代码切片。
+当前执行：分支最终回归、diff 检查和工程记录收口。
 
-当前不再有阻塞 A8/A9 实现的外部条件。生产部署仍需配置真实 workspace 映射、ontology id、collection 和 bearer，并用实际业务数据完成语义与结构化查询验收；取消的管理/摄取流程不再作为后续实施项。
+`acdfb3c5` 保留 A0-A11 的技术基础和历史验证。A12 产品代码和真实原生 Agent 验收已经完成；六工具历史结果只作为底层技术证据。

@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 from data_formulator.analyst.business_context.base import (
+    MAX_BUSINESS_CONTEXT_LOCAL_CONTEXT_CHARS,
     MAX_BUSINESS_CONTEXT_QUERY_CHARS,
     BusinessContextError,
     BusinessContextErrorCategory,
@@ -28,11 +29,13 @@ def test_query_normalizes_authorized_context() -> None:
         text="  今年的收入政策是什么？  ",
         identity_id="  user:42  ",
         workspace_id="  workspace-a  ",
+        context="  Filter field state; examples: active, paused.  ",
     )
 
     assert query.text == "今年的收入政策是什么？"
     assert query.identity_id == "user:42"
     assert query.workspace_id == "workspace-a"
+    assert query.context == "Filter field state; examples: active, paused."
 
 
 @pytest.mark.parametrize(
@@ -72,6 +75,46 @@ def test_query_preserves_internal_line_breaks() -> None:
     )
 
     assert query.text == "First question\nSecond line"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("text", "What does active\x7f mean?"),
+        ("context", "Relevant value pattern: active\x7f"),
+    ],
+)
+def test_query_rejects_delete_control_character(
+    field: str,
+    value: str,
+) -> None:
+    values = {
+        "text": "What does active mean?",
+        "identity_id": "user:42",
+        "workspace_id": "workspace-a",
+        "context": "Relevant value pattern: active",
+    }
+    values[field] = value
+
+    with pytest.raises(ValueError, match=field):
+        BusinessContextQuery(**values)
+
+
+def test_query_allows_empty_context_but_rejects_invalid_context() -> None:
+    query = BusinessContextQuery(
+        text="What does active mean?",
+        identity_id="user:42",
+        workspace_id="workspace-a",
+    )
+    assert query.context == ""
+
+    with pytest.raises(ValueError, match="context"):
+        BusinessContextQuery(
+            text="What does active mean?",
+            identity_id="user:42",
+            workspace_id="workspace-a",
+            context="x" * (MAX_BUSINESS_CONTEXT_LOCAL_CONTEXT_CHARS + 1),
+        )
 
 
 def test_context_item_normalizes_optional_title() -> None:
