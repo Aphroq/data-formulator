@@ -17,7 +17,7 @@ class AutomationDatabaseError(RuntimeError):
 class AutomationDatabase:
     """Own the one SQLite schema used by Recipe and Automation repositories."""
 
-    SCHEMA_VERSION = 4
+    SCHEMA_VERSION = 5
 
     def __init__(self, database_path: Path | str) -> None:
         self._database_path = Path(database_path).resolve()
@@ -84,6 +84,7 @@ class AutomationDatabase:
                 2: self._apply_schema_v2,
                 3: self._apply_schema_v3,
                 4: self._apply_schema_v4,
+                5: self._apply_schema_v5,
             }
             for version in range(highest_applied + 1, self.SCHEMA_VERSION + 1):
                 migrations[version](connection)
@@ -380,6 +381,30 @@ class AutomationDatabase:
             CREATE INDEX runs_attempt_cleanup_idx
             ON runs (updated_at, run_id)
             WHERE cleanup_attempt_run_id IS NOT NULL
+            """
+        )
+
+    @staticmethod
+    def _apply_schema_v5(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "ALTER TABLE schedules ADD COLUMN "
+            "parameter_policy_json TEXT NOT NULL DEFAULT '{}'"
+        )
+        connection.execute(
+            "ALTER TABLE runs ADD COLUMN "
+            "parameter_values_json TEXT NOT NULL DEFAULT '{}'"
+        )
+        connection.execute(
+            """
+            CREATE TRIGGER runs_parameter_values_immutable
+            BEFORE UPDATE OF parameter_values_json ON runs
+            WHEN NEW.parameter_values_json <> OLD.parameter_values_json
+            BEGIN
+                SELECT RAISE(
+                    ABORT,
+                    'Run parameter values are immutable'
+                );
+            END
             """
         )
 

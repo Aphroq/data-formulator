@@ -8,9 +8,11 @@ import pyarrow as pa
 import pytest
 
 from data_formulator.automation.models import AutomationRunStatus
+from data_formulator.automation.report_analysis import AutomationReportAnalysisError
 from data_formulator.automation.repository import AutomationRepository
 from data_formulator.error_handler import register_error_handlers
 from data_formulator.recipes.compiler import CompiledRecipe
+from data_formulator.recipes.canonical import thaw_json
 from data_formulator.recipes.executor import RecipeExecutor
 from data_formulator.recipes.repository import RecipeRepository
 from data_formulator.recipes.run_store import RecipeRunKind
@@ -99,17 +101,69 @@ def _publish_version(
     recipes: RecipeRepository,
     workspace,
     compiled: CompiledRecipe,
+    *,
+    parameter_values=None,
 ):
     draft = recipes.save_draft(workspace, compiled)
     service = RecipeService(recipes)
     result = service.dry_run(
         workspace,
         draft.version_id,
-        parameter_values={},
+        parameter_values=parameter_values or {},
         loader_resolver=lambda _source_id: _ApiLoader(),
     )
     assert result.reference is not None
     return service.publish(workspace, draft.version_id)
+
+
+def _parameterized_recipe(executable_recipe: CompiledRecipe) -> CompiledRecipe:
+    original_load_step = executable_recipe.spec.steps[0]
+    execution = thaw_json(original_load_step.execution)
+    execution["step"]["query"] = {
+        "filters": [{"column": "as_of", "op": "LTE", "value": "2026-08-19"}],
+        "limit": 100,
+    }
+    load_step = replace(original_load_step, execution=execution)
+    steps = tuple(
+        load_step if step.id == load_step.id else step
+        for step in executable_recipe.spec.steps
+    )
+    return CompiledRecipe(
+        replace(
+            executable_recipe.spec,
+            steps=steps,
+            parameters=(
+                RecipeParameter(
+                    id="as_of",
+                    name="As of date",
+                    value_type=ParameterType.DATE,
+                    has_default=True,
+                    default_value="2026-08-19",
+                ),
+                RecipeParameter(
+                    id="row_limit",
+                    name="Row limit",
+                    value_type=ParameterType.INTEGER,
+                    has_default=True,
+                    default_value=100,
+                ),
+            ),
+            bindings=(
+                ParameterBinding(
+                    parameter_id="as_of",
+                    step_id=load_step.id,
+                    target=BindingTarget.LOAD_FILTER_VALUE,
+                    filter_index=0,
+                ),
+                ParameterBinding(
+                    parameter_id="row_limit",
+                    step_id=load_step.id,
+                    target=BindingTarget.LOAD_LIMIT,
+                ),
+            ),
+        ),
+        executable_recipe.workflow_markdown,
+    )
 
 
 def test_schedule_and_manual_run_api_use_server_owned_scope_and_time(
@@ -199,9 +253,72 @@ def test_schedule_and_manual_run_api_use_server_owned_scope_and_time(
     assert cancellation["cancel_requested_at"] is not None
 
 
+def test_schedule_and_manual_run_api_accept_only_declared_typed_parameters(
+    automation_api,
+    executable_recipe: CompiledRecipe,
+) -> None:
+    client = automation_api["client"]
+    workspace = automation_api["workspace"]
+    published = _publish_version(
+        automation_api["recipes"],
+        workspace,
+        _parameterized_recipe(executable_recipe),
+    )
+
+    created = client.post(
+        "/api/automation/schedules",
+        json={
+            "version_id": published.version_id,
+            "name": "Daily window",
+            "cron_expression": "0 9 * * *",
+            "timezone": "Asia/Shanghai",
+            "parameter_policy": {
+                "as_of": {"source": "scheduled_date", "offset_days": -1},
+                "row_limit": {"source": "literal", "value": 25},
+            },
+        },
+    ).get_json()
+    assert created["status"] == "success"
+    schedule = created["data"]["schedule"]
+    assert schedule["parameter_policy"] == {
+        "as_of": {"source": "scheduled_date", "offset_days": -1},
+        "row_limit": {"source": "literal", "value": 25},
+    }
+
+    queued = client.post(
+        "/api/automation/runs/manual",
+        json={
+            "version_id": published.version_id,
+            "parameters": {"as_of": "2026-08-18", "row_limit": 10},
+        },
+    ).get_json()
+    assert queued["status"] == "success"
+    assert queued["data"]["run"]["parameters"] == {
+        "as_of": "2026-08-18",
+        "row_limit": 10,
+    }
+
+    rejected = client.post(
+        "/api/automation/schedules",
+        json={
+            "version_id": published.version_id,
+            "name": "Unsafe window",
+            "cron_expression": "0 9 * * *",
+            "timezone": "UTC",
+            "parameter_policy": {
+                "as_of": {"source": "literal", "value": "2026-08-18"},
+                "row_limit": {"source": "scheduled_date", "offset_days": 0},
+            },
+        },
+    ).get_json()
+    assert rejected["status"] == "error"
+    assert rejected["error"]["code"] == "INVALID_REQUEST"
+
+
 def test_run_artifact_queries_verify_the_persisted_reference(
     automation_api,
     executable_recipe: CompiledRecipe,
+    monkeypatch,
 ) -> None:
     client = automation_api["client"]
     workspace = automation_api["workspace"]
@@ -258,6 +375,9 @@ def test_run_artifact_queries_verify_the_persisted_reference(
     events = client.get(
         f"/api/automation/runs/{finished.run_id}/events",
     ).get_json()
+    result = client.get(
+        f"/api/automation/runs/{finished.run_id}/result",
+    ).get_json()
     assert manifest["status"] == "success"
     assert manifest["data"]["manifest"]["run_id"] == reference.run_id
     assert manifest["data"]["manifest"]["status"] == "succeeded"
@@ -270,6 +390,160 @@ def test_run_artifact_queries_verify_the_persisted_reference(
         "started",
         "succeeded",
     ]
+    assert result["status"] == "success"
+    assert result["data"]["result"]["manifest"]["run_id"] == reference.run_id
+    assert result["data"]["result"]["events"] == events["data"]["events"]
+    assert result["data"]["result"]["report"] == {
+        "title": "Regional totals",
+        "description": "",
+        "parameters": [],
+        "steps": [
+            {
+                "step_id": executable_recipe.spec.steps[0].id,
+                "kind": "load",
+                "title": "Orders",
+            },
+            {
+                "step_id": executable_recipe.spec.steps[1].id,
+                "kind": "transform",
+                "title": "regional_totals",
+            },
+            {
+                "step_id": executable_recipe.spec.steps[2].id,
+                "kind": "chart",
+                "title": "Regional totals",
+            },
+        ],
+    }
+    assert result["data"]["result"]["outputs"] == [{
+        "step_id": executable_recipe.spec.final_outputs[0].step_id,
+        "kind": "chart",
+        "title": "Regional totals",
+        "subtitle": "",
+        "display_instruction": "Compare totals by region",
+        "chart": {
+            "spec": {
+                "chart_type": "Bar Chart",
+                "encodings": {"x": "region", "y": "total"},
+            },
+            "field_metadata": {},
+            "field_display_names": {},
+        },
+        "table": {
+            "name": "regional_totals",
+            "row_count": 2,
+            "column_count": 2,
+            "columns": [
+                {"name": "region", "type": "string"},
+                {"name": "total", "type": "integer"},
+            ],
+            "rows": [
+                {"region": "east", "total": 40},
+                {"region": "west", "total": 30},
+            ],
+            "rows_truncated": False,
+            "columns_truncated": False,
+        },
+    }]
+
+    captured_analysis: dict = {}
+    model_client = object()
+
+    class _Analysis:
+        def to_dict(self):
+            return {
+                "summary": "East leads this saved result.",
+                "insights": [{
+                    "finding": "East has the larger total.",
+                    "evidence": "East is 40 and West is 30.",
+                }],
+                "caveat": "Only the saved output is analyzed.",
+            }
+
+    def analyze(_client, **kwargs):
+        captured_analysis["client"] = _client
+        captured_analysis.update(kwargs)
+        return _Analysis()
+
+    monkeypatch.setattr(automation_routes, "get_client", lambda _config: model_client)
+    monkeypatch.setattr(automation_routes, "analyze_automation_report", analyze)
+    analysis = client.post(
+        f"/api/automation/runs/{finished.run_id}/analysis",
+        json={
+            "model": {"endpoint": "openai", "model": "test-model"},
+            "timeout_seconds": 45,
+        },
+        headers={"Accept-Language": "zh-CN"},
+    ).get_json()
+    assert analysis == {
+        "status": "success",
+        "data": {"analysis": _Analysis().to_dict()},
+    }
+    assert captured_analysis["client"] is model_client
+    assert captured_analysis["report"] == result["data"]["result"]["report"]
+    assert captured_analysis["outputs"] == tuple(result["data"]["result"]["outputs"])
+    assert captured_analysis["parameter_values"] == {}
+    assert captured_analysis["language_code"] == "zh"
+    assert captured_analysis["timeout_seconds"] == 45
+
+    def reject_analysis(_client, **_kwargs):
+        raise AutomationReportAnalysisError("invalid model response")
+
+    monkeypatch.setattr(
+        automation_routes,
+        "analyze_automation_report",
+        reject_analysis,
+    )
+    rejected_analysis = client.post(
+        f"/api/automation/runs/{finished.run_id}/analysis",
+        json={"model": {"endpoint": "openai", "model": "test-model"}},
+    ).get_json()
+    assert rejected_analysis["status"] == "error"
+    assert rejected_analysis["error"]["code"] == "AGENT_ERROR"
+    assert client.get(
+        f"/api/automation/runs/{finished.run_id}",
+    ).get_json()["data"]["run"]["status"] == "succeeded"
+
+    sample = client.post(
+        f"/api/automation/runs/{finished.run_id}/tables/regional_totals/sample",
+        json={
+            "size": 1,
+            "offset": 0,
+            "method": "head",
+            "order_by_fields": ["total"],
+        },
+    ).get_json()
+    assert sample["status"] == "success"
+    assert sample["data"]["total_row_count"] == 2
+    assert sample["data"]["rows"] == [{
+        "#rowId": 2,
+        "region": "west",
+        "total": 30,
+    }]
+
+    searched = client.post(
+        f"/api/automation/runs/{finished.run_id}/tables/regional_totals/sample",
+        json={"size": 10, "method": "head", "search": "east"},
+    ).get_json()
+    assert searched["data"]["total_row_count"] == 1
+    assert searched["data"]["rows"][0]["region"] == "east"
+
+    download = client.post(
+        f"/api/automation/runs/{finished.run_id}/tables/regional_totals/download",
+        json={"delimiter": ","},
+    )
+    assert download.status_code == 200
+    assert "regional_totals.csv" in download.headers["Content-Disposition"]
+    assert download.data.startswith(b"\xef\xbb\xbfregion,total")
+    assert b"east,40" in download.data
+    assert b"west,30" in download.data
+
+    hidden_intermediate = client.post(
+        f"/api/automation/runs/{finished.run_id}/tables/orders/sample",
+        json={"size": 10},
+    ).get_json()
+    assert hidden_intermediate["status"] == "error"
+    assert hidden_intermediate["error"]["code"] == "VALIDATION_ERROR"
 
     manifest_path = workspace.confined_root.resolve(
         f"{reference.artifact_path}/manifest.json"
@@ -278,11 +552,24 @@ def test_run_artifact_queries_verify_the_persisted_reference(
     rejected = client.get(
         f"/api/automation/runs/{finished.run_id}/manifest",
     ).get_json()
+    rejected_result = client.get(
+        f"/api/automation/runs/{finished.run_id}/result",
+    ).get_json()
+    rejected_sample = client.post(
+        f"/api/automation/runs/{finished.run_id}/tables/regional_totals/sample",
+        json={"size": 10},
+    ).get_json()
     assert rejected["status"] == "error"
     assert rejected["error"]["code"] == "VALIDATION_ERROR"
     assert rejected["error"]["message"] == (
         "Run artifacts could not be verified."
     )
+    assert rejected_result["status"] == "error"
+    assert rejected_result["error"]["code"] == "VALIDATION_ERROR"
+    assert rejected_result["error"]["message"] == rejected["error"]["message"]
+    assert rejected_sample["status"] == "error"
+    assert rejected_sample["error"]["code"] == "VALIDATION_ERROR"
+    assert rejected_sample["error"]["message"] == rejected["error"]["message"]
 
 
 @pytest.mark.parametrize(
@@ -302,7 +589,10 @@ def test_run_artifact_queries_verify_the_persisted_reference(
         (
             "/api/automation/runs/manual",
             "post",
-            {"version_id": "rv_" + "1" * 64, "parameters": {"limit": 1}},
+            {
+                "version_id": "rv_" + "1" * 64,
+                "scheduled_for": "2099-01-01T00:00:00Z",
+            },
         ),
         ("/api/automation/runs?limit=0", "get", None),
         ("/api/automation/runs?limit=101", "get", None),
@@ -373,9 +663,9 @@ def test_schedule_and_manual_enqueue_reject_versions_without_default_binding(
     ).get_json()
 
     assert manual["status"] == "error"
-    assert manual["error"]["code"] == "VALIDATION_ERROR"
+    assert manual["error"]["code"] == "INVALID_REQUEST"
     assert scheduled["status"] == "error"
-    assert scheduled["error"]["code"] == "VALIDATION_ERROR"
+    assert scheduled["error"]["code"] == "INVALID_REQUEST"
     assert automation_api["automation"].list_runs(
         workspace.identity_id,
         workspace.workspace_id,

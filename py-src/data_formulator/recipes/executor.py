@@ -32,7 +32,16 @@ from data_formulator.recipes.run_store import (
     RecipeRunWriter,
 )
 from data_formulator.recipes.spec import InputMode, RecipeSpec, RecipeStep, RecipeStepKind
-from data_formulator.recipes.table_artifacts import parquet_file_hashes
+from data_formulator.recipes.table_artifacts import (
+    parquet_file_hashes,
+    parquet_logical_schema_hash,
+)
+from data_formulator.recipes.transform_parameters import (
+    normalize_transform_parameter_slots,
+    transform_parameter_defaults,
+    validate_parameterized_transform_code,
+    validate_transform_parameter_values,
+)
 from data_formulator.sandbox.local_sandbox import LocalSandbox
 from data_formulator.security.code_signing import (
     MAX_CODE_SIZE,
@@ -531,6 +540,19 @@ class RecipeExecutor:
                 for value in (code, signature, output_variable)
             ):
                 raise ValueError("Transform execution fields are invalid")
+            slots = normalize_transform_parameter_slots(
+                execution.get("parameter_slots", [])
+            )
+            if slots and output_variable == "params":
+                raise ValueError("Transform output uses a reserved name")
+            if slots:
+                validate_parameterized_transform_code(code, slots)
+            overrides = validate_transform_parameter_values(
+                slots,
+                execution.get("parameter_values", {}),
+            )
+            parameter_values = transform_parameter_defaults(slots)
+            parameter_values.update(overrides)
         except (KeyError, TypeError, ValueError):
             raise RecipeExecutionValidationError() from None
         if len(code.encode("utf-8")) > MAX_CODE_SIZE or not verify_code(
@@ -540,11 +562,19 @@ class RecipeExecutor:
         ):
             raise RecipeCodeSignatureError()
 
-        sandbox_result = self._sandbox.run_python_code(
-            code,
-            writer.workspace,
-            output_variable,
-        )
+        if slots:
+            sandbox_result = self._sandbox.run_python_code(
+                code,
+                writer.workspace,
+                output_variable,
+                parameters=parameter_values,
+            )
+        else:
+            sandbox_result = self._sandbox.run_python_code(
+                code,
+                writer.workspace,
+                output_variable,
+            )
         if sandbox_result.get("status") != "ok":
             raise RecipeTransformError()
         try:
@@ -577,7 +607,13 @@ class RecipeExecutor:
         except (KeyError, TypeError, ValueError, FileNotFoundError):
             raise RecipeChartError() from None
 
-        _, schema_hash = parquet_file_hashes(input_path)
+        _, legacy_schema_hash = parquet_file_hashes(input_path)
+        logical_schema_hash = parquet_logical_schema_hash(input_path)
+        schema_hash = (
+            logical_schema_hash
+            if step.expected_schema == logical_schema_hash
+            else legacy_schema_hash
+        )
         if schema_hash != step.expected_schema:
             raise RecipeSchemaDriftError()
         content = canonical_json_bytes(execution)
@@ -601,7 +637,13 @@ class RecipeExecutor:
         table_id: str,
     ) -> RecipeStepResult:
         path = writer.workspace.get_parquet_path(table_id)
-        content_hash, schema_hash = parquet_file_hashes(path)
+        content_hash, legacy_schema_hash = parquet_file_hashes(path)
+        logical_schema_hash = parquet_logical_schema_hash(path)
+        schema_hash = (
+            logical_schema_hash
+            if step.expected_schema == logical_schema_hash
+            else legacy_schema_hash
+        )
         return RecipeStepResult(
             step_id=step.id,
             kind=step.kind,

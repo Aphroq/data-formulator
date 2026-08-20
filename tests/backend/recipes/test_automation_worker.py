@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -31,9 +32,16 @@ from data_formulator.automation.worker import (
 from data_formulator.datalake.workspace import sanitize_identity_dirname
 from data_formulator.datalake.workspace_manager import WorkspaceManager
 from data_formulator.recipes.compiler import CompiledRecipe
+from data_formulator.recipes.canonical import thaw_json
 from data_formulator.recipes.openers import LocalWorkspaceOpener
 from data_formulator.recipes.repository import RecipeRepository
 from data_formulator.recipes.service import RecipeService
+from data_formulator.recipes.spec import (
+    BindingTarget,
+    ParameterBinding,
+    ParameterType,
+    RecipeParameter,
+)
 from data_formulator.security.code_signing import CodeSigningConfigurationError
 
 
@@ -125,6 +133,16 @@ class _WorkerLoader:
 
     def get_column_types(self, source_table: str):
         raise NotImplementedError
+
+
+class _CapturingWorkerLoader(_WorkerLoader):
+    def __init__(self) -> None:
+        super().__init__()
+        self.import_options: dict | None = None
+
+    def fetch_data_as_arrow(self, source_table: str, import_options: dict):
+        self.import_options = import_options
+        return pa.table({"region": ["east"], "amount": [40]})
 
 
 class _TimeoutLoader(_WorkerLoader):
@@ -231,7 +249,13 @@ def _publish_version(
     return RecipeService(repository).publish(workspace, draft.version_id)
 
 
-def _seed_queued_run(tmp_path, recipe_workspace, executable_recipe):
+def _seed_queued_run(
+    tmp_path,
+    recipe_workspace,
+    executable_recipe,
+    *,
+    parameter_policy=None,
+):
     data_home = tmp_path / "data-home"
     workspace = _copy_workspace_into_data_home(recipe_workspace, data_home)
     database_path = data_home / "automation" / "automation.db"
@@ -255,6 +279,7 @@ def _seed_queued_run(tmp_path, recipe_workspace, executable_recipe):
         timezone_name="UTC",
         next_run_at=clock.current + timedelta(days=1),
         schedule_id="sch_" + "a" * 32,
+        parameter_policy=parameter_policy or {},
     )
     queued = automation.enqueue_scheduled_run(
         workspace.identity_id,
@@ -263,6 +288,56 @@ def _seed_queued_run(tmp_path, recipe_workspace, executable_recipe):
         scheduled_for=clock.current,
     )
     return data_home, workspace, recipes, automation, clock, schedule, queued
+
+
+def _parameterized_recipe(executable_recipe: CompiledRecipe) -> CompiledRecipe:
+    original_load_step = executable_recipe.spec.steps[0]
+    execution = thaw_json(original_load_step.execution)
+    execution["step"]["query"] = {
+        "filters": [{"column": "region", "op": "EQ", "value": "west"}],
+        "limit": 100,
+    }
+    load_step = replace(original_load_step, execution=execution)
+    steps = tuple(
+        load_step if step.id == load_step.id else step
+        for step in executable_recipe.spec.steps
+    )
+    return CompiledRecipe(
+        replace(
+            executable_recipe.spec,
+            steps=steps,
+            parameters=(
+                RecipeParameter(
+                    id="region",
+                    name="Region",
+                    value_type=ParameterType.STRING,
+                    has_default=True,
+                    default_value="west",
+                ),
+                RecipeParameter(
+                    id="row_limit",
+                    name="Row limit",
+                    value_type=ParameterType.INTEGER,
+                    has_default=True,
+                    default_value=100,
+                ),
+            ),
+            bindings=(
+                ParameterBinding(
+                    parameter_id="region",
+                    step_id=load_step.id,
+                    target=BindingTarget.LOAD_FILTER_VALUE,
+                    filter_index=0,
+                ),
+                ParameterBinding(
+                    parameter_id="row_limit",
+                    step_id=load_step.id,
+                    target=BindingTarget.LOAD_LIMIT,
+                ),
+            ),
+        ),
+        executable_recipe.workflow_markdown,
+    )
 
 
 def _worker(
@@ -422,6 +497,51 @@ def test_worker_executes_an_archived_fixed_version_without_request_or_llm(
     assert manifest["kind"] == "automation"
     assert manifest["status"] == "succeeded"
     assert manifest["version_id"] == queued.version_id
+
+
+def test_worker_executes_the_parameter_values_frozen_on_the_logical_run(
+    tmp_path,
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+) -> None:
+    parameterized = _parameterized_recipe(executable_recipe)
+    (
+        data_home,
+        workspace,
+        recipes,
+        automation,
+        clock,
+        _schedule,
+        queued,
+    ) = _seed_queued_run(
+        tmp_path,
+        recipe_workspace,
+        parameterized,
+        parameter_policy={
+            "region": {"source": "literal", "value": "east"},
+            "row_limit": {"source": "literal", "value": 1},
+        },
+    )
+    loader = _CapturingWorkerLoader()
+
+    finished = _worker(
+        data_home,
+        recipes,
+        automation,
+        clock,
+        _ConnectorOpener(loader),
+    ).run_once()
+
+    assert queued.parameter_values == {"region": "east", "row_limit": 1}
+    assert finished is not None
+    assert finished.status is AutomationRunStatus.SUCCEEDED
+    assert loader.import_options == {
+        "size": 1,
+        "source_filters": [
+            {"column": "region", "operator": "EQ", "value": "east"},
+        ],
+    }
+    assert finished.binding_hash is not None
 
 
 def test_worker_maps_schema_drift_to_needs_review_without_retry(

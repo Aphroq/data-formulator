@@ -20,7 +20,7 @@ import { DictTable } from '../components/ComponentType';
 import { DataFormulatorState, dfActions, dfSelectors, FocusedId } from '../app/dfSlice';
 import { useDispatch, useSelector } from 'react-redux';
 import { Type } from '../data/types';
-import { SelectableDataGrid } from './SelectableDataGrid';
+import { SelectableDataGrid, SelectableDataGridDataSource } from './SelectableDataGrid';
 import { formatCellValue, getColumnAlign } from './ViewUtils';
 import { borderColor } from '../app/tokens';
 import { iconVar, textVar } from '../app/layout';
@@ -34,6 +34,11 @@ export interface FreeDataViewProps {
     // `focusedId` (single-focus behavior). Set by the multi-table canvas to
     // render each highlighted table in a stack.
     tableId?: string;
+    // Render a detached, read-only table snapshot instead of selecting a table
+    // from the live analysis Workspace. Used by Automation Run results.
+    tableOverride?: DictTable;
+    dataSource?: SelectableDataGridDataSource;
+    showSourceName?: boolean;
     // Render the Numbers-style title/metadata + search header inside the grid.
     // Used by the focused-table canvas.
     showHeaderBar?: boolean;
@@ -49,7 +54,7 @@ export interface FreeDataViewProps {
     onStateReport?: (s: { loadedCount: number; rowCount: number; virtual: boolean; canRandomize: boolean; isRandom: boolean }) => void;
 }
 
-export const FreeDataViewFC: FC<FreeDataViewProps> = function DataView({ maximizable, tableId, showHeaderBar, hideFooter, randomizeToken, resetOrderToken, onStateReport }) {
+export const FreeDataViewFC: FC<FreeDataViewProps> = function DataView({ maximizable, tableId, tableOverride, dataSource, showSourceName = true, showHeaderBar, hideFooter, randomizeToken, resetOrderToken, onStateReport }) {
 
     const { t } = useTranslation();
     const [maximized, setMaximized] = React.useState(false);
@@ -72,13 +77,14 @@ export const FreeDataViewFC: FC<FreeDataViewProps> = function DataView({ maximiz
 
     // Derive the table to display based on focusedId
     const focusedTableId = useMemo(() => {
+        if (tableOverride) return tableOverride.id;
         if (tableId) return tableId;
         if (!canvasTarget) return undefined;
         if (canvasTarget.type === 'table') return canvasTarget.tableId;
         if (canvasTarget.type !== 'chart') return undefined;
         const chart = allCharts.find(c => c.id === canvasTarget.chartId);
         return chart?.tableRef;
-    }, [canvasTarget, allCharts, tableId]);
+    }, [canvasTarget, allCharts, tableId, tableOverride]);
 
     // The search term is temporary/per-table: clear it when switching tables.
     React.useEffect(() => {
@@ -88,9 +94,10 @@ export const FreeDataViewFC: FC<FreeDataViewProps> = function DataView({ maximiz
 
     // Only subscribe to the focused table and table count — NOT the full tables array.
     // This prevents re-rendering the entire data grid when the agent adds unrelated tables.
-    const targetTable = useSelector(
+    const selectedTable = useSelector(
         (state: DataFormulatorState) => dfSelectors.getAllTables(state).find(t => t.id === focusedTableId),
     );
+    const targetTable = tableOverride ?? selectedTable;
     const tableCount = useSelector((state: DataFormulatorState) => dfSelectors.getAllTables(state).length);
     const firstTableId = useSelector((state: DataFormulatorState) => dfSelectors.getAllTables(state)[0]?.id);
     const tableSemantics = useSelector((state: DataFormulatorState) =>
@@ -103,14 +110,14 @@ export const FreeDataViewFC: FC<FreeDataViewProps> = function DataView({ maximiz
     const realName = targetTable?.derive
         ? targetTable.virtual?.tableId
         : targetTable?.source?.originalTableName || targetTable?.virtual?.tableId;
-    const showRealName = !!realName
+    const showRealName = showSourceName && !!realName
         && realName.toLowerCase().replace(/[\s_-]+/g, '') !== displayName.toLowerCase().replace(/[\s_-]+/g, '');
 
     useEffect(() => {
-        if (focusedId == undefined && tableCount > 0 && firstTableId) {
+        if (!tableOverride && focusedId == undefined && tableCount > 0 && firstTableId) {
             dispatch(dfActions.setFocused({ type: 'table', tableId: firstTableId }));
         }
-    }, [tableCount, firstTableId]);
+    }, [dispatch, firstTableId, focusedId, tableCount, tableOverride]);
 
     // Memoize row data — only recompute when the table object itself changes
     const rowData = useMemo(() => {
@@ -147,7 +154,9 @@ export const FreeDataViewFC: FC<FreeDataViewProps> = function DataView({ maximiz
             const semanticType = tableSemantics?.fields[name]?.semanticType;
             return {
                 id: name,
-                label: tableSemantics?.fields[name]?.displayName || name,
+                label: tableSemantics?.fields[name]?.displayName
+                    || (targetTable.metadata[name] as any)?.displayName
+                    || name,
                 description: targetTable.metadata[name]?.description,
                 minWidth,
                 width,
@@ -184,6 +193,7 @@ export const FreeDataViewFC: FC<FreeDataViewProps> = function DataView({ maximiz
                         hideFooter={hideFooter}
                         randomizeToken={randomizeToken}
                         resetOrderToken={resetOrderToken}
+                        dataSource={dataSource}
                         onStateReport={onStateReport}
                     />
                 </Box>

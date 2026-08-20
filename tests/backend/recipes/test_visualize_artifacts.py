@@ -171,6 +171,65 @@ def test_visualize_records_transform_and_chart_atomically(tmp_path) -> None:
     )
 
 
+def test_visualize_persists_only_declared_typed_transform_slots(tmp_path) -> None:
+    workspace = Workspace("user:alice", root_dir=tmp_path, workspace_id="ws-1")
+    _seed_load_artifact(workspace)
+    workspace.write_parquet(
+        pd.DataFrame({"region": ["east"], "total": [20]}),
+        "derived",
+    )
+    code = (
+        "result_df = orders.loc[orders['amount'] >= "
+        "params['minimum_amount']].copy()"
+    )
+    slots = [{
+        "id": "minimum_amount",
+        "name": "Minimum amount",
+        "description": "Only include orders at or above this amount.",
+        "type": "number",
+        "default": 15,
+    }]
+
+    artifacts = record_visualize_artifacts(
+        workspace,
+        chart_id="chart-parameterized",
+        input_table_names=("orders",),
+        output_table_name="derived",
+        code=code,
+        code_signature=sign_code(code),
+        output_variable="result_df",
+        parameter_slots=slots,
+        chart_spec={"chart_type": "Table", "encodings": {}},
+        field_metadata={},
+        field_display_names={},
+        display_instruction="Inspect large orders",
+        title="Large orders",
+        subtitle="",
+    )
+
+    assert artifacts.transform.to_dict()["execution"]["parameter_slots"] == slots
+
+    with pytest.raises(ValueError, match="parameter slot"):
+        record_visualize_artifacts(
+            workspace,
+            chart_id="chart-undeclared-parameter",
+            input_table_names=("orders",),
+            output_table_name="derived",
+            code="result_df = orders.head(params['top_n'])",
+            code_signature=sign_code(
+                "result_df = orders.head(params['top_n'])"
+            ),
+            output_variable="result_df",
+            parameter_slots=slots,
+            chart_spec={"chart_type": "Table", "encodings": {}},
+            field_metadata={},
+            field_display_names={},
+            display_instruction="Inspect orders",
+            title="Orders",
+            subtitle="",
+        )
+
+
 def test_visualize_refuses_missing_parent_but_keeps_output_table(tmp_path) -> None:
     workspace = Workspace("user:alice", root_dir=tmp_path, workspace_id="ws-1")
     workspace.write_parquet(pd.DataFrame({"value": [1]}), "manual_input")

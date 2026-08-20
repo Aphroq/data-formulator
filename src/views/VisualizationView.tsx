@@ -591,7 +591,7 @@ const scaleSpecFonts = (spec: any, factor: number): void => {
 };
 
 /** Main chart uses vega-embed (interactive tooltips). Static toSVG() removes hover behavior. */
-const VegaChartRenderer: FC<{
+export const VegaChartRenderer: FC<{
     chart: Chart;
     conceptShelfItems: FieldItem[];
     visTableRows: any[];
@@ -615,7 +615,6 @@ const VegaChartRenderer: FC<{
     onSpecReady?: (spec: any | null) => void;
 }> = React.memo(({ chart, conceptShelfItems, visTableRows, tableMetadata, chartWidth, chartHeight, scaleFactor, displayScale = 1, maxStretchFactor, chartUnavailable, insightTitle, insightSubtitle, themePreview, fieldSemantics, onSpecReady }) => {
 
-    const dispatch = useDispatch();
     const elementId = `focused-chart-element-${chart.id}`;
     // Bumped when a render lands, so the display-scale effect can re-apply.
     const [renderTick, setRenderTick] = useState(0);

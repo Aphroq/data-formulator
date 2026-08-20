@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import logging
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timezone
 from typing import Callable
 
 import pyarrow as pa
+import pandas as pd
 
 from data_formulator.datalake.parquet_utils import sanitize_table_name
 from data_formulator.datalake.workspace_metadata import TableMetadata
@@ -34,6 +37,84 @@ logger = logging.getLogger(__name__)
 
 
 LoaderResolver = Callable[[str], ExternalDataLoader]
+
+
+def _like_pattern(value: object) -> str:
+    parts: list[str] = []
+    for character in str(value):
+        if character == "%":
+            parts.append(".*")
+        elif character == "_":
+            parts.append(".")
+        else:
+            parts.append(re.escape(character))
+    return "^" + "".join(parts) + "$"
+
+
+def _apply_source_filters_locally(
+    table: pa.Table,
+    source_filters: object,
+) -> pa.Table:
+    """Enforce a ConnectorQueryStep when a loader does not push filters down."""
+    if not source_filters:
+        return table
+    if not isinstance(source_filters, list):
+        raise TypeError("Source filters must be an array")
+    frame = table.to_pandas()
+    mask = pd.Series(True, index=frame.index, dtype=bool)
+    for item in source_filters:
+        if not isinstance(item, Mapping):
+            raise TypeError("Source filter must be an object")
+        column_name = item.get("column")
+        operator = str(item.get("operator") or "").upper()
+        if not isinstance(column_name, str):
+            raise ValueError("Source filter column is unavailable")
+        if column_name not in frame.columns:
+            # Some connectors apply the filter remotely and return only the
+            # requested projection.  In that case the filtered column is no
+            # longer available for an idempotent local check.  We explicitly
+            # request filter columns when the connector supports projection;
+            # locally enforce every filter that is present in the response.
+            continue
+        column = frame[column_name]
+        value = item.get("value")
+        try:
+            if operator == "EQ":
+                selected = column.isna() if value is None else column.eq(value)
+            elif operator == "NEQ":
+                selected = column.notna() if value is None else column.ne(value)
+            elif operator == "GT":
+                selected = column.gt(value)
+            elif operator == "GTE":
+                selected = column.ge(value)
+            elif operator == "LT":
+                selected = column.lt(value)
+            elif operator == "LTE":
+                selected = column.le(value)
+            elif operator in {"LIKE", "ILIKE"}:
+                selected = column.astype("string").str.match(
+                    _like_pattern(value),
+                    case=operator == "LIKE",
+                    na=False,
+                )
+            elif operator == "IN":
+                values = value if isinstance(value, (list, tuple)) else [value]
+                selected = column.isin(values)
+            elif operator == "NOT_IN":
+                values = value if isinstance(value, (list, tuple)) else [value]
+                selected = ~column.isin(values)
+            elif operator == "IS_NULL":
+                selected = column.isna()
+            elif operator == "IS_NOT_NULL":
+                selected = column.notna()
+            elif operator == "BETWEEN" and isinstance(value, (list, tuple)) and len(value) == 2:
+                selected = column.between(value[0], value[1], inclusive="both")
+            else:
+                raise ValueError("Source filter operator is unsupported")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Source filter could not be applied") from exc
+        mask &= selected.fillna(False).astype(bool)
+    return table.filter(pa.array(mask.to_numpy(dtype=bool)))
 
 
 class _ArtifactLineagePublicationError(RuntimeError):
@@ -140,12 +221,27 @@ class DataOperationExecutor:
     ) -> str:
         loader = self._loader_resolver(step.source_id)
         import_options = self._build_import_options(step)
+        fetch_options = dict(import_options)
+        filters = fetch_options.get("source_filters")
+        requested_columns = fetch_options.get("columns")
+        if filters and isinstance(requested_columns, list):
+            filter_columns = [
+                item.get("column")
+                for item in filters
+                if isinstance(item, Mapping)
+                and isinstance(item.get("column"), str)
+            ]
+            fetch_options["columns"] = list(dict.fromkeys([
+                *requested_columns,
+                *filter_columns,
+            ]))
         table = loader.fetch_data_as_arrow(
             source_table=step.source_table,
-            import_options=import_options,
+            import_options=fetch_options,
         )
         if not isinstance(table, pa.Table):
             raise TypeError("Connector fetch_data_as_arrow must return pyarrow.Table")
+        table = _apply_source_filters_locally(table, filters)
         table = apply_import_projection(table, import_options)
         if step.query.limit is not None and table.num_rows > step.query.limit:
             table = table.slice(0, step.query.limit)

@@ -52,7 +52,15 @@ export interface ColumnDef {
     source: FieldSource;
 }
 
-interface SelectableDataGridProps {
+export interface SelectableDataGridDataSource {
+    fetchRows: (request: Record<string, any>) => Promise<{
+        rows: any[];
+        totalRowCount: number;
+    }>;
+    download?: (format: 'csv' | 'tsv') => Promise<Blob>;
+}
+
+export interface SelectableDataGridProps {
     tableId: string;
     tableName: string;
     rows: any[];
@@ -70,6 +78,9 @@ interface SelectableDataGridProps {
     // Bumping this number restores the natural (#rowId head) order after a
     // random sample (virtual tables).
     resetOrderToken?: number;
+    // Optional read-only source adapter. Automation Run snapshots use this to
+    // reuse the exact table UI without opening or copying into a live Workspace.
+    dataSource?: SelectableDataGridDataSource;
     // Report virtual-pagination state up so an external toolbar can render the
     // loaded/total count and enable the random-rows action.
     onStateReport?: (s: { loadedCount: number; rowCount: number; virtual: boolean; canRandomize: boolean; isRandom: boolean }) => void;
@@ -339,7 +350,7 @@ const VirtuosoTableBody = React.forwardRef<HTMLTableSectionElement>((props, ref)
 const PAGE_SIZE = 500;
 
 export const SelectableDataGrid: React.FC<SelectableDataGridProps> = React.memo(({ 
-    tableId, rows, tableName, columnDefs, rowCount, virtual, searchText, hideFooter, randomizeToken, resetOrderToken, onStateReport }) => {
+    tableId, rows, tableName, columnDefs, rowCount, virtual, searchText, hideFooter, randomizeToken, resetOrderToken, dataSource, onStateReport }) => {
 
     const { t } = useTranslation();
     const [orderBy, setOrderBy] = React.useState<string | undefined>(undefined);
@@ -471,7 +482,14 @@ export const SelectableDataGrid: React.FC<SelectableDataGridProps> = React.memo(
 
         setIsDownloading(true);
         try {
-            if (virtual) {
+            if (dataSource?.download) {
+                const blob = await dataSource.download(format);
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `${tableName}.${ext}`;
+                a.click();
+                URL.revokeObjectURL(a.href);
+            } else if (virtual) {
                 const response = await fetchWithIdentity(getUrls().EXPORT_TABLE_CSV, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -545,15 +563,21 @@ export const SelectableDataGrid: React.FC<SelectableDataGridProps> = React.memo(
             ...(searchRef.current ? { search: searchRef.current } : {}),
         };
 
-        apiRequest<any>(getUrls().SAMPLE_TABLE, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(message),
-        })
-        .then(({ data }) => {
+        const pending = dataSource
+            ? dataSource.fetchRows(message)
+            : apiRequest<any>(getUrls().SAMPLE_TABLE, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(message),
+            }).then(({ data }) => ({
+                rows: data.rows || [],
+                totalRowCount: data.total_row_count ?? rowCount,
+            }));
+
+        pending.then((data) => {
             if (fetchIdRef.current !== currentFetchId) return;
             const newRows = data.rows || [];
-            const totalCount = data.total_row_count ?? rowCount;
+            const totalCount = data.totalRowCount ?? rowCount;
 
             if (append) {
                 setRowsToDisplay(prev => [...prev, ...newRows]);
@@ -571,7 +595,7 @@ export const SelectableDataGrid: React.FC<SelectableDataGridProps> = React.memo(
             setIsLoading(false);
             setIsLoadingMore(false);
         });
-    }, [tableId, rowCount]);
+    }, [tableId, rowCount, dataSource]);
 
     // Keep the ref in sync so stable handlers (e.g. applySort) can call the latest version.
     React.useEffect(() => {

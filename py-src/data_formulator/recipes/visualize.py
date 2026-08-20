@@ -18,6 +18,10 @@ from data_formulator.recipes.table_artifacts import (
     parquet_artifact_hashes,
     table_artifact_id,
 )
+from data_formulator.recipes.transform_parameters import (
+    normalize_transform_parameter_slots,
+    validate_parameterized_transform_code,
+)
 from data_formulator.security.code_signing import verify_code
 
 
@@ -125,6 +129,7 @@ def record_visualize_artifacts(
     display_instruction: str,
     title: str,
     subtitle: str,
+    parameter_slots: Sequence[Mapping[str, Any]] = (),
 ) -> VisualizeArtifacts:
     """Record one successful visualize result as an atomic two-node lineage batch."""
     names = _normalize_input_table_names(input_table_names)
@@ -139,6 +144,11 @@ def record_visualize_artifacts(
             raise ValueError(f"{field_name} cannot be empty")
     if not verify_code(code, code_signature):
         raise ValueError("code_signature does not verify the transform code")
+    slots = normalize_transform_parameter_slots(parameter_slots)
+    if slots and output_variable == "params":
+        raise ValueError("output_variable cannot use the reserved name 'params'")
+    if slots:
+        validate_parameterized_transform_code(code, slots)
 
     ledger = ArtifactLedger.for_workspace(workspace)
     parents = tuple(_resolve_parent(ledger, workspace, name) for name in names)
@@ -168,6 +178,10 @@ def record_visualize_artifacts(
             "filename": output_metadata.filename,
         },
     }
+    if slots:
+        transform_execution["parameter_slots"] = [
+            item.to_dict() for item in slots
+        ]
     transform = ArtifactNode(
         artifact_type=ArtifactType.TRANSFORM,
         identity_id=workspace.identity_id,
@@ -222,6 +236,8 @@ def record_visualize_artifacts(
             "transform_artifact_id": recorded_transform.artifact_id,
             "chart_artifact_id": recorded_chart.artifact_id,
         })
+        if slots:
+            visualize["parameter_slots"] = [item.to_dict() for item in slots]
         updated_options["visualize"] = visualize
         output_metadata.import_options = updated_options
         workspace.add_table_metadata(output_metadata)

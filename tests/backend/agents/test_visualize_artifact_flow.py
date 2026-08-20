@@ -47,6 +47,28 @@ class _Sandbox:
         }
 
 
+class _ParameterizedSandbox:
+    def __init__(self) -> None:
+        self.parameters = None
+
+    def run_python_code(
+        self,
+        *,
+        code,
+        workspace,
+        output_variable,
+        parameters,
+    ):
+        self.parameters = parameters
+        return {
+            "status": "ok",
+            "content": pd.DataFrame({
+                "region": ["east"],
+                "amount": [20],
+            }),
+        }
+
+
 def _load_orders(workspace: Workspace) -> None:
     plan = DataOperationPlan(
         id="plan-1",
@@ -145,6 +167,83 @@ def test_load_transform_chart_vertical_lineage(tmp_path, monkeypatch) -> None:
     ]
     assert first.spec.canonical_bytes() == second.spec.canonical_bytes()
     assert first.workflow_markdown == second.workflow_markdown
+
+
+def test_agent_authored_transform_slot_flows_into_lineage_and_compiler(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DATA_FORMULATOR_HOME", str(tmp_path / "home"))
+    workspace = Workspace(
+        "user:alice",
+        root_dir=tmp_path / "workspaces",
+        workspace_id="ws-1",
+    )
+    _load_orders(workspace)
+    agent = AnalystAgent(client=None, workspace=workspace)
+    sandbox = _ParameterizedSandbox()
+    slots = [{
+        "id": "minimum_amount",
+        "name": "Minimum amount",
+        "description": "Only include orders at or above this amount.",
+        "type": "integer",
+        "default": 15,
+    }]
+    code = (
+        "result_df = orders.loc["
+        "orders['amount'] >= params['minimum_amount']"
+        "].reset_index(drop=True)"
+    )
+    chart_spec = {
+        "chart_type": "Bar Chart",
+        "encodings": {"x": "region", "y": "amount"},
+    }
+
+    with patch("data_formulator.sandbox.create_sandbox", return_value=sandbox):
+        visualize = agent.run_visualize_code(
+            code=code,
+            output_variable="result_df",
+            input_tables=["orders"],
+            parameter_slots=slots,
+            chart_spec=chart_spec,
+            field_metadata={},
+            field_display_names={},
+            display_instruction="Compare orders above an adjustable threshold",
+            title="Orders above threshold",
+            subtitle="",
+            messages=[],
+        )
+
+    assert visualize["status"] == "ok"
+    assert sandbox.parameters == {"minimum_amount": 15}
+    transform_result = sign_result(visualize["transform_result"])
+    assert transform_result["parameter_slots"] == slots
+
+    lineage = agent.record_visualize_artifacts(
+        transform_result=transform_result,
+        input_tables=["orders"],
+        chart_spec=chart_spec,
+        field_metadata={},
+        field_display_names={},
+        display_instruction="Compare orders above an adjustable threshold",
+        title="Orders above threshold",
+        subtitle="",
+        output_variable="result_df",
+        parameter_slots=slots,
+    )
+
+    assert lineage["status"] == "ok"
+    nodes = ArtifactLedger.for_workspace(workspace).list_nodes()
+    assert nodes[1].to_dict()["execution"]["parameter_slots"] == slots
+    candidates = RecipeCompiler.for_workspace(workspace).parameter_candidates(
+        (nodes[2].artifact_id,)
+    )
+    transform_candidates = [item for item in candidates if item.kind == "transform"]
+    assert len(transform_candidates) == 1
+    assert transform_candidates[0].name == "Minimum amount"
+    assert transform_candidates[0].description == (
+        "Only include orders at or above this amount."
+    )
 
 
 def test_missing_parent_keeps_visualize_result_but_marks_lineage_unavailable(

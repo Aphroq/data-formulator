@@ -21,6 +21,7 @@ class ModelRegistry:
         {PROVIDER}_API_BASE=<url>
         {PROVIDER}_API_VERSION=<ver>      # optional
         {PROVIDER}_MODELS=model-a,model-b
+        {PROVIDER}_ENABLE_THINKING=false  # optional, OpenAI-compatible APIs
 
     API keys and credentials live server-side only; the public information
     returned to the frontend contains no sensitive fields.
@@ -55,6 +56,13 @@ class ModelRegistry:
             api_base = os.getenv(f"{env}_API_BASE", "").strip()
             api_version = os.getenv(f"{env}_API_VERSION", "").strip()
             models_str = os.getenv(f"{env}_MODELS", "").strip()
+            enable_thinking_raw = os.getenv(
+                f"{env}_ENABLE_THINKING", ""
+            ).strip().lower()
+            enable_thinking = {
+                "true": True,
+                "false": False,
+            }.get(enable_thinking_raw)
 
             if not (api_key or api_base) or not models_str:
                 continue
@@ -77,6 +85,7 @@ class ModelRegistry:
                     "api_key": api_key,
                     "api_base": api_base,
                     "api_version": api_version,
+                    "enable_thinking": enable_thinking,
                     "provider_display": provider,
                 }
 

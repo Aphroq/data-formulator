@@ -50,6 +50,31 @@ class TestGetClientGlobalResolution:
 
             assert client.params.get("api_key") == "sk-secret-key-12345"
 
+    @patch.dict(os.environ, {
+        "SILICONFLOW_ENABLED": "true",
+        "SILICONFLOW_ENDPOINT": "openai",
+        "SILICONFLOW_API_KEY": "server-secret",
+        "SILICONFLOW_API_BASE": "https://provider.example/v1",
+        "SILICONFLOW_MODELS": "provider/model",
+        "SILICONFLOW_ENABLE_THINKING": "false",
+    }, clear=True)
+    def test_global_model_gets_server_side_thinking_setting(self):
+        registry = ModelRegistry()
+
+        with patch("data_formulator.routes.agents.model_registry", registry):
+            from data_formulator.routes.agents import get_client
+
+            client = get_client({
+                "id": "global-siliconflow-provider/model",
+                "endpoint": "openai",
+                "model": "provider/model",
+                "is_global": True,
+            })
+
+            assert client.params["extra_body"] == {
+                "enable_thinking": False,
+            }
+
     @patch.dict(os.environ, SAMPLE_ENV, clear=True)
     def test_user_model_keeps_own_credentials(self):
         """A non-global (user-added) model should use its own api_key,
@@ -66,9 +91,11 @@ class TestGetClientGlobalResolution:
                 "api_key": "sk-user-own-key",
                 "api_base": "",
                 "api_version": "",
+                "enable_thinking": False,
             })
 
             assert client.params.get("api_key") == "sk-user-own-key"
+            assert "extra_body" not in client.params
 
     @patch.dict(os.environ, SAMPLE_ENV, clear=True)
     def test_global_claim_for_unregistered_id_is_rejected(self):

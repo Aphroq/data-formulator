@@ -127,6 +127,16 @@ grep -rn 'reasoning_effort_for' py-src/data_formulator/agents/
 - [ ] **不要** 检查模型名来决定是否支持某功能（vision / reasoning 等）
 - [ ] **不要** 在调用点硬编码 `reasoning_effort="high"`——统一通过 `agent_config.py` 维护
 
+## 服务端 provider 显式开关
+
+全局模型仍从根目录或包内 `.env` 进入 `ModelRegistry`。OpenAI-compatible
+provider 如果官方 API 另有布尔 thinking 开关，可由管理员显式配置
+`{PROVIDER}_ENABLE_THINKING=true|false`。该值只存在于服务端完整配置，
+`list_public()` 不下发；`get_client()` 也只接受已通过 registry 解析的全局模型
+使用它，不能由普通模型请求体注入。Client 将其放入 `extra_body`，但不根据
+模型名或 URL 推断能力，也不增加前端 provider 专属表单。未配置时不发送，
+其余生成参数继续使用 provider 默认值。
+
 ## 厂商映射
 
 | 厂商 | `reasoning_effort` 效果 |

@@ -1,10 +1,10 @@
 # Automation Workbench 分支交接
 
-> 快照日期：2026-08-19。本文用于继续开发 `feat/automation-workbench`，不替代[工程记录](./README.md)、[系统设计](../../02-architecture/system-design.md)和[实施计划](../../03-delivery/implementation-plan.md)。
+> 快照日期：2026-08-21。本文用于继续开发 `feat/automation-workbench`，不替代[工程记录](./README.md)、[系统设计](../../02-architecture/system-design.md)和[实施计划](../../03-delivery/implementation-plan.md)。
 
 ## 一句话状态
 
-M3-A 导航与 Recipe 管理、M3-B Schedule/Run 持久化、M3-C 常驻 Worker 和 M3-D API/UI 均已完成：当前已有事务型 Scheduler、覆盖长步骤的 fenced Worker、scoped Schedule/Run API、持久化 manual enqueue/cancel、校验后 artifact 查询、Schedule 管理和 Runs Inbox。下一步是用真实 Web + 独立 `data_formulator_worker` 完成页面关闭、重启、重复调度和 schema drift 产品端到端验收；Web/桌面应用当前不自动托管 Worker。
+M3-A 至 M3-D 均已完成，M4 又完成运行中 Worker 强杀、过期 attempt 回收和第二次尝试恢复。当前工作树完成验收加固、typed values、参数创作、报告瘦身、显式 AI 解读与 Workflow 语义优先参数推荐。默认测试不只覆盖 `top_n=3/7` 和 Drama/Comedy：3,201 行 Movies 还会走 `load → 两层 transform → chart`，以四个 typed slot 跑三种导演组合分析口径，并验证同 schema 源数据刷新改变新结果但不改旧制品；复杂推荐联动又从四个候选中语义选择三个输入，重新编译后跑通定时/手动真实结果，未推荐门槛保持冻结。保存对话框候选默认不选，AI 只预选推荐子集；成功报告紧凑展示本次元信息、图表/表格和按需明细，正常 Run 仍无 LLM。2026-08-21 又通过现有 `.env`/全局模型链路接入 SiliconFlow `Qwen/Qwen3.5-27B`，默认关闭 thinking，并完成真实模型推荐到复杂 Automation Run 的显式 live 验收；仓库仍没有默认浏览器 E2E，Web/桌面应用也不自动托管 Worker。
 
 ## Git 与 Worktree 快照
 
@@ -19,10 +19,11 @@ M3-A 导航与 Recipe 管理、M3-B Schedule/Run 持久化、M3-C 常驻 Worker 
 | M3-B4 tip | `c1181e30 feat: execute queued automation runs` |
 | M3-C runtime tip | `61eba9eb feat: run automation worker service` |
 | M3-D API/UI tip | `1f5f181d feat: complete automation workbench APIs` |
+| M4 hard-kill tip | `d064dcf0 feat: recover abandoned automation attempts` |
 | Recipe 基线 | `3cd7ee12 fix: preserve interactive signing fallback` |
-| 实现拓扑 | `1f5f181d` 是当前实现 tip，merge-base 为 `3cd7ee12`；后续工程记录提交不改变实现基线 |
+| 实现拓扑 | `d064dcf0` 是当前提交 tip，merge-base 为 `3cd7ee12`；工作树另有未提交的测试与文档加固 |
 | 远端 | 当前分支没有 upstream，`origin/feat/automation-workbench` 尚未创建 |
-| Recipe 远端 | 本地 `feat/recipe-core` 领先 `origin/feat/recipe-core` 1 个提交；`3cd7ee12` 尚未推送 |
+| Recipe 远端 | 本地 `feat/recipe-core` 与 `origin/feat/recipe-core` 均指向 `3cd7ee12` |
 
 M3-A 的 6 个提交按时间从旧到新为：
 
@@ -47,6 +48,9 @@ c1181e30 feat: execute queued automation runs
 ac66d59e docs: record automation worker milestone
 61eba9eb feat: run automation worker service
 1f5f181d feat: complete automation workbench APIs
+ecb6498a docs: record automation workbench API milestone
+d63170b4 docs: record automation product e2e
+d064dcf0 feat: recover abandoned automation attempts
 ```
 
 这是独立 Worktree，不要在 Recipe 目录里来回切分支。进入本分支应使用：
@@ -71,6 +75,8 @@ git status --short --branch
 - 改名、重组或替代原有 Workspace、项目、会话、知识、Workflow Replay。
 - 新建第二套 Agent runtime、通用 DAG、节点画布或工作流平台。
 - 在正常 Run 中调用 LLM、TrustGraph、Workflow Replay 或重新生成代码。
+- 让保存对话框的模型创建参数 slot、改变 binding/type，或把任意字符串注入 Python/SQL。保存对话框的可选模型调用只根据 Workflow 上下文推荐少量现有候选；现有 Analyst 在交互分析中创建 slot，服务端验证后随签名代码进入 Artifact Lineage，二者不要混为一谈。
+- 为参数推荐新增数据库表、匹配状态机、自动补 slot 或保存时自动改写 transform；没有有效推荐时直接保存固定 Recipe。
 - 新建另一套 Recipe、RecipeVersion、artifact store、SQLite 或前端状态框架。
 - 引入 Celery、Redis、Temporal、Kafka、Docker 或容器依赖。
 
@@ -114,7 +120,7 @@ Workspace / 原有项目概念
 
 - [`AutomationDatabase`](../../../py-src/data_formulator/automation/db.py)是 `automation.db` 的唯一连接和 migration owner；`RecipeRepository` 不再维护自己的 schema 分支。
 - schema v3 在 `recipes` / `recipe_versions` 上增加 `schedules` / `runs`，保留逻辑 Run 与每次 artifact attempt 的 id 分离。
-- 空库、v2 原地升级、Recipe/Automation repository 交替重复打开、migration 整体回滚和未知未来版本失败关闭已有回归。
+- 空库、v2 顺序升级到 v5、带存量 Schedule/Run 的 v3/v4 → v5 保留、Recipe/Automation repository 交替重复打开、migration 整体回滚和未知未来版本失败关闭已有回归。
 - 所有共享连接统一绝对路径、WAL、foreign keys 和 5000ms `busy_timeout`。
 - [`AutomationRepository`](../../../py-src/data_formulator/automation/repository.py)已支持创建固定 Published RecipeVersion 的 Schedule、显式启停和按 `(schedule_id, scheduled_for)` 幂等创建 queued Run。
 - Schedule 的 scope/version 由复合外键和 trigger 固定；enabled Schedule 会阻止 RecipeVersion 归档，archived version 不得重新启用。
@@ -125,14 +131,14 @@ Workspace / 原有项目概念
 
 | 位置 | 覆盖 |
 | --- | --- |
-| [`test_automation_database.py`](../../../tests/backend/recipes/test_automation_database.py) | schema v2 → v3、重复打开、未来版本、回滚、SQLite pragma |
+| [`test_automation_database.py`](../../../tests/backend/recipes/test_automation_database.py) | schema v2 → v5、带存量业务行的 v3/v4 → v5 保留、重复打开、未来版本、回滚、SQLite pragma |
 | [`test_automation_repository.py`](../../../tests/backend/recipes/test_automation_repository.py) | Published/scope、不可变版本、时间输入、唯一入队、归档/重启用保护 |
 | [`test_recipe_repository.py`](../../../tests/backend/recipes/test_recipe_repository.py) | Recipe repository 通过共享 owner 初始化和迁移 |
 
 ## 已完成：M3-B2/B3 Scheduler 与 Run 生命周期
 
 - [`cron.py`](../../../py-src/data_formulator/automation/cron.py)实现无第三方依赖的数值五段 Cron：列表、升序范围、步长和 DOM/DOW union；IANA timezone 下春季不存在分钟跳过，秋季重复墙上分钟只执行一次，包括在两个 fold 之间重算的重启场景。
-- [`AutomationScheduler`](../../../py-src/data_formulator/automation/scheduler.py)只暴露可注入时钟的单次 `tick()`，不创建线程或循环。到期扫描、最多一个停机补偿 Run 入队和 `next_run_at > checked_at` 推进处于同一 `BEGIN IMMEDIATE` 事务，任一 Schedule 失败会整批回滚。
+- [`AutomationScheduler`](../../../py-src/data_formulator/automation/scheduler.py)只暴露可注入时钟的单次 `tick()`，不创建线程或循环。到期扫描、最多一个停机补偿 Run 入队和 `next_run_at > checked_at` 推进处于同一 `BEGIN IMMEDIATE` 事务，任一 Schedule 失败会整批回滚；两个独立 SQLite 连接持锁争抢同一 Schedule 的回归确认最终只入队一次。
 - Schedule repository 已支持 scoped get/list/edit；编辑 Cron/timezone 会重算下一次，重新启用从启用时刻之后排期，不补跑显式停用期间的周期，固定 `version_id` 不可变。
 - Run repository 已支持 scoped get、全局队列 claim、lease renew、随机 fencing token、终态完成、运行中取消请求、`available_at` 延迟重试、最多 3 次总尝试及过期 lease 恢复。旧 Worker 的过期/失效 token 不能覆盖新 attempt。
 - queued 取消直接终结；running 取消只记录请求。显式恢复在 lease 过期时把已请求取消的 Run 关闭为 `cancelled`，避免崩溃后永久卡住；B4 Worker 已在步骤成功和失败边界续租、读取取消请求并生成 cancelled artifact。
@@ -151,9 +157,9 @@ Workspace / 原有项目概念
 
 - [`AutomationWorker`](../../../py-src/data_formulator/automation/worker.py)在检查 feature flag 与稳定签名后最多 claim 一个 Run；缺少配置时不触碰队列。
 - Worker 使用同一解析后的 data home 构造 `AutomationRepository`、`RecipeRepository` 和 `LocalWorkspaceOpener`，并拒绝两个 repository 数据库路径或 Workspace data home 不一致。
-- 每次尝试生成与逻辑 Run id 不同的新 artifact run id，显式打开 identity/Workspace，校验固定 RecipeVersion，并只使用 default binding 执行 `RecipeExecutor`；归档前已入队的不可变版本仍可完成。
+- 每次尝试生成与逻辑 Run id 不同的新 artifact run id，显式打开 identity/Workspace，校验固定 RecipeVersion，并只使用 Run 行冻结的 typed values 执行 `RecipeExecutor`；归档前已入队的不可变版本和值仍可完成。
 - Recipe artifact 增加 `automation` kind 与 `cancelled` 终态。Executor 在开始、步骤成功和步骤失败边界调用 checkpoint；取消生成无错误的 immutable manifest，lease/fencing 失败则不生成终态 manifest，也不写逻辑 Run 终态。
-- connector classifier 的安全 code/message 可传给逻辑 Run，但不改变既有三字段 Recipe artifact error 合同；原始 connector 异常、credential、参数和 classifier detail 不持久化。只有 classifier `retry=true` 与 SQLite locked/busy 可重试，最多 3 次总尝试，并保留最终失败 attempt artifact。
+- connector classifier 的安全 code/message 可传给逻辑 Run，但不改变既有三字段 Recipe artifact error 合同；原始 connector 异常、credential、连接参数和 classifier detail 不持久化。typed business values 只保存在逻辑 Run snapshot，不额外写入 attempt 日志/manifest。只有 classifier `retry=true` 与 SQLite locked/busy 可重试，最多 3 次总尝试，并保留最终失败 attempt artifact。
 - success、failed、needs_review 和 cancelled 均映射到独立 Automation Run 状态；schema drift 在第一次尝试进入 Needs Review，不重试。
 - B4 原始实现只在步骤边界续租；M3-C 已在 `run_once()` 外围增加每 attempt 定时 heartbeat。one-shot 方法仍不拥有常驻循环、route 或 Flask request。
 
@@ -182,26 +188,49 @@ Workspace / 原有项目概念
 
 ## 已完成：M3-D Schedule/Run API 与工作台
 
-- [`AutomationService`](../../../py-src/data_formulator/automation/service.py)把 Automation queue catalog 与不可变 RecipeVersion/artifact store 接在一起，并要求 Automation/Recipe repository 使用同一个绝对数据库。Schedule 创建和 manual enqueue 在持久化前验证稳定签名、Published 状态与完整 default binding。
-- [`automation` route](../../../py-src/data_formulator/routes/automation.py)在 `/api/automation` 提供 Schedule list/create/update/enable/disable、Run manual enqueue/list/get/cancel 和 manifest/events。feature flag 在存储初始化前失败关闭，所有读写都使用当前 identity + durable local Workspace。
-- Schedule 的首个 `next_run_at`、manual Run 的 `scheduled_for`/`available_at` 和逻辑 Run id 均由服务端产生；客户端只能提交版本与 Schedule 可编辑字段，额外执行字段、malformed JSON 和越界数字会被拒绝。
-- Run 公共响应不包含 lease owner、fencing token 或 lease expiry。artifact 查询从逻辑 Run 构造 scoped attempt reference，并通过 `RecipeRunArtifactStore.load()` 校验相对路径、manifest/descriptor/文件 hash 后返回 manifest/events；活动、缺失或损坏制品失败关闭。
-- [`automationApi.ts`](../../../src/app/automationApi.ts)只暴露上述最小管理面，manual enqueue 仅发送 `version_id`，Schedule 创建不发送 `next_run_at`。
-- [`AutomationOperations.tsx`](../../../src/views/AutomationOperations.tsx)增加每日时间 → Cron、原始 Cron、IANA timezone、固定版本 Schedule 编辑/启停，以及持久化 Runs Inbox 的状态过滤、取消、Needs Review 回跳和 artifact 审计对话框。
+- [`AutomationService`](../../../py-src/data_formulator/automation/service.py)把 Automation queue catalog 与不可变 RecipeVersion/artifact store 接在一起，并要求 Automation/Recipe repository 使用同一个绝对数据库。Schedule 创建和 manual enqueue 在持久化前验证稳定签名、Published 状态、typed values/policy 与默认值完整性。
+- [`automation` route](../../../py-src/data_formulator/routes/automation.py)在 `/api/automation` 提供 Schedule list/create/update/enable/disable、Run manual enqueue/list/get/cancel、manifest/events/result、成功 Run 最终输出表的 sample/download，以及显式一次性 report analysis。feature flag 在存储初始化前失败关闭，所有读写都使用当前 identity + durable local Workspace。
+- Schedule 的首个 `next_run_at`、manual Run 的 `scheduled_for`/`available_at` 和逻辑 Run id 均由服务端产生；客户端只能提交版本、RecipeSpec 已声明的 manual values 与 Schedule policy，额外执行字段、未知 slot、类型错误、malformed JSON 和越界数字会被拒绝。
+- Run 公共响应包含本次非敏感冻结值，但不包含 lease owner、fencing token 或 lease expiry。artifact/result 查询从逻辑 Run 构造 scoped attempt reference，并通过 `RecipeRunArtifactStore.load()` 校验相对路径、manifest/descriptor/文件 hash；sample/download 只接受成功 Run 在 Recipe 中声明的最终输出表，活动 Run、中间表、缺失或损坏制品失败关闭。
+- [`automationApi.ts`](../../../src/app/automationApi.ts)只暴露上述最小管理面与只读结果查询，manual enqueue 发送 `version_id + parameters`，Schedule 创建发送 typed `parameter_policy` 但不发送 `next_run_at`。
+- [`AutomationOperations.tsx`](../../../src/views/AutomationOperations.tsx)增加每日时间 → Cron、原始 Cron、IANA timezone、固定版本 Schedule 编辑/启停，以及持久化 Runs Inbox 的状态过滤、取消、Needs Review 回跳；成功 Run 打开 [`AutomationRunResultView.tsx`](../../../src/views/AutomationRunResultView.tsx)，失败/Needs Review 打开步骤证据与技术信息。
+- 成功 Run 的结果已收口为紧凑只读分析报告：服务端从固定且经校验的 RecipeVersion 投影稳定上下文，前端把状态/时间/触发方式/冻结参数合并展示，移除重复目标说明、只读提示和可见分析步骤，再连续呈现全部最终输出，图表优先、支撑数据按需展开。默认报告不读取当前 Recipe 列表、聊天或 Redux，也不调用模型。
+- [`report_analysis.py`](../../../py-src/data_formulator/automation/report_analysis.py)与 `POST /runs/<id>/analysis` 提供用户显式触发的一次性 AI 解读：先经 `load_run_result()` 验证不可变制品，再把最多 60,000 字节的目标/参数/步骤、冻结值和限量输出样本交给当前模型，严格返回摘要、1～3 条带证据发现和可选注意事项。它不属于 Run/Scheduler/Worker，不重跑、不改参数、不持久化、不创建聊天或 Data Thread；结构无效只让解读失败，Run 保持成功。
 - [`Recipes.tsx`](../../../src/views/Recipes.tsx)的 Run now 已从同步 Recipe manual run 改为持久化 enqueue；dry run 仍使用当前结果面板，后台 Run 统一在 Inbox 中恢复和查看。Workspace/版本切换时旧请求不会覆盖新作用域。
+- [`SaveAsRecipeDialog.tsx`](../../../src/views/SaveAsRecipeDialog.tsx)保留 Compiler 候选的直接选择，并增加可选“AI 帮我整理”：复用当前 selected model、目标分析的 `buildLeafEvents`/session Workflow context，只建议 selection、名称、说明和 `ask|keep`。建议失败不阻断保存；`ask` 编译为无 default，`keep` 沿用当前 typed default。
+- [`parameter_suggestions.py`](../../../py-src/data_formulator/recipes/parameter_suggestions.py)不是 Agent runtime；它复用现有 LiteLLM Client、`workflow_distill` reasoning profile 和 Workflow 上下文摘要。Recipe route 服务端重新取得 durable candidates，要求模型输出与 candidate id 精确一致，未知/缺失/重复候选失败关闭。Compiler 最终仍拥有 parameter id、type 和 binding。
+- [`transform_parameters.py`](../../../py-src/data_formulator/recipes/transform_parameters.py)拥有 transform slot 声明、默认值、受控 AST 用法和运行值校验。`visualize` 只把通过验证的 slot 与签名代码写入 Artifact；Compiler 发现后建立固定 `transform_parameter + slot_name` binding，Executor 通过 Sandbox 独立 `params` 对象注入，不做源码字符串替换。交互刷新携带同一声明/default，不另建执行器。
+
+上面两条是当前代码事实，不是最终产品合同。下一次实现必须做最小收口：
+
+1. Prompt 先从 Workflow 上下文判断 0～4 个真正有意义的运行选择，再引用 candidate id；响应只返回推荐子集，不再逐候选覆盖。
+2. 服务端重新取得 candidates，对建议 id 去重并取交集；未知、重复或遗漏不再让整次建议失败，最终 compile 仍严格拒绝候选外 binding。
+3. 保存对话框候选默认不选中，AI 只预选有效推荐，其余候选折叠；未匹配语义只显示一句返回分析提示，无模型/无推荐/失败仍可保存固定 Recipe。
+4. 不新增 Parameter Intent 持久化、匹配状态机、自动修复或 transform 重写。
+
+结果边界必须保持：Workflow Replay 交给 Agent 做语义重做；Automation Run 执行固定 Published RecipeVersion，正常路径无 LLM。“查看结果”只读取这一次 Run 的不可变制品；“AI 解读”只是另一个显式的一次性后处理动作。两者都不创建 Workspace 表、Data Thread 或 Redux 会话，也不重新执行。未来“继续分析”只能作为用户显式创建副本的独立动作。
 
 关键测试：
 
 | 位置 | 覆盖 |
 | --- | --- |
-| [`test_automation_routes.py`](../../../tests/backend/recipes/test_automation_routes.py) | scoped CRUD/enqueue/cancel、严格请求、签名/default binding、flag/local Workspace、lease 字段隐藏、artifact 校验与篡改拒绝 |
-| [`automationApi.test.ts`](../../../tests/frontend/unit/app/automationApi.test.ts) | API 路径、最小 payload 与服务端时间所有权 |
-| [`AutomationOperations.test.tsx`](../../../tests/frontend/unit/views/AutomationOperations.test.tsx) | 每日 Cron、Schedule 编辑/停用、Run 过滤/取消、Needs Review 审计与 Workspace 竞态 |
+| [`test_automation_routes.py`](../../../tests/backend/recipes/test_automation_routes.py) | scoped CRUD/enqueue/cancel、严格请求、签名/typed values、flag/local Workspace、lease 字段隐藏、artifact/result/sample/download/analysis 校验、中间表与篡改拒绝、非法模型输出不改变 Run |
+| [`test_automation_report_analysis.py`](../../../tests/backend/recipes/test_automation_report_analysis.py) | Comedy 真实业务数值、目标/参数/步骤/输出样本 grounding、60 KiB 上下文上限和非法结构失败关闭 |
+| [`test_automation_product_integration.py`](../../../tests/backend/recipes/test_automation_product_integration.py) | 3,201 行 Movies、正式 loopback HTTP sample connector、三步与两层 Transform 编译/dry run/publish/Schedule/重建 Worker、Drama/Comedy/Top N/四参数多口径、AI 从四候选选三并重新编译执行、固定未推荐默认值、unmatched 提示、独立中间/最终基线、同 schema 刷新、不可变旧制品、无 LLM 与 schema drift；另有默认跳过、显式凭据开启的 SiliconFlow 真实推荐到 Worker 结果测试 |
+| [`automationApi.test.ts`](../../../tests/frontend/unit/app/automationApi.test.ts) | API 路径、最小 payload、服务端时间所有权与结果 sample/download |
+| [`AutomationOperations.test.tsx`](../../../tests/frontend/unit/views/AutomationOperations.test.tsx) | 每日 Cron、Schedule 编辑/停用、Run 过滤/取消、成功结果、Needs Review 审计与 Workspace 竞态 |
+| [`AutomationRunResultView.test.tsx`](../../../tests/frontend/unit/views/AutomationRunResultView.test.tsx) | 紧凑报告、全部最终输出、图表数据折叠/展开、冗余文本移除、AI 禁用/成功/失败/竞态与无 Tabs 回归 |
+| [`test_parameter_suggestions.py`](../../../tests/backend/recipes/test_parameter_suggestions.py) | Workflow 优先 Prompt、推荐子集、candidate 交集、未知/重复忽略、元数据回退、未匹配提示、空推荐和零候选仍调用模型 |
+| [`test_compiler.py`](../../../tests/backend/recipes/test_compiler.py)、[`test_recipe_routes.py`](../../../tests/backend/recipes/test_recipe_routes.py) | 用户确认配置、description、`ask|keep`、推荐结果合同、零候选未匹配提示与 candidate 绑定真相源 |
+| [`test_transform_parameters.py`](../../../tests/backend/recipes/test_transform_parameters.py)、[`test_visualize_artifact_flow.py`](../../../tests/backend/agents/test_visualize_artifact_flow.py) | Analyst slot → Sandbox default → Artifact → Compiler；阈值/Top N/窗口/类别/日期允许，动态代码/SQL/文件/字段/callable 拒绝 |
+| [`test_refresh_derived_data_parameters.py`](../../../tests/backend/routes/test_refresh_derived_data_parameters.py) | 交互刷新独立注入默认值且保持签名源码，动态字段选择失败关闭 |
+| [`SaveAsRecipeDialog.test.tsx`](../../../tests/frontend/unit/views/SaveAsRecipeDialog.test.tsx)、[`recipeApi.test.ts`](../../../tests/frontend/unit/app/recipeApi.test.ts) | 候选默认不选、推荐子集置顶、其他候选折叠、未匹配提示、零候选分析、AI 失败固定 Recipe 回退和最小 API payload |
 
 ## 尚未实现
 
-- Web/桌面应用自动拉起或监督 Worker、并发 2，以及无 manifest attempt artifact 回收。
-- 页面关闭后运行、真实进程强杀/重启、重复调度和 schema drift 的完整产品端到端验证。
+- Web/桌面应用自动拉起或监督 Worker、并发 2、长期运行验收。
+- 默认执行的浏览器 E2E，以及使用用户已有真实外部 connector 端点的验收。2026-08-20 已人工复核 3,201 行 Movies 三步定时 Run 的结果图表、表格、搜索和下载，但仍不能把人工浏览器证据或后端 loopback 集成写成自动化浏览器覆盖。
+- 带真实已配置模型的默认浏览器 E2E，以及报告 AI 解读 live 验收。参数建议已经完成真实 provider 后端产品闭环和人工模型选择/连通检查，但这不等于自动化 UI 覆盖。
 
 当前 [RecipeRunArtifactStore](../../../py-src/data_formulator/recipes/run_store.py)保存 dry run、Recipe Core 兼容 manual run 和 automation attempt 的不可变终态制品；Automation 队列状态继续只在 `runs` 表中，页面通过 scoped Runs API 查询，不复制到 Redux 或会话状态。Recipe Core 的同步 manual API 暂时保留兼容，但 `/automation` 的 Run now 已使用持久化队列。
 
@@ -247,7 +276,7 @@ Workspace / 原有项目概念
 
 ### P2：Automation 分支尚未发布到远端
 
-本分支目前没有 upstream；Recipe 修复提交也仍是本地状态。完成当前实现和最终验证后再决定是否首次推送；命令为：
+本分支目前没有 upstream；Recipe 修复提交 `3cd7ee12` 已推送。完成当前实现和最终验证后再决定是否首次推送 Automation；命令为：
 
 ```powershell
 git push -u origin feat/automation-workbench
@@ -255,13 +284,13 @@ git push -u origin feat/automation-workbench
 
 ## 推荐继续顺序
 
-1. 用固定 automation 实例启动真实 Web、Vite 与正式 `data_formulator_worker`，验证创建 Schedule 后关闭页面仍会入队、执行并在重新打开页面后出现在 Runs Inbox。
-2. 补真实进程强杀/重启、重复 tick、持久化 manual Run、queued/running 取消、外部 connector 和 schema drift → Needs Review 的完整闭环验证并记录证据。
-3. 稳定化阶段再决定进程监督、无 manifest attempt 回收和并发 2；不把这些职责塞入 Flask。
+1. 选择并落地默认可运行的浏览器 E2E，把已通过的真实参数推荐闭环固化到 UI，并补报告 AI 解读 live 验收。
+2. 使用用户已有真实外部 connector 端点补验；之后再决定 Web/桌面 Worker 监督、长期运行和并发 2。
+3. 提交拆分时把 transform slot/spec/compiler/Recipe route/helper/Sandbox 契约形成可回迁 Recipe Core 的基础提交，再提交 Automation/Save UI 消费端；之后决定首次推送。
 
 实现 M3 时注意：
 
-- `AutomationDatabase` 是唯一共享 SQLite owner，当前 schema version 为 3；不要把 migration 逻辑重新放回 Recipe 或另一个 repository。
+- `AutomationDatabase` 是唯一共享 SQLite owner，当前 schema version 为 5；不要把 migration 逻辑重新放回 Recipe 或另一个 repository。
 - `RecipeRunStatus` 只含 `succeeded/failed/needs_review/cancelled` 最终制品状态，不含 `queued/running`；不要直接拿它冒充 Automation 队列状态机。
 - 逻辑队列 `run_id` 与每次 Executor 尝试的 artifact run id 分开；崩溃恢复或重试不得覆盖、复用已有不完整/不可变运行目录。
 - Schedule 只接受 Published RecipeVersion，并固定 version id；新版本发布不得静默迁移已有 Schedule。
@@ -319,6 +348,41 @@ uv run data_formulator_worker --worker-id "automation-worker-1"
 Worker 与 Web 从当前 Worktree 未跟踪的 `.env` 读取同一个稳定签名密钥。它不监听端口；用 `Ctrl+C` 优雅停止。单周期诊断可加 `--once`，但不能用外部脚本循环 `--once` 冒充正式常驻生命周期。
 
 ## 最近一次验证
+
+复杂真实数据处理节点：
+
+- 两层 Transform、四参数、三种业务口径及同 schema 源数据刷新案例通过；复杂 AI 推荐联动又验证四候选选三、固定 `min_movies=2`、一个 unmatched 选择及推荐后的 22/18 行真实定时/手动结果。
+- 产品集成：5 passed；参数/route/Compiler/Executor：69 passed、1 skipped；Recipe/Automation：254 passed、2 skipped。
+- 当前后端全量：2408 passed、17 skipped、1 xfailed；没有启动 Docker。SiliconFlow 相关默认回归 106 passed、1 skipped，Recipe/Automation 254 passed、3 skipped；新增 skip 是显式凭据开启的外部服务用例，已单独得到 1 passed。
+- SiliconFlow `Qwen/Qwen3.5-27B` 通过根目录未跟踪 `.env` 和现有全局 `ModelRegistry` 自动加载，API key 仅留服务端；页面显示“由服务端管理”、掩码凭据和“测试通过”。`SILICONFLOW_ENABLE_THINKING=false` 作为服务端 provider 配置传给 Client，不按模型名推断能力；其余生成参数沿用 provider 默认值。
+- live 用例使用 3,201 行、16 列 Movies 真实血缘，模型推荐 `start_year/min_roi/top_directors` 并冻结 `min_movies`；推荐结果完成 compile、`load → transform → transform → chart` dry run、publish 和 Worker Run。输入 `1990/1.0/2` 产出 337 行中间指标、18 行最终结果、10 个类型、69 部电影、总利润 `21,326,749,404`，并逐表匹配独立 Pandas 基线；执行阶段禁止 LLM 仍成功。
+
+参数语义优先收口节点：
+
+- 参数/helper/route/Movies 聚焦后端：28 passed；包含真实 Workflow 上下文、Lineage candidate、推荐 `top_n` 后重新编译，以及 3,201 行 Movies 的 Worker `top_n=3/7` 不同结果。
+- Recipe/Automation 后端目录：252 passed、2 skipped；没有启动 Docker。
+- 后端全量：2399 passed、16 skipped、1 xfailed；使用项目约定的 UTF-8/xterm 环境。
+- 参数 API/保存对话框聚焦前端：7 passed；前端全量 53 files / 424 tests passed。
+- bundled Node 24.19.0 的 `yarn build`、Python compileall 与 `git diff --check` 通过；真实 `/automation` 页面复核无新增控制台错误，只有既有 Redux selector 性能警告。
+- 当前浏览器会话仍没有带 current Recipe Artifact 的可保存图表；全局真实模型已选中并通过连接测试，但保存弹窗端到端 UI 仍未自动化，不能冒充默认浏览器 E2E。
+
+此前未提交的 M4 验收加固、Run 结果、typed values、参数创作、transform slot、报告瘦身与显式 AI 解读节点：
+
+- Transform slot/Artifact/Compiler/刷新/真实 Worker 结果聚焦：54 passed；3,201 行 Movies `top_n=3/7` 产品数据用例包含在内。
+- 后端全量：2398 passed、16 skipped、1 xfailed（2415 collected）；使用项目约定的 UTF-8/xterm 测试环境，没有启动 Docker。
+- 报告 AI/route 聚焦后端 22 passed；报告/API/运行记录聚焦前端 13 passed。
+- 前端全量：53 files / 423 tests passed；默认 Node 20.15.1 因现有 jsdom 依赖的 CJS/ESM 冲突无法启动 Vitest，改用工作区 bundled Node 24.19.0 后全部通过。
+- bundled Node 24.19.0 的 `yarn build` 通过；Vite 变换 2709 modules。构建保留既有 eval、混合动态/静态 import 和大 chunk 警告，无新增失败。
+- `python -m compileall` 与 `git diff --check` 通过；独立 `tsc --noEmit` 仍命中既有 [`dfSlice.tsx`](../../../src/app/dfSlice.tsx) `parentTurn` TS7022，正式 Vite build 不受影响，本节点没有修改该文件。
+- 浏览器人工复核：3,201 行 Movies 的 scheduled Run 成功；既有验收显示 12 个类型、2,926 部有类型电影、Drama 789 部和全球票房 `40,476,168,953`。本轮又打开真实 Comedy Run，确认冻结参数、675 部电影、全球票房 `50,384,049,282`、图表、按需数据、紧凑信息层级和技术信息分层；同一 688×911 视口完成优化前后组合对照，控制台无错误。
+- 本机已选中服务端全局真实模型，“AI 帮我整理”的后端产品闭环已完成 live 验收；保存弹窗默认浏览器 E2E 与报告“AI 解读”真实 provider 验收仍明确待补。
+
+M4 `d064dcf0` 的历史交付验证为：
+
+- Automation/Executor 聚焦：97 passed、1 skipped。
+- 后端全量：2354 passed、16 skipped、1 xfailed。
+- 前端全量：51 files / 412 tests passed；bundled Node 24.19.0 生产构建通过。
+- 真实 hard-kill 子进程验收确认无 manifest attempt 回收和第二次尝试成功。
 
 M3-D `1f5f181d` 的交付验证为：
 
@@ -395,14 +459,19 @@ yarn build
 
 - [x] 当前目录是 `D:\projects\dfm-wt-automation`，分支是 `feat/automation-workbench`。
 - [x] 原有未提交文档通过可恢复 stash 跨 rebase 保存并完整恢复，没有覆盖其他 Worktree 改动。
-- [x] Recipe P0 已在本地 Recipe 分支提交并完成三项验证；远端推送尚未执行。
+- [x] Recipe P0 已提交、完成三项验证并推送到 `origin/feat/recipe-core`。
 - [x] Automation 已 rebase 到新的 Recipe HEAD，merge-base 为 `3cd7ee12`。
 - [x] “自动化项目”术语已经收口为 Recipe/配方，未新增 Project 数据模型。
-- [x] 新 migration 能从现有 schema v2 原地升级，也能重复初始化并在失败时整体回滚。
-- [x] Schedule 固定 Published RecipeVersion；相同 Schedule/计划时间唯一，重复 tick 幂等，停机周期合并为一个补偿 Run。
+- [x] migration 能从现有 schema v2 顺序升级到 v4，也能保留 v3 中已有 Schedule/Run、重复初始化并在失败时整体回滚。
+- [x] Schedule 固定 Published RecipeVersion；相同 Schedule/计划时间唯一，重复 tick 和两个独立 SQLite 连接真实争抢均只入队一次，停机周期合并为一个补偿 Run。
 - [x] Run repository 和 Worker 覆盖 claim/renew/fencing、取消、有限/延迟重试、过期 lease 恢复和长步骤 heartbeat；queued Run 已覆盖跨 Runtime 重建执行。
-- [x] Schedule/Run API、持久化 manual enqueue/cancel、校验后 manifest/events、Schedule UI、Runs Inbox 和 Needs Review 回跳已完成；公共响应不暴露 Worker lease/fencing 字段。
-- [x] Runtime factory 从同一绝对 data home 构造 Workspace 与 SQLite，并拒绝 repository 路径分歧；真实 Web/Worker 双进程产品闭环仍待执行验证。
+- [x] Schedule/Run API、持久化 manual enqueue/cancel、校验后 manifest/events/result、最终输出 sample/download、Schedule UI、Runs Inbox、成功结果快照和 Needs Review 回跳已完成；公共响应不暴露 Worker lease/fencing 字段。
+- [x] Runtime factory 从同一绝对 data home 构造 Workspace 与 SQLite，并拒绝 repository 路径分歧；真实 Web/Worker 双进程已做过一次人工产品验收，默认浏览器 E2E 仍待实现。
+- [x] 默认后端集成使用 3,201 行 Movies、正式 loopback HTTP sample connector 和重建后的 Worker 验证三步 Recipe、精确业务输出、无 LLM 与 schema drift；它不冒充浏览器或真实外部端点验收。
 - [x] Automation flag 关闭时 Worker CLI 在存储初始化前失败关闭，Recipe API 和 UI 都不可用。
 - [x] 正常 Run 路径没有 LLM、TrustGraph 或 Workflow Replay 调用。
+- [x] 成功 Run 的“查看结果”只读取不可变制品，不复制 Workspace、不创建 Data Thread、不写会话状态，也不重新执行 Recipe。
+- [x] 成功 Run 的结果是固定 RecipeVersion 上下文与终态输出的紧凑只读报告，连续展示全部最终输出，不用重复目标、提示和步骤挤占主阅读流。
+- [x] 显式 AI 解读先验证不可变 Run 制品，只发送限量上下文与结果样本，严格解析短结构化响应；正常 Run/Worker 无 LLM，解读不重跑、不持久化、不创建会话。
+- [x] 参数助手已按 Workflow 语义优先收口：候选默认不选、AI 只返回推荐子集、简单交集和一句未匹配提示；没有推荐仍可保存固定 Recipe。
 - [x] `uv run pytest`、`yarn test`、`yarn build` 全部通过。

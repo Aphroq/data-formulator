@@ -11,6 +11,8 @@ the raw execution overhead baseline in benchmarks.
 import logging
 import os
 import warnings
+from collections.abc import Mapping
+from typing import Any
 
 import pandas as pd
 
@@ -32,6 +34,8 @@ class NotASandbox(Sandbox):
         code: str,
         workspace,
         output_variable: str,
+        *,
+        parameters: Mapping[str, Any] | None = None,
     ) -> dict:
         with workspace.local_dir() as local_path:
             workspace_path = os.path.abspath(str(local_path))
@@ -42,6 +46,8 @@ class NotASandbox(Sandbox):
                 warnings.filterwarnings("ignore")
 
                 namespace = {output_variable: None}
+                if parameters is not None:
+                    namespace["params"] = dict(parameters)
                 # Security: this sandbox has NO isolation and is for benchmarking only.
                 # In production, use LocalSandbox or DockerSandbox. Code executed here
                 # is HMAC-SHA256 signed at generation time (see code_signing.py) and

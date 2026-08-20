@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import secrets
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from uuid import UUID, uuid4
@@ -25,6 +25,11 @@ from data_formulator.automation.models import (
     parse_utc_datetime,
     validate_run_id,
     validate_schedule_id,
+)
+from data_formulator.automation.parameters import (
+    deserialize_parameter_mapping,
+    resolve_schedule_parameter_policy,
+    serialize_parameter_mapping,
 )
 from data_formulator.recipes.models import HashDigest
 from data_formulator.security.sanitize import sanitize_error_message
@@ -95,6 +100,7 @@ class AutomationRepository:
         name: str,
         cron_expression: str,
         timezone_name: str,
+        parameter_policy: Mapping[str, object] | None = None,
         next_run_at: datetime | None = None,
         schedule_id: str | None = None,
     ) -> StoredSchedule:
@@ -105,6 +111,10 @@ class AutomationRepository:
         normalized_cron = normalize_cron_expression(cron_expression)
         CronExpression.parse(normalized_cron)
         normalized_timezone = normalize_timezone_name(timezone_name)
+        normalized_parameter_policy = serialize_parameter_mapping(
+            parameter_policy or {},
+            field_name="parameter_policy",
+        )
         if next_run_at is None:
             next_run_at = next_cron_occurrence(
                 normalized_cron,
@@ -134,9 +144,10 @@ class AutomationRepository:
                     """
                     INSERT INTO schedules (
                         schedule_id, identity_id, workspace_id, version_id,
-                        name, cron_expression, timezone, enabled,
+                        name, cron_expression, timezone, parameter_policy_json,
+                        enabled,
                         next_run_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
                     """,
                     (
                         normalized_schedule_id,
@@ -146,6 +157,7 @@ class AutomationRepository:
                         normalized_name,
                         normalized_cron,
                         normalized_timezone,
+                        normalized_parameter_policy,
                         normalized_next_run,
                         now,
                         now,
@@ -294,11 +306,17 @@ class AutomationRepository:
         name: str | None = None,
         cron_expression: str | None = None,
         timezone_name: str | None = None,
+        parameter_policy: Mapping[str, object] | None = None,
     ) -> StoredSchedule:
         identity_id = self._require_identifier(identity_id, "identity_id")
         workspace_id = self._require_identifier(workspace_id, "workspace_id")
         schedule_id = validate_schedule_id(schedule_id)
-        if name is None and cron_expression is None and timezone_name is None:
+        if (
+            name is None
+            and cron_expression is None
+            and timezone_name is None
+            and parameter_policy is None
+        ):
             raise ValueError("Schedule update requires at least one field")
 
         connection = self._database.connect()
@@ -325,6 +343,17 @@ class AutomationRepository:
                 if timezone_name is not None
                 else current.timezone
             )
+            updated_parameter_policy = (
+                serialize_parameter_mapping(
+                    parameter_policy,
+                    field_name="parameter_policy",
+                )
+                if parameter_policy is not None
+                else serialize_parameter_mapping(
+                    current.parameter_policy,
+                    field_name="parameter_policy",
+                )
+            )
             if cron_expression is not None or timezone_name is not None:
                 updated_next_run = normalize_utc_datetime(
                     next_cron_occurrence(
@@ -341,6 +370,7 @@ class AutomationRepository:
                 """
                 UPDATE schedules
                 SET name = ?, cron_expression = ?, timezone = ?,
+                    parameter_policy_json = ?,
                     next_run_at = ?, updated_at = ?
                 WHERE schedule_id = ?
                     AND identity_id = ? AND workspace_id = ?
@@ -349,6 +379,7 @@ class AutomationRepository:
                     updated_name,
                     updated_cron,
                     updated_timezone,
+                    updated_parameter_policy,
                     updated_next_run,
                     now,
                     schedule_id,
@@ -606,14 +637,19 @@ class AutomationRepository:
         workspace_id: str,
         version_id: str,
         *,
+        parameter_values: Mapping[str, object] | None = None,
         run_id: str | None = None,
     ) -> StoredAutomationRun:
-        """Persist one default-binding Run without accepting client timing data."""
+        """Persist one typed Run without accepting client timing data."""
         identity_id = self._require_identifier(identity_id, "identity_id")
         workspace_id = self._require_identifier(workspace_id, "workspace_id")
         version_id = self._require_identifier(version_id, "version_id")
         normalized_run_id = validate_run_id(
             run_id or f"run_{self._id_factory().hex}"
+        )
+        normalized_parameter_values = serialize_parameter_mapping(
+            parameter_values or {},
+            field_name="parameters",
         )
 
         connection = self._database.connect()
@@ -632,8 +668,9 @@ class AutomationRepository:
                     INSERT INTO runs (
                         run_id, identity_id, workspace_id, version_id,
                         schedule_id, trigger, scheduled_for, status,
-                        attempt_count, available_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 0, ?, ?, ?)
+                        parameter_values_json, attempt_count, available_at,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, 0, ?, ?, ?)
                     """,
                     (
                         normalized_run_id,
@@ -643,6 +680,7 @@ class AutomationRepository:
                         AutomationRunTrigger.MANUAL.value,
                         now,
                         AutomationRunStatus.QUEUED.value,
+                        normalized_parameter_values,
                         now,
                         now,
                         now,
@@ -1377,14 +1415,24 @@ class AutomationRepository:
         now: str,
     ) -> sqlite3.Row:
         run_id = validate_run_id(f"run_{self._id_factory().hex}")
+        parameter_values = resolve_schedule_parameter_policy(
+            schedule.parameter_policy,
+            scheduled_for=scheduled_for,
+            timezone_name=schedule.timezone,
+        )
+        parameter_values_json = serialize_parameter_mapping(
+            parameter_values,
+            field_name="parameters",
+        )
         try:
             connection.execute(
                 """
                 INSERT INTO runs (
                     run_id, identity_id, workspace_id, version_id,
                     schedule_id, trigger, scheduled_for, status,
-                    attempt_count, available_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+                    parameter_values_json, attempt_count, available_at,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
                 ON CONFLICT(schedule_id, scheduled_for) DO NOTHING
                 """,
                 (
@@ -1396,6 +1444,7 @@ class AutomationRepository:
                     AutomationRunTrigger.SCHEDULED.value,
                     scheduled_for,
                     AutomationRunStatus.QUEUED.value,
+                    parameter_values_json,
                     available_at,
                     now,
                     now,
@@ -1767,6 +1816,10 @@ class AutomationRepository:
             name=row["name"],
             cron_expression=row["cron_expression"],
             timezone=row["timezone"],
+            parameter_policy=deserialize_parameter_mapping(
+                row["parameter_policy_json"],
+                field_name="parameter_policy",
+            ),
             enabled=bool(row["enabled"]),
             next_run_at=row["next_run_at"],
             created_at=row["created_at"],
@@ -1785,6 +1838,10 @@ class AutomationRepository:
             schedule_id=row["schedule_id"],
             trigger=AutomationRunTrigger(row["trigger"]),
             scheduled_for=row["scheduled_for"],
+            parameter_values=deserialize_parameter_mapping(
+                row["parameter_values_json"],
+                field_name="parameters",
+            ),
             status=AutomationRunStatus(row["status"]),
             attempt_count=row["attempt_count"],
             available_at=row["available_at"],

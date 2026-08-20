@@ -16,6 +16,10 @@ const mocks = vi.hoisted(() => ({
 const state: any = {
     activeWorkspace: { id: 'ws-1', displayName: 'Regional analysis' },
     serverConfig: { AUTOMATION_ENABLED: true },
+    models: [],
+    globalModels: [],
+    selectedModelId: null,
+    config: { formulateTimeoutSeconds: 180 },
 };
 
 vi.mock('react-redux', () => ({
@@ -36,7 +40,7 @@ vi.mock('../../../../src/app/automationApi', () => ({
 
 vi.mock('../../../../src/views/AutomationOperations', () => ({
     SchedulePanel: () => <section aria-label="Schedule settings">Schedule settings</section>,
-    RunsInbox: () => <section aria-label="Runs Inbox">Runs Inbox</section>,
+    RunsInbox: () => <section aria-label="Run history">Run history</section>,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -44,29 +48,39 @@ vi.mock('react-i18next', () => ({
     useTranslation: () => ({
         t: (key: string, values?: Record<string, unknown>) => ({
             'automation.title': 'Automation',
-            'automation.subtitle': 'Manage deterministic recipes',
+            'automation.subtitle': 'Run recipes on a schedule',
             'automation.openApp': 'Open App',
             'automation.unavailable': 'Automation is unavailable',
             'automation.recipes': 'Recipes',
             'automation.versionsCount': `${values?.count} versions`,
             'automation.updated': `Updated ${values?.date}`,
             'automation.versionPicker': 'Version',
-            'automation.runResult.title': 'Latest run result',
-            'automation.runResult.status.succeeded': 'Succeeded',
-            'automation.runResult.status.failed': 'Failed',
+            'automation.recipeDetails': 'Recipe details',
+            'automation.recipeDetailsSummary': `${values?.inputCount} inputs · ${values?.stepCount} steps`,
+            'automation.inputSchema': 'Data structure',
+            'automation.artifactId': 'Artifact',
+            'automation.runResult.title': 'Validation result',
+            'automation.runResult.status.succeeded': 'Passed',
+            'automation.runResult.status.failed': 'Not passed',
             'automation.runResult.status.needs_review': 'Needs review',
-            'automation.runResult.kind.dry_run': 'Dry run result',
+            'automation.runResult.kind.dry_run': 'Recipe validation',
             'automation.runResult.kind.manual': 'Manual run result',
             'automation.runResult.runId': 'Run ID',
             'automation.runResult.summary': `${values?.count} steps · ${values?.duration} ms`,
-            'automation.runResult.steps': 'Step results',
+            'automation.runResult.steps': 'Run steps',
             'automation.runResult.noSteps': 'No step result',
-            'automation.runResult.finalOutput': 'Final output',
+            'automation.runResult.needsReview': 'The source data changed.',
+            'automation.runResult.failedHelp': 'Validation did not pass.',
+            'automation.runResult.technicalInfo': 'Technical information',
+            'automation.runResult.finalOutput': 'Result',
             'automation.runResult.duration': `${values?.duration} ms`,
             'automation.runResult.outputPath': 'Saved output',
             'automation.runResult.contentHash': 'content',
             'automation.runResult.schemaHash': 'schema',
-            'automation.runs.queuedNotice': `Run ${values?.runId} queued.`,
+            'automation.runs.queuedNotice': 'The run is queued. Follow its progress below.',
+            'automation.runSettings': 'Run settings',
+            'automation.manualParameterHelp': 'Choose values for this one-off run.',
+            'automation.validationParameterHelp': 'Choose values for validation.',
             'recipes.status.draft': 'Draft',
             'recipes.status.published': 'Published',
             'recipes.versionNumber': `Version ${values?.number}`,
@@ -77,12 +91,16 @@ vi.mock('react-i18next', () => ({
             'recipes.inputMode.refreshable': 'Refreshable',
             'recipes.steps': 'Steps',
             'recipes.stepKind.load': 'Load data',
-            'recipes.dryRun': 'Dry run',
-            'recipes.dryRunSucceeded': 'Dry run succeeded',
-            'recipes.runNow': 'Run now',
+            'recipes.dryRun': 'Validate recipe',
+            'recipes.dryRunSucceeded': 'Validation passed',
+            'recipes.runNow': 'Run once',
+            'recipes.archive': 'Archive version',
             'recipes.runSucceeded': `Run ${values?.runId} succeeded.`,
             'recipes.runFailed': 'Run failed',
             'recipes.refreshAfterActionFailed': 'Action completed, but Automation could not be refreshed.',
+            'recipes.invalidParameter': `Enter a valid value for ${values?.name}.`,
+            'recipes.true': 'True',
+            'recipes.false': 'False',
         }[key] ?? key),
     }),
 }));
@@ -160,6 +178,29 @@ const publishedDetail = {
     spec: { ...detail.spec, version_id: 'rv_1' },
 };
 
+const parameterizedPublishedDetail = {
+    ...publishedDetail,
+    spec: {
+        ...publishedDetail.spec,
+        parameters: [
+            {
+                id: 'region',
+                name: 'Region',
+                type: 'string' as const,
+                required: true,
+                default: 'west',
+            },
+            {
+                id: 'row_limit',
+                name: 'Row limit',
+                type: 'integer' as const,
+                required: true,
+                default: 100,
+            },
+        ],
+    },
+};
+
 function deferred<T>() {
     let resolve!: (value: T) => void;
     const promise = new Promise<T>(next => {
@@ -212,29 +253,47 @@ describe('Automation page', () => {
         expect(screen.getByText('Load data')).toBeInTheDocument();
         expect(screen.queryByRole('link', { name: 'Open App' })).not.toBeInTheDocument();
 
-        fireEvent.click(screen.getByRole('button', { name: 'Dry run' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Validate recipe' }));
 
         await waitFor(() => {
             expect(mocks.dryRunRecipe).toHaveBeenCalledWith('rv_2', {});
         });
-        expect(await screen.findByText('Dry run succeeded')).toBeInTheDocument();
-        const resultPanel = screen.getByRole('region', { name: 'Latest run result' });
-        expect(within(resultPanel).getByText('Succeeded')).toBeInTheDocument();
+        expect(await screen.findByText('Validation passed')).toBeInTheDocument();
+        const resultPanel = screen.getByRole('region', { name: 'Validation result' });
+        expect(within(resultPanel).getByText('Passed')).toBeInTheDocument();
+        expect(within(resultPanel).getByText('Result')).toBeInTheDocument();
+        const technicalInfo = within(resultPanel).getByRole('button', { name: 'Technical information' });
+        expect(technicalInfo).toHaveAttribute('aria-expanded', 'false');
+        fireEvent.click(technicalInfo);
         expect(within(resultPanel).getByText(/run_1/)).toBeInTheDocument();
         expect(within(resultPanel).getByText(/workspace\/data\/orders.parquet/)).toBeInTheDocument();
-        expect(within(resultPanel).getByText('Final output')).toBeInTheDocument();
     });
 
     it('persists a default-binding manual run in the Runs Inbox', async () => {
         render(<MemoryRouter initialEntries={['/automation?version=rv_1']}><Automation /></MemoryRouter>);
 
         expect(await screen.findByText('Published')).toBeInTheDocument();
-        fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Run once' }));
 
-        await waitFor(() => expect(mocks.enqueueManualRun).toHaveBeenCalledWith('rv_1'));
-        expect(await screen.findByText('Run run_queued queued.')).toBeInTheDocument();
-        expect(screen.getByRole('region', { name: 'Runs Inbox' })).toBeInTheDocument();
-        expect(screen.queryByRole('region', { name: 'Latest run result' })).not.toBeInTheDocument();
+        await waitFor(() => expect(mocks.enqueueManualRun).toHaveBeenCalledWith('rv_1', {}));
+        expect(await screen.findByText('The run is queued. Follow its progress below.')).toBeInTheDocument();
+        expect(screen.getByRole('region', { name: 'Run history' })).toBeInTheDocument();
+        expect(screen.queryByRole('region', { name: 'Validation result' })).not.toBeInTheDocument();
+    });
+
+    it('sends the one-off values the user selected and leaves schedule values independent', async () => {
+        mocks.getRecipeVersion.mockResolvedValue(parameterizedPublishedDetail);
+        render(<MemoryRouter initialEntries={['/automation?version=rv_1']}><Automation /></MemoryRouter>);
+
+        expect(await screen.findByText('Run settings')).toBeInTheDocument();
+        fireEvent.change(screen.getByDisplayValue('west'), { target: { value: 'east' } });
+        fireEvent.change(screen.getByDisplayValue('100'), { target: { value: '25' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Run once' }));
+
+        await waitFor(() => expect(mocks.enqueueManualRun).toHaveBeenCalledWith(
+            'rv_1',
+            { region: 'east', row_limit: 25 },
+        ));
     });
 
     it('switches versions inside the selected recipe', async () => {
@@ -308,10 +367,10 @@ describe('Automation page', () => {
         render(<MemoryRouter initialEntries={['/automation?version=rv_1']}><Automation /></MemoryRouter>);
 
         expect(await screen.findByText('Published')).toBeInTheDocument();
-        fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Run once' }));
 
-        await waitFor(() => expect(mocks.enqueueManualRun).toHaveBeenCalledWith('rv_1'));
-        expect(await screen.findByText('Run run_queued queued.')).toBeInTheDocument();
+        await waitFor(() => expect(mocks.enqueueManualRun).toHaveBeenCalledWith('rv_1', {}));
+        expect(await screen.findByText('The run is queued. Follow its progress below.')).toBeInTheDocument();
         expect(screen.getByText('Action completed, but Automation could not be refreshed.')).toBeInTheDocument();
         expect(screen.queryByText('recipes.actionFailed')).not.toBeInTheDocument();
     });

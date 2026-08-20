@@ -238,6 +238,7 @@ def get_client(model_config, trusted=False):
         model_config.get("api_key") or None,
         model_config.get("api_base") or None,
         model_config.get("api_version") or None,
+        model_config.get("enable_thinking") if trusted else None,
     )
 
     return client
@@ -688,6 +689,8 @@ def refresh_derived_data():
     - code: the Python transformation code to execute
     - code_signature: HMAC-SHA256 signature of the code (required)
     - output_variable: the variable name containing the result DataFrame (required)
+    - parameter_slots: optional immutable typed scalar declarations used by the
+      signed code through literal params["slot_id"] lookups
     - output_table_name: the workspace table name to update with results (required if virtual=true)
     - virtual: boolean flag indicating whether to save result to workspace
     
@@ -705,6 +708,7 @@ def refresh_derived_data():
     code = data.get('code', '')
     code_signature = data.get('code_signature', '')
     output_variable = data.get('output_variable')
+    raw_parameter_slots = data.get('parameter_slots', [])
     output_table_name = data.get('output_table_name')
     virtual = data.get('virtual', False)
 
@@ -735,6 +739,24 @@ def refresh_derived_data():
     if not output_variable.isidentifier():
         raise AppError(ErrorCode.VALIDATION_ERROR, "output_variable must be a valid Python identifier")
 
+    from data_formulator.recipes.transform_parameters import (
+        normalize_transform_parameter_slots,
+        transform_parameter_defaults,
+        validate_parameterized_transform_code,
+    )
+
+    try:
+        parameter_slots = normalize_transform_parameter_slots(raw_parameter_slots)
+        if parameter_slots and output_variable == "params":
+            raise ValueError("output_variable cannot use the reserved name 'params'")
+        if parameter_slots:
+            validate_parameterized_transform_code(code, parameter_slots)
+    except (TypeError, ValueError) as exc:
+        raise AppError(
+            ErrorCode.VALIDATION_ERROR,
+            f"Invalid transform parameter declaration: {exc}",
+        ) from exc
+
     if virtual and not output_table_name:
         raise AppError(ErrorCode.VALIDATION_ERROR, "output_table_name is required when virtual=true")
 
@@ -747,11 +769,16 @@ def refresh_derived_data():
 
         sandbox = create_sandbox(cli_args.get('sandbox', 'local'))
 
-        result = sandbox.run_python_code(
+        sandbox_kwargs = dict(
             code=code,
             workspace=workspace,
             output_variable=output_variable,
         )
+        if parameter_slots:
+            sandbox_kwargs["parameters"] = transform_parameter_defaults(
+                parameter_slots
+            )
+        result = sandbox.run_python_code(**sandbox_kwargs)
 
         if result['status'] == 'ok':
             result_df = result['content']

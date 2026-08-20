@@ -118,18 +118,28 @@ def bind_recipe_parameters(
         if binding.parameter_id not in resolved:
             continue
         execution = executions[binding.step_id]
-        connector_step = execution["step"]
-        query = connector_step.setdefault("query", {})
         value = resolved[binding.parameter_id]
         if binding.target is BindingTarget.LOAD_FILTER_VALUE:
+            connector_step = execution["step"]
+            query = connector_step.setdefault("query", {})
             filter_index = binding.filter_index
             if filter_index is None:  # pragma: no cover - RecipeSpec validates this
                 raise ValueError("load_filter_value binding requires filter_index")
             query["filters"][filter_index]["value"] = value
         elif binding.target is BindingTarget.LOAD_LIMIT:
+            connector_step = execution["step"]
+            query = connector_step.setdefault("query", {})
             if value < 1:
                 raise ValueError("load_limit parameter must be positive")
             query["limit"] = value
+        elif binding.target is BindingTarget.TRANSFORM_PARAMETER:
+            slot_name = binding.slot_name
+            if slot_name is None:  # pragma: no cover - RecipeSpec validates this
+                raise ValueError("transform_parameter binding requires slot_name")
+            parameter_values = execution.setdefault("parameter_values", {})
+            if not isinstance(parameter_values, dict):
+                raise ValueError("Transform parameter values must be an object")
+            parameter_values[slot_name] = value
         else:  # pragma: no cover - enum construction prevents this
             raise ValueError(f"Unsupported binding target: {binding.target}")
 

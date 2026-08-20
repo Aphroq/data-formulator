@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from data_formulator.recipes.models import HashDigest
+from data_formulator.recipes.canonical import FrozenJsonValue
 
 
 _SCHEDULE_ID_PATTERN = re.compile(r"^sch_[0-9a-f]{32}$")
@@ -41,6 +43,7 @@ class StoredSchedule:
     name: str
     cron_expression: str
     timezone: str
+    parameter_policy: Mapping[str, FrozenJsonValue]
     enabled: bool
     next_run_at: str
     created_at: str
@@ -56,6 +59,7 @@ class StoredAutomationRun:
     schedule_id: str | None
     trigger: AutomationRunTrigger
     scheduled_for: str
+    parameter_values: Mapping[str, FrozenJsonValue]
     status: AutomationRunStatus
     attempt_count: int
     available_at: str

@@ -375,7 +375,7 @@ class AutomationWorker:
                 )
                 execution = executor.execute(
                     loaded.compiled.spec,
-                    parameter_values={},
+                    parameter_values=claimed.parameter_values,
                     kind=RecipeRunKind.AUTOMATION,
                     run_id=attempt_run_id,
                     checkpoint=heartbeat.checkpoint,

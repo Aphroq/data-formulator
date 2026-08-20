@@ -12,8 +12,10 @@ import logging
 import os
 import threading
 import warnings
+from collections.abc import Mapping
 from multiprocessing import Pipe, Process
 from sys import addaudithook
+from typing import Any
 
 import pandas as pd
 
@@ -507,6 +509,8 @@ class LocalSandbox(Sandbox):
         code: str,
         workspace,
         output_variable: str,
+        *,
+        parameters: Mapping[str, Any] | None = None,
     ) -> dict:
         """Execute *code* and return the result DataFrame.
 
@@ -531,6 +535,8 @@ class LocalSandbox(Sandbox):
                 logger.warning(f"[LocalSandbox] failed to list workspace dir: {e}")
             try:
                 allowed_objects = {output_variable: None}
+                if parameters is not None:
+                    allowed_objects["params"] = dict(parameters)
                 result = self._run_in_warm_subprocess(code, allowed_objects, workspace_path)
 
                 if result["status"] == "ok":

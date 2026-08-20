@@ -319,8 +319,8 @@ def test_run_artifacts_do_not_persist_bound_values_or_connector_errors(
     execution["step"]["query"] = {
         "filters": [{
             "column": "region",
-            "op": "eq",
-            "value": "compile-time-value",
+            "op": "ilike",
+            "value": "%compile-time-value%",
         }]
     }
     changed_load = RecipeStep(
@@ -348,12 +348,13 @@ def test_run_artifacts_do_not_persist_bound_values_or_connector_errors(
         ),),
     )
 
+    bound_value = "%west%"
     succeeded = RecipeExecutor(
         recipe_workspace,
         loader_resolver=lambda _source_id: _RunLoader(),
     ).execute(
         parameterized,
-        parameter_values={"region_filter": "bound-value-do-not-persist"},
+        parameter_values={"region_filter": bound_value},
         kind=RecipeRunKind.DRY_RUN,
     )
     failed = RecipeExecutor(
@@ -361,7 +362,7 @@ def test_run_artifacts_do_not_persist_bound_values_or_connector_errors(
         loader_resolver=lambda _source_id: _FailingLoader(),
     ).execute(
         parameterized,
-        parameter_values={"region_filter": "bound-value-do-not-persist"},
+        parameter_values={"region_filter": bound_value},
         kind=RecipeRunKind.DRY_RUN,
     )
 
@@ -375,7 +376,7 @@ def test_run_artifacts_do_not_persist_bound_values_or_connector_errors(
             for path in run_dir.rglob("*")
             if path.is_file()
         )
-        assert b"bound-value-do-not-persist" not in persisted
+        assert bound_value.encode("utf-8") not in persisted
         assert b"password=do-not-persist" not in persisted
     assert "password=do-not-persist" not in caplog.text
 

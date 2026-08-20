@@ -221,7 +221,15 @@ class Client(object):
     Returns a LiteLLM client configured for the specified endpoint and model.
     Supports OpenAI, Azure, Ollama, and other providers via LiteLLM.
     """
-    def __init__(self, endpoint, model, api_key=None,  api_base=None, api_version=None):
+    def __init__(
+        self,
+        endpoint,
+        model,
+        api_key=None,
+        api_base=None,
+        api_version=None,
+        enable_thinking=None,
+    ):
         
         self.endpoint = endpoint
         self.model = model
@@ -233,6 +241,15 @@ class Client(object):
             self.params["api_base"] = api_base
         if api_version is not None and api_version != "":
             self.params["api_version"] = api_version
+
+        if self.endpoint == "openai" and type(enable_thinking) is bool:
+            # Some OpenAI-compatible providers expose an explicit thinking
+            # switch outside the standard Chat Completions schema. Keep it a
+            # server-side provider configuration rather than inferring model
+            # capabilities or adding provider-specific controls to the UI.
+            self.params["extra_body"] = {
+                "enable_thinking": enable_thinking,
+            }
 
         if self.endpoint == "openai":
             if not model.startswith("openai/"):
@@ -343,7 +360,7 @@ class Client(object):
         return "reasoning_effort" in lowered or "does not support thinking" in lowered
 
     @classmethod
-    def from_config(cls, model_config: dict[str, str]):
+    def from_config(cls, model_config: dict):
         """
         Create a client instance from model configuration.
         
@@ -363,7 +380,8 @@ class Client(object):
             model_config["model"],
             model_config.get("api_key"),
             model_config.get("api_base"),
-            model_config.get("api_version")
+            model_config.get("api_version"),
+            model_config.get("enable_thinking"),
         )
 
     def ping(self, timeout: int = 10):

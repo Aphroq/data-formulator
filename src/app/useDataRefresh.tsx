@@ -531,6 +531,9 @@ export function useDerivedTableRefresh() {
                 virtual: !!derivedTable.virtual?.tableId,
                 output_table_name: derivedTable.virtual?.tableId
             };
+            if (derivedTable.derive?.parameterSlots?.length) {
+                requestBody.parameter_slots = derivedTable.derive.parameterSlots;
+            }
             
             const { data } = await apiRequest<{ rows?: any[]; message?: string }>(getUrls().REFRESH_DERIVED_DATA, {
                 method: 'POST',

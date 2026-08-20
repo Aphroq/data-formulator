@@ -57,6 +57,49 @@ class TestModelNamePrefixing:
 
 
 # ---------------------------------------------------------------------------
+# Provider-specific request defaults
+# ---------------------------------------------------------------------------
+
+class TestProviderRequestDefaults:
+    @pytest.mark.parametrize("enable_thinking", [False, True])
+    def test_openai_compatible_thinking_setting_is_explicit(
+        self,
+        enable_thinking,
+    ):
+        client = Client(
+            "openai",
+            "provider/model",
+            api_key="k",
+            api_base="https://provider.example/v1",
+            enable_thinking=enable_thinking,
+        )
+
+        assert client.params["extra_body"] == {
+            "enable_thinking": enable_thinking,
+        }
+
+    def test_openai_compatible_model_without_setting_keeps_defaults(self):
+        client = Client(
+            "openai",
+            "provider/model",
+            api_key="k",
+            api_base="https://provider.example/v1",
+        )
+
+        assert "extra_body" not in client.params
+
+    def test_non_openai_endpoint_does_not_receive_provider_extra_body(self):
+        client = Client(
+            "anthropic",
+            "claude-test",
+            api_key="k",
+            enable_thinking=False,
+        )
+
+        assert "extra_body" not in client.params
+
+
+# ---------------------------------------------------------------------------
 # Ollama api_base normalisation
 # ---------------------------------------------------------------------------
 
@@ -330,6 +373,16 @@ class TestFromConfig:
         cfg = {"endpoint": "gemini", "model": "gemini-pro", "api_key": "k"}
         c = Client.from_config(cfg)
         assert c.model.startswith("gemini/")
+
+    def test_explicit_thinking_setting_applied_via_from_config(self):
+        cfg = {
+            "endpoint": "openai",
+            "model": "provider/model",
+            "api_key": "k",
+            "enable_thinking": False,
+        }
+        c = Client.from_config(cfg)
+        assert c.params["extra_body"] == {"enable_thinking": False}
 
 
 # ---------------------------------------------------------------------------

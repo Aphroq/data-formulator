@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
     cancelAutomationRun: vi.fn(),
     getRunManifest: vi.fn(),
     getRunEvents: vi.fn(),
+    getRunResult: vi.fn(),
 }));
 
 vi.mock('../../../../src/app/automationApi', () => ({
@@ -23,59 +24,95 @@ vi.mock('../../../../src/app/automationApi', () => ({
     cancelAutomationRun: mocks.cancelAutomationRun,
     getRunManifest: mocks.getRunManifest,
     getRunEvents: mocks.getRunEvents,
+    getRunResult: mocks.getRunResult,
+}));
+
+vi.mock('../../../../src/views/AutomationRunResultView', () => ({
+    AutomationRunResultView: () => <div>Saved run output</div>,
 }));
 
 vi.mock('react-i18next', () => ({
     initReactI18next: { type: '3rdParty', init: vi.fn() },
     useTranslation: () => ({
         t: (key: string, values?: Record<string, unknown>) => ({
-            'automation.schedules.title': 'Schedules',
-            'automation.schedules.description': 'Schedules stay pinned to this version.',
-            'automation.schedules.name': 'Schedule name',
-            'automation.schedules.mode': 'Schedule type',
+            'automation.schedules.title': 'Scheduled runs',
+            'automation.schedules.description': 'Runs continue after this page closes.',
+            'automation.schedules.add': 'Add schedule',
+            'automation.schedules.defaultName': 'Daily run',
+            'automation.schedules.formCreateTitle': 'New scheduled run',
+            'automation.schedules.formEditTitle': 'Edit scheduled run',
+            'automation.schedules.name': 'Name',
+            'automation.schedules.mode': 'Frequency',
             'automation.schedules.modeDaily': 'Daily',
-            'automation.schedules.modeCron': 'Cron',
-            'automation.schedules.dailyTime': 'Daily time',
+            'automation.schedules.modeCron': 'Custom Cron',
+            'automation.schedules.dailyTime': 'Run time',
             'automation.schedules.cron': 'Cron expression',
-            'automation.schedules.timezone': 'Timezone',
-            'automation.schedules.create': 'Create schedule',
-            'automation.schedules.save': 'Save schedule',
-            'automation.schedules.edit': 'Edit schedule',
-            'automation.schedules.cancelEdit': 'Cancel editing',
-            'automation.schedules.enable': 'Enable schedule',
-            'automation.schedules.disable': 'Disable schedule',
-            'automation.schedules.enabled': 'Enabled',
-            'automation.schedules.disabled': 'Disabled',
-            'automation.schedules.nextRun': `Next run ${values?.date}`,
-            'automation.schedules.empty': 'No schedule for this version.',
+            'automation.schedules.timezone': 'Time zone',
+            'automation.schedules.runParameters': 'Values for each run',
+            'automation.schedules.runParametersHelp': 'Choose fixed or run-relative values.',
+            'automation.schedules.valueSource': 'Value source',
+            'automation.schedules.fixedValue': 'Fixed value',
+            'automation.schedules.relativeValue': 'Follow run day',
+            'automation.schedules.value': 'Value',
+            'automation.schedules.relativeDay': 'Run-relative day',
+            'automation.schedules.previousDay': 'Previous day',
+            'automation.schedules.runDay': 'Run day',
+            'automation.schedules.nextDay': 'Next day',
+            'automation.schedules.moreSettings': 'More settings',
+            'automation.schedules.fewerSettings': 'Hide settings',
+            'automation.schedules.dailySummary': `Every day at ${values?.time}`,
+            'automation.schedules.customSummary': 'Custom timing',
+            'automation.schedules.create': 'Save',
+            'automation.schedules.save': 'Save',
+            'automation.schedules.edit': 'Edit',
+            'automation.schedules.cancelEdit': 'Cancel',
+            'automation.schedules.enable': 'Resume',
+            'automation.schedules.disable': 'Pause',
+            'automation.schedules.enabled': 'Active',
+            'automation.schedules.disabled': 'Paused',
+            'automation.schedules.nextRun': `Next: ${values?.date}`,
+            'automation.schedules.empty': 'No scheduled runs yet.',
             'automation.schedules.loadFailed': 'Schedules could not be loaded.',
             'automation.schedules.actionFailed': 'Schedule action failed.',
-            'automation.runs.title': 'Runs Inbox',
-            'automation.runs.description': 'Persistent manual and scheduled runs.',
-            'automation.runs.refresh': 'Refresh runs',
-            'automation.runs.filter': 'Run status',
-            'automation.runs.all': 'All runs',
+            'automation.runs.title': 'Run history',
+            'automation.runs.description': 'Manual and scheduled results.',
+            'automation.runs.refresh': 'Refresh',
+            'automation.runs.filter': 'Status',
+            'automation.runs.all': 'All',
             'automation.runs.empty': 'No runs yet.',
             'automation.runs.loadFailed': 'Runs could not be loaded.',
-            'automation.runs.cancel': 'Cancel run',
-            'automation.runs.inspect': 'Inspect run',
-            'automation.runs.reviewRecipe': 'Review recipe',
-            'automation.runs.needsReview': 'Schema drift needs review.',
+            'automation.runs.cancel': 'Cancel',
+            'automation.runs.inspect': 'View details',
+            'automation.runs.viewResult': 'View result',
+            'automation.runs.reviewRecipe': 'Update recipe',
+            'automation.runs.needsReview': 'The source data structure changed. Update the recipe.',
+            'automation.runs.failedHelp': 'This run failed. Open details for more information.',
             'automation.runs.attempts': `${values?.count} attempts`,
-            'automation.runs.trigger.manual': 'Manual',
-            'automation.runs.trigger.scheduled': 'Scheduled',
-            'automation.runs.status.queued': 'Queued',
+            'automation.runs.trigger.manual': 'Manual run',
+            'automation.runs.trigger.scheduled': 'Scheduled run',
+            'automation.runs.status.queued': 'Waiting',
             'automation.runs.status.running': 'Running',
-            'automation.runs.status.succeeded': 'Succeeded',
+            'automation.runs.status.succeeded': 'Completed',
             'automation.runs.status.failed': 'Failed',
             'automation.runs.status.needs_review': 'Needs review',
             'automation.runs.status.cancelled': 'Cancelled',
-            'automation.runs.artifactTitle': 'Run audit',
+            'automation.runs.artifactTitle': 'Run details',
+            'automation.runs.resultTitle': `${values?.name} — Analysis report`,
             'automation.runs.manifest': 'Manifest',
-            'automation.runs.events': 'Events',
+            'automation.runs.events': 'Run steps',
             'automation.runs.noEvents': 'No events.',
+            'automation.runs.technicalInfo': 'Technical information',
+            'automation.runs.runIdentifier': 'Run ID',
+            'automation.runs.versionIdentifier': 'Published version',
+            'automation.runs.outputFiles': 'Output files',
+            'automation.runs.eventStatus.needs_review': 'Needs review',
             'automation.runs.close': 'Close',
-            'automation.runs.artifactFailed': 'Run audit could not be loaded.',
+            'automation.runs.artifactFailed': 'Run details could not be loaded.',
+            'automation.runs.usedParameters': 'Values used by this run',
+            'automation.runs.parameterSummary': `Values: ${values?.values}`,
+            'recipes.invalidParameter': `Enter a valid value for ${values?.name}.`,
+            'recipes.true': 'True',
+            'recipes.false': 'False',
             'recipes.stepKind.load': 'Load data',
         }[key] ?? key),
     }),
@@ -94,6 +131,7 @@ const schedule = {
     next_run_at: '2026-08-21T09:00:00Z',
     created_at: '2026-08-20T00:00:00Z',
     updated_at: '2026-08-20T00:00:00Z',
+    parameter_policy: {},
 };
 
 const recipe = {
@@ -135,6 +173,7 @@ const needsReviewRun = {
     error: { code: 'SCHEMA_DRIFT', message: 'Schema changed.' },
     created_at: '2026-08-21T09:00:00Z',
     updated_at: '2026-08-21T09:00:05Z',
+    parameters: { region: 'west' },
 };
 
 const queuedRun = {
@@ -145,6 +184,15 @@ const queuedRun = {
     status: 'queued' as const,
     attempt_count: 0,
     artifact: null,
+    error: null,
+};
+
+const succeededRun = {
+    ...needsReviewRun,
+    run_id: `run_${'5'.repeat(32)}`,
+    trigger: 'manual' as const,
+    schedule_id: null,
+    status: 'succeeded' as const,
     error: null,
 };
 
@@ -183,55 +231,176 @@ beforeEach(() => {
         recorded_at: '2026-08-21T09:00:05Z',
         details: { duration_ms: 12 },
     }]);
+    mocks.getRunResult.mockResolvedValue({
+        manifest: {
+            run_id: succeededRun.artifact.run_id,
+            recipe_id: recipe.recipe_id,
+            version_id: schedule.version_id,
+            kind: 'automation',
+            status: 'succeeded',
+            binding_hash: 'sha256:b',
+            error: null,
+            files: { 'workspace/regional_totals.parquet': { hash: 'sha256:d', size: 20 } },
+        },
+        events: [],
+        report: {
+            title: 'Regional totals',
+            description: 'Compare the saved totals by region.',
+            parameters: [{
+                id: 'region',
+                name: 'Region',
+                description: 'Region included in this run.',
+                type: 'string',
+            }],
+            steps: [
+                { step_id: 'step_1', kind: 'load', title: 'Orders' },
+                { step_id: 'step_2', kind: 'transform', title: 'regional_totals' },
+                { step_id: 'step_3', kind: 'chart', title: 'Regional totals' },
+            ],
+        },
+        outputs: [{
+            step_id: 'step_3',
+            kind: 'chart',
+            title: 'Regional totals',
+            subtitle: '',
+            display_instruction: 'Compare totals by region',
+            chart: null,
+            table: {
+                name: 'regional_totals',
+                row_count: 2,
+                column_count: 2,
+                columns: [
+                    { name: 'region', type: 'string' },
+                    { name: 'total', type: 'integer' },
+                ],
+                rows: [{ region: 'east', total: 40 }],
+                rows_truncated: true,
+                columns_truncated: false,
+            },
+        }],
+    });
 });
 
 
 describe('Schedule panel', () => {
     it('creates a daily schedule by converting local controls to canonical Cron', async () => {
-        render(<SchedulePanel versionId={schedule.version_id} versionStatus="published" />);
+        render(<SchedulePanel versionId={schedule.version_id} versionStatus="published" parameters={[]} />);
 
-        expect(await screen.findByText('No schedule for this version.')).toBeInTheDocument();
-        fireEvent.change(screen.getByLabelText(/Schedule name/), { target: { value: 'Morning totals' } });
-        fireEvent.change(screen.getByLabelText('Daily time'), { target: { value: '08:35' } });
-        fireEvent.change(screen.getByLabelText(/Timezone/), { target: { value: 'Asia/Shanghai' } });
-        fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
+        expect(await screen.findByText('No scheduled runs yet.')).toBeInTheDocument();
+        expect(screen.queryByLabelText(/Name/)).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Add schedule' }));
+        fireEvent.change(screen.getByLabelText(/Name/), { target: { value: 'Morning totals' } });
+        fireEvent.change(screen.getByLabelText('Run time'), { target: { value: '08:35' } });
+        fireEvent.click(screen.getByRole('button', { name: 'More settings' }));
+        fireEvent.change(screen.getByLabelText(/Time zone/), { target: { value: 'Asia/Shanghai' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
         await waitFor(() => expect(mocks.createSchedule).toHaveBeenCalledWith({
             versionId: schedule.version_id,
             name: 'Morning totals',
             cronExpression: '35 8 * * *',
             timezone: 'Asia/Shanghai',
+            parameterPolicy: {},
         }));
     });
 
     it('edits and disables an existing fixed-version schedule', async () => {
         mocks.listSchedules.mockResolvedValue([schedule]);
-        render(<SchedulePanel versionId={schedule.version_id} versionStatus="published" />);
+        render(<SchedulePanel versionId={schedule.version_id} versionStatus="published" parameters={[]} />);
 
         expect(await screen.findByText('Daily totals')).toBeInTheDocument();
-        fireEvent.click(screen.getByRole('button', { name: 'Edit schedule' }));
-        fireEvent.change(screen.getByLabelText(/Schedule name/), { target: { value: 'Weekday totals' } });
-        fireEvent.change(screen.getByLabelText(/Cron expression/), { target: { value: '30 8 * * 1-5' } });
-        fireEvent.click(screen.getByRole('button', { name: 'Save schedule' }));
+        expect(screen.getByText(/Every day at 09:00/)).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+        fireEvent.change(screen.getByLabelText(/Name/), { target: { value: 'Morning totals' } });
+        fireEvent.change(screen.getByLabelText('Run time'), { target: { value: '08:30' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
         await waitFor(() => expect(mocks.updateSchedule).toHaveBeenCalledWith(
             schedule.schedule_id,
             {
-                name: 'Weekday totals',
-                cronExpression: '30 8 * * 1-5',
+                name: 'Morning totals',
+                cronExpression: '30 8 * * *',
                 timezone: 'UTC',
+                parameterPolicy: {},
             },
         ));
-        fireEvent.click(screen.getByRole('button', { name: 'Disable schedule' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
         await waitFor(() => expect(mocks.setScheduleEnabled).toHaveBeenCalledWith(
             schedule.schedule_id,
             false,
+        ));
+        expect(screen.queryByText(/Next:/)).not.toBeInTheDocument();
+    });
+
+    it('configures date values relative to the planned run and keeps typed literals', async () => {
+        render(
+            <SchedulePanel
+                versionId={schedule.version_id}
+                versionStatus="published"
+                parameters={[
+                    {
+                        id: 'as_of',
+                        name: 'As of date',
+                        type: 'date',
+                        required: true,
+                        default: '2026-08-20',
+                    },
+                    {
+                        id: 'row_limit',
+                        name: 'Row limit',
+                        type: 'integer',
+                        required: true,
+                        default: 100,
+                    },
+                ]}
+            />,
+        );
+
+        expect(await screen.findByText('No scheduled runs yet.')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Add schedule' }));
+        fireEvent.change(screen.getByDisplayValue('100'), { target: { value: '25' } });
+        fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Value source' }));
+        fireEvent.click(screen.getByRole('option', { name: 'Follow run day' }));
+        fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Run-relative day' }));
+        fireEvent.click(screen.getByRole('option', { name: 'Previous day' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+        await waitFor(() => expect(mocks.createSchedule).toHaveBeenCalledWith(
+            expect.objectContaining({
+                parameterPolicy: {
+                    as_of: { source: 'scheduled_date', offset_days: -1 },
+                    row_limit: { source: 'literal', value: 25 },
+                },
+            }),
         ));
     });
 });
 
 
-describe('Runs Inbox', () => {
+describe('Run history', () => {
+    it('opens a successful Run as its saved result instead of replaying a Workflow', async () => {
+        mocks.listAutomationRuns.mockResolvedValue([succeededRun]);
+        render(
+            <RunsInbox
+                workspaceId="ws-1"
+                recipes={[recipe]}
+                refreshToken={0}
+                onSelectVersion={vi.fn()}
+            />,
+        );
+
+        const inbox = await screen.findByRole('region', { name: 'Run history' });
+        fireEvent.click(within(inbox).getByRole('button', { name: 'View result' }));
+
+        const dialog = await screen.findByRole('dialog', { name: 'Regional totals — Analysis report' });
+        expect(mocks.getRunResult).toHaveBeenCalledWith(succeededRun.run_id);
+        expect(mocks.getRunManifest).not.toHaveBeenCalled();
+        expect(mocks.getRunEvents).not.toHaveBeenCalled();
+        expect(within(dialog).getByText('Saved run output')).toBeInTheDocument();
+        expect(within(dialog).queryByText('Values used by this run')).not.toBeInTheDocument();
+        expect(within(dialog).getByText('Region: west')).toBeInTheDocument();
+    });
+
     it('surfaces Needs Review evidence, opens verified audit data, and returns to the Recipe', async () => {
         const onSelectVersion = vi.fn();
         render(
@@ -243,28 +412,32 @@ describe('Runs Inbox', () => {
             />,
         );
 
-        const inbox = await screen.findByRole('region', { name: 'Runs Inbox' });
-        expect(within(inbox).getByText('Schema drift needs review.')).toBeInTheDocument();
-        expect(within(inbox).getByText('SCHEMA_DRIFT')).toBeInTheDocument();
-        fireEvent.click(within(inbox).getByRole('button', { name: 'Review recipe' }));
+        const inbox = await screen.findByRole('region', { name: 'Run history' });
+        expect(within(inbox).getByText('The source data structure changed. Update the recipe.')).toBeInTheDocument();
+        expect(within(inbox).queryByText('SCHEMA_DRIFT')).not.toBeInTheDocument();
+        expect(within(inbox).queryByText(needsReviewRun.run_id)).not.toBeInTheDocument();
+        fireEvent.click(within(inbox).getByRole('button', { name: 'Update recipe' }));
         expect(onSelectVersion).toHaveBeenCalledWith(schedule.version_id);
 
-        fireEvent.click(within(inbox).getByRole('button', { name: 'Inspect run' }));
-        const dialog = await screen.findByRole('dialog', { name: 'Run audit' });
+        fireEvent.click(within(inbox).getByRole('button', { name: 'View details' }));
+        const dialog = await screen.findByRole('dialog', { name: 'Run details' });
         expect(mocks.getRunManifest).toHaveBeenCalledWith(needsReviewRun.run_id);
         expect(mocks.getRunEvents).toHaveBeenCalledWith(needsReviewRun.run_id);
-        expect(within(dialog).getByText('events.jsonl')).toBeInTheDocument();
         expect(within(dialog).getByText('Load data')).toBeInTheDocument();
+        const technicalInfo = within(dialog).getByRole('button', { name: 'Technical information' });
+        expect(technicalInfo).toHaveAttribute('aria-expanded', 'false');
+        fireEvent.click(technicalInfo);
+        expect(within(dialog).getByText('events.jsonl')).toBeInTheDocument();
     });
 
     it('cancels queued work and can filter the persistent inbox', async () => {
         render(<RunsInbox workspaceId="ws-1" recipes={[recipe]} refreshToken={0} onSelectVersion={vi.fn()} />);
 
-        const inbox = await screen.findByRole('region', { name: 'Runs Inbox' });
-        fireEvent.click(within(inbox).getByRole('button', { name: 'Cancel run' }));
+        const inbox = await screen.findByRole('region', { name: 'Run history' });
+        fireEvent.click(within(inbox).getByRole('button', { name: 'Cancel' }));
         await waitFor(() => expect(mocks.cancelAutomationRun).toHaveBeenCalledWith(queuedRun.run_id));
 
-        fireEvent.mouseDown(within(inbox).getByRole('combobox', { name: 'Run status' }));
+        fireEvent.mouseDown(within(inbox).getByRole('combobox', { name: 'Status' }));
         fireEvent.click(screen.getByRole('option', { name: 'Failed' }));
         await waitFor(() => expect(mocks.listAutomationRuns).toHaveBeenLastCalledWith({
             limit: 50,
@@ -287,6 +460,6 @@ describe('Runs Inbox', () => {
         expect(await screen.findByText('No runs yet.')).toBeInTheDocument();
 
         await act(async () => first.resolve([needsReviewRun]));
-        expect(screen.queryByText('SCHEMA_DRIFT')).not.toBeInTheDocument();
+        expect(screen.queryByText('Regional totals')).not.toBeInTheDocument();
     });
 });

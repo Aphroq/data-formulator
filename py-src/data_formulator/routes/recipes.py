@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import math
 import re
 from collections.abc import Mapping
@@ -15,13 +17,21 @@ from flask import Blueprint, current_app, request
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from data_formulator.auth.identity import get_identity_id
-from data_formulator.error_handler import json_ok
+from data_formulator.error_handler import classify_and_wrap_llm_error, json_ok
 from data_formulator.errors import AppError, ErrorCode
 from data_formulator.recipes.artifact_store import RecipeArtifactError
-from data_formulator.recipes.compiler import RecipeCompileError, RecipeCompiler
+from data_formulator.recipes.compiler import (
+    RecipeCompileError,
+    RecipeCompiler,
+    RecipeParameterConfiguration,
+)
 from data_formulator.recipes.executor import RecipeExecutionResult
 from data_formulator.recipes.lineage import ArtifactLineageError
 from data_formulator.recipes.openers import ExplicitConnectorOpener
+from data_formulator.recipes.parameter_suggestions import (
+    RecipeParameterSuggestionError,
+    suggest_recipe_parameter_configurations,
+)
 from data_formulator.recipes.repository import (
     RecipeNotFoundError,
     RecipeRepository,
@@ -37,12 +47,15 @@ from data_formulator.security.code_signing import (
     require_stable_code_signing,
 )
 from data_formulator.workspace_factory import get_workspace
+from data_formulator.routes.agents import _get_ui_lang, get_client
 
 
 recipes_bp = Blueprint("recipes", __name__, url_prefix="/api/recipes")
+logger = logging.getLogger(__name__)
 
 _View = TypeVar("_View", bound=Callable[..., Any])
 _ARTIFACT_ID_PATTERN = re.compile(r"^art_[0-9a-f]{64}$")
+_PARAMETER_CANDIDATE_ID_PATTERN = re.compile(r"^cand_[0-9a-f]{12}$")
 _MAX_SAFE_INTEGER = 2**53 - 1
 
 
@@ -163,6 +176,77 @@ def _parameter_values(data: Mapping[str, Any]) -> Mapping[str, Any]:
     return values
 
 
+def _target_artifact_ids(data: Mapping[str, Any]) -> list[str]:
+    targets = data.get("target_artifact_ids")
+    if (
+        not isinstance(targets, list)
+        or not targets
+        or len(targets) > 20
+        or any(
+            not isinstance(item, str)
+            or not _ARTIFACT_ID_PATTERN.fullmatch(item)
+            for item in targets
+        )
+    ):
+        raise AppError(
+            ErrorCode.INVALID_REQUEST,
+            "'target_artifact_ids' must contain 1 to 20 artifact ids.",
+        )
+    return targets
+
+
+def _parameter_candidate_ids(data: Mapping[str, Any]) -> list[str]:
+    values = data.get("parameter_candidate_ids", [])
+    if (
+        not isinstance(values, list)
+        or len(values) > 100
+        or any(
+            not isinstance(item, str)
+            or not _PARAMETER_CANDIDATE_ID_PATTERN.fullmatch(item)
+            for item in values
+        )
+    ):
+        raise AppError(
+            ErrorCode.INVALID_REQUEST,
+            "'parameter_candidate_ids' must contain valid candidate ids.",
+        )
+    return values
+
+
+def _parameter_configurations(
+    data: Mapping[str, Any],
+) -> list[RecipeParameterConfiguration]:
+    values = data.get("parameter_configurations", [])
+    if not isinstance(values, list) or len(values) > 100:
+        raise AppError(
+            ErrorCode.INVALID_REQUEST,
+            "'parameter_configurations' must be a list with at most 100 entries.",
+        )
+    result: list[RecipeParameterConfiguration] = []
+    for item in values:
+        if not isinstance(item, dict) or set(item) != {
+            "candidate_id",
+            "name",
+            "description",
+            "mode",
+        }:
+            raise AppError(
+                ErrorCode.INVALID_REQUEST,
+                "Each parameter configuration must contain candidate_id, name, "
+                "description, and mode.",
+            )
+        try:
+            result.append(RecipeParameterConfiguration(
+                candidate_id=item["candidate_id"],
+                name=item["name"],
+                description=item["description"],
+                mode=item["mode"],
+            ))
+        except (TypeError, ValueError) as exc:
+            raise AppError(ErrorCode.INVALID_REQUEST, str(exc)) from exc
+    return result
+
+
 def _stored_recipe(recipe: StoredRecipe) -> dict[str, Any]:
     return {
         "recipe_id": recipe.recipe_id,
@@ -222,29 +306,32 @@ def _loader_resolver(identity_id: str):
     return lambda source_id: opener.open(identity_id, source_id)
 
 
+@recipes_bp.route("/parameter-candidates", methods=["POST"])
+@_recipe_errors
+def parameter_candidates():
+    require_stable_code_signing()
+    _identity_id, workspace, _repository = _context()
+    data = _json_object()
+    if set(data) != {"target_artifact_ids"}:
+        raise AppError(
+            ErrorCode.INVALID_REQUEST,
+            "Only 'target_artifact_ids' may be provided.",
+        )
+    candidates = RecipeCompiler.for_workspace(workspace).parameter_candidates(
+        _target_artifact_ids(data)
+    )
+    return json_ok({"candidates": [item.to_dict() for item in candidates]})
+
+
 @recipes_bp.route("/compile", methods=["POST"])
 @_recipe_errors
 def compile_recipe():
     require_stable_code_signing()
     identity_id, workspace, repository = _context()
     data = _json_object()
-    targets = data.get("target_artifact_ids")
+    targets = _target_artifact_ids(data)
     name = data.get("name")
     description = data.get("description", "")
-    if (
-        not isinstance(targets, list)
-        or not targets
-        or len(targets) > 20
-        or any(
-            not isinstance(item, str)
-            or not _ARTIFACT_ID_PATTERN.fullmatch(item)
-            for item in targets
-        )
-    ):
-        raise AppError(
-            ErrorCode.INVALID_REQUEST,
-            "'target_artifact_ids' must contain 1 to 20 artifact ids.",
-        )
     if not isinstance(name, str) or not name.strip() or len(name.strip()) > 200:
         raise AppError(
             ErrorCode.INVALID_REQUEST,
@@ -260,6 +347,8 @@ def compile_recipe():
         name=name.strip(),
         description=description.strip(),
         created_by=identity_id,
+        parameter_candidate_ids=_parameter_candidate_ids(data),
+        parameter_configurations=_parameter_configurations(data),
     )
     version = repository.save_draft(workspace, compiled)
     return json_ok({
@@ -267,6 +356,109 @@ def compile_recipe():
         "spec": compiled.spec.to_dict(),
         "workflow_markdown": compiled.workflow_markdown,
     })
+
+
+@recipes_bp.route("/parameter-suggestions", methods=["POST"])
+@_recipe_errors
+def parameter_suggestions():
+    """Recommend meaningful workflow choices that have compiler-owned slots."""
+    require_stable_code_signing()
+    _identity_id, workspace, _repository = _context()
+    data = _json_object()
+    allowed = {
+        "target_artifact_ids",
+        "model",
+        "workflow_context",
+        "name",
+        "description",
+        "timeout_seconds",
+    }
+    if set(data) - allowed:
+        raise AppError(
+            ErrorCode.INVALID_REQUEST,
+            "Unsupported parameter suggestion field.",
+        )
+
+    targets = _target_artifact_ids(data)
+    name = data.get("name", "")
+    description = data.get("description", "")
+    if not isinstance(name, str) or len(name.strip()) > 200:
+        raise AppError(
+            ErrorCode.INVALID_REQUEST,
+            "'name' must be a string of at most 200 characters.",
+        )
+    if not isinstance(description, str) or len(description) > 2000:
+        raise AppError(
+            ErrorCode.INVALID_REQUEST,
+            "'description' must be a string of at most 2000 characters.",
+        )
+
+    model = data.get("model")
+    if (
+        not isinstance(model, dict)
+        or not isinstance(model.get("endpoint"), str)
+        or not model["endpoint"].strip()
+        or not isinstance(model.get("model"), str)
+        or not model["model"].strip()
+    ):
+        raise AppError(
+            ErrorCode.INVALID_REQUEST,
+            "A valid model configuration is required.",
+        )
+
+    workflow_context = data.get("workflow_context")
+    if workflow_context is not None and not isinstance(workflow_context, dict):
+        raise AppError(
+            ErrorCode.INVALID_REQUEST,
+            "'workflow_context' must be a JSON object.",
+        )
+    if workflow_context is not None:
+        encoded_context = json.dumps(
+            workflow_context,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if len(encoded_context) > 100_000:
+            raise AppError(
+                ErrorCode.INVALID_REQUEST,
+                "'workflow_context' exceeds the 100 KB limit.",
+            )
+
+    timeout_seconds = data.get("timeout_seconds", 120)
+    if (
+        type(timeout_seconds) not in {int, float}
+        or not 1 <= timeout_seconds <= 300
+    ):
+        raise AppError(
+            ErrorCode.INVALID_REQUEST,
+            "'timeout_seconds' must be between 1 and 300.",
+        )
+
+    candidates = RecipeCompiler.for_workspace(workspace).parameter_candidates(targets)
+    try:
+        client = get_client(model)
+        result = suggest_recipe_parameter_configurations(
+            client,
+            candidates,
+            workflow_context=workflow_context,
+            recipe_name=name.strip(),
+            description=description.strip(),
+            language_code=_get_ui_lang(),
+            timeout_seconds=timeout_seconds,
+        )
+    except AppError:
+        raise
+    except RecipeParameterSuggestionError as exc:
+        logger.warning("Model returned invalid Recipe parameter suggestions")
+        raise AppError(
+            ErrorCode.AGENT_ERROR,
+            "The model could not recommend run parameters. You can still "
+            "save this Recipe or choose adjustable values manually.",
+        ) from exc
+    except Exception as exc:
+        raise classify_and_wrap_llm_error(exc) from exc
+
+    return json_ok(result.to_dict())
 
 
 @recipes_bp.route("", methods=["GET"])

@@ -1010,10 +1010,12 @@ def _stream_csv_from_duckdb(workspace, table_name: str, delimiter: str):
     try:
         conn = duckdb.connect(":memory:")
         try:
-            cols = conn.execute(
-                f"SELECT column_name FROM parquet_schema('{path_escaped}')"
-            ).fetchall()
-            has_row_id = any(c[0] == "#rowId" for c in cols)
+            schema = workspace.get_parquet_schema(table_name)
+            has_row_id = any(
+                column.get("name") == "#rowId"
+                for column in schema.get("columns", [])
+                if isinstance(column, dict)
+            )
             exclude = ' EXCLUDE ("#rowId")' if has_row_id else ""
             select_sql = f"SELECT *{exclude} FROM read_parquet('{path_escaped}')"
 

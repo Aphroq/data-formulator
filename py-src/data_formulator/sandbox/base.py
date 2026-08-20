@@ -12,6 +12,8 @@ Every sandbox backend must subclass :class:`Sandbox` and implement
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
+from typing import Any
 
 import pandas as pd
 
@@ -25,6 +27,8 @@ class Sandbox(ABC):
         code: str,
         workspace,
         output_variable: str,
+        *,
+        parameters: Mapping[str, Any] | None = None,
     ) -> dict:
         """Execute a Python script and return the resulting DataFrame.
 
@@ -44,6 +48,9 @@ class Sandbox(ABC):
             the execution environment.
         output_variable : str
             Name of the variable in *code* that holds the result.
+        parameters : mapping, optional
+            Typed JSON-compatible values exposed to the script through a
+            separate ``params`` object. Values are not interpolated into code.
 
         Returns
         -------

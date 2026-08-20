@@ -637,6 +637,8 @@
     "restoreOrder": "Restore original order",
     "downloadAsCsv": "Download as CSV",
     "downloading": "Downloading...",
+    "search": "Search",
+    "searchPlaceholder": "Search table…",
     "columnMenu": {
       "openMenu": "Column options",
       "sortAsc": "Sort ascending",

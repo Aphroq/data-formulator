@@ -27,6 +27,15 @@ def test_visualize_schema_requires_title_and_exposes_subtitle():
     subtitle_description = parameters["properties"]["subtitle"]["description"]
     assert "at most 16 words" in subtitle_description
     assert "Do not restate the measure or analytical lens" in subtitle_description
+    slot_schema = parameters["properties"]["parameter_slots"]
+    assert slot_schema["maxItems"] == 4
+    assert set(slot_schema["items"]["required"]) == {
+        "id",
+        "name",
+        "description",
+        "type",
+        "default",
+    }
 
 
 def test_visualize_handler_forwards_title_and_subtitle():
@@ -53,6 +62,36 @@ def test_visualize_handler_forwards_title_and_subtitle():
     assert kwargs["title"] == "Growth Accelerated After 2020"
     assert kwargs["subtitle"] == "US monthly index, January 2006 = 100"
     assert kwargs["input_tables"] == ["source"]
+
+
+def test_visualize_handler_forwards_validated_transform_parameter_slots():
+    runtime = MagicMock()
+    runtime.run_visualize_code.return_value = {
+        "status": "error",
+        "error_message": "stop after argument capture",
+    }
+    workspace = MagicMock()
+    workspace.get_table_metadata.return_value = MagicMock()
+    ctx = SkillContext(client=None, workspace=workspace, runtime=runtime)
+    slots = [{
+        "id": "top_n",
+        "name": "Top results",
+        "description": "Number of ranked rows to keep.",
+        "type": "integer",
+        "default": 10,
+    }]
+
+    list(CoreSkill()._handle_visualize({
+        "title": "Top results",
+        "code": "result_df = source.head(params['top_n'])",
+        "input_tables": ["source"],
+        "output_variable": "result_df",
+        "parameter_slots": slots,
+        "chart": {"chart_type": "Table", "encodings": {}},
+    }, ctx))
+
+    kwargs = runtime.run_visualize_code.call_args.kwargs
+    assert kwargs["parameter_slots"] == slots
 
 
 def test_visualize_records_signed_artifact_ids_before_emitting_result(monkeypatch):

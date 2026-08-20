@@ -3,6 +3,9 @@
 
 import React, { FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+    Accordion,
+    AccordionDetails,
+    AccordionSummary,
     Alert,
     Box,
     Button,
@@ -24,6 +27,7 @@ import {
 } from '@mui/material';
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
 import AutoModeOutlinedIcon from '@mui/icons-material/AutoModeOutlined';
+import ExpandMoreOutlinedIcon from '@mui/icons-material/ExpandMoreOutlined';
 import PlayArrowOutlinedIcon from '@mui/icons-material/PlayArrowOutlined';
 import PublishOutlinedIcon from '@mui/icons-material/PublishOutlined';
 import ScienceOutlinedIcon from '@mui/icons-material/ScienceOutlined';
@@ -33,7 +37,12 @@ import { useTranslation } from 'react-i18next';
 
 import { ApiRequestError } from '../app/apiClient';
 import { enqueueManualRun } from '../app/automationApi';
-import type { DataFormulatorState } from '../app/dfSlice';
+import { dfSelectors, type DataFormulatorState } from '../app/dfSlice';
+import {
+    initialParameterValues,
+    parameterInputType,
+    typedParameterValues,
+} from '../app/recipeParameters';
 import {
     archiveRecipe,
     dryRunRecipe,
@@ -41,12 +50,12 @@ import {
     listRecipes,
     publishRecipe,
     RecipeExecutionResult,
-    RecipeParameter,
     RecipeSummary,
     RecipeVersionDetail,
     RecipeVersionStatus,
 } from '../app/recipeApi';
 import { RunsInbox, SchedulePanel } from './AutomationOperations';
+import { buildDistillModelConfig } from './workflowContext';
 
 
 const statusColor = (status: RecipeVersionStatus) => {
@@ -65,14 +74,6 @@ const executionStatusColor = (status: RecipeExecutionResult['status']) => {
 const shortHash = (value: string) => value.includes(':')
     ? value.split(':').at(-1)?.slice(0, 12) ?? value
     : value.slice(0, 12);
-
-const initialParameterValues = (parameters: RecipeParameter[]) => Object.fromEntries(
-    parameters.map(parameter => [
-        parameter.id,
-        parameter.default === undefined ? '' : String(parameter.default),
-    ]),
-);
-
 
 const RunResultPanel: FC<{
     result: RecipeExecutionResult;
@@ -100,109 +101,103 @@ const RunResultPanel: FC<{
                 />
             </Stack>
 
-            <Stack direction="row" spacing={1.5} useFlexGap flexWrap="wrap" sx={{ mt: 1 }}>
-                {result.run && (
-                    <>
-                        <Typography variant="caption" color="text.secondary">
-                            {t(`automation.runResult.kind.${result.run.kind}`)}
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
-                            {t('automation.runResult.runId')}: {result.run.run_id}
-                        </Typography>
-                    </>
-                )}
-                <Typography variant="caption" color="text.secondary">
-                    {t('automation.runResult.summary', {
-                        count: result.steps.length,
-                        duration: totalDuration,
-                    })}
-                </Typography>
-            </Stack>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                {t('automation.runResult.summary', {
+                    count: result.steps.length,
+                    duration: totalDuration,
+                })}
+            </Typography>
 
             {result.error && (
                 <Alert severity={result.status === 'needs_review' ? 'warning' : 'error'} sx={{ mt: 1.5 }}>
-                    <Typography variant="body2" fontWeight={600}>{result.error.code}</Typography>
-                    <Typography variant="body2">{result.error.message}</Typography>
+                    {t(result.status === 'needs_review'
+                        ? 'automation.runResult.needsReview'
+                        : 'automation.runResult.failedHelp')}
                 </Alert>
             )}
 
-            <Divider sx={{ my: 1.5 }} />
-            <Typography variant="subtitle2" sx={{ mb: 1 }}>{t('automation.runResult.steps')}</Typography>
-            {result.steps.length === 0 ? (
-                <Typography variant="body2" color="text.secondary">
-                    {t('automation.runResult.noSteps')}
-                </Typography>
-            ) : (
-                <Stack spacing={1}>
-                    {result.steps.map((step, index) => (
-                        <Box key={`${step.step_id}-${index}`} sx={{ p: 1.25, border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.paper' }}>
-                            <Stack direction="row" spacing={1} alignItems="center" useFlexGap flexWrap="wrap">
-                                <Chip size="small" variant="outlined" label={index + 1} />
-                                <Typography variant="body2" fontWeight={600}>
-                                    {t(`recipes.stepKind.${step.kind}`)}
+            <Box sx={{ mt: 2 }}>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>{t('automation.runResult.steps')}</Typography>
+                {result.steps.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary">
+                        {t('automation.runResult.noSteps')}
+                    </Typography>
+                ) : (
+                    <Stack spacing={1}>
+                        {result.steps.map((step, index) => (
+                            <Box key={`${step.step_id}-${index}`} sx={{ p: 1.25, border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.paper' }}>
+                                <Stack direction="row" spacing={1} alignItems="center" useFlexGap flexWrap="wrap">
+                                    <Chip size="small" variant="outlined" label={index + 1} />
+                                    <Typography variant="body2" fontWeight={600}>
+                                        {t(`recipes.stepKind.${step.kind}`)}
+                                    </Typography>
+                                    {finalOutputs.has(step.step_id) && (
+                                        <Chip size="small" color="primary" variant="outlined" label={t('automation.runResult.finalOutput')} />
+                                    )}
+                                    <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto' }}>
+                                        {t('automation.runResult.duration', { duration: step.duration_ms })}
+                                    </Typography>
+                                </Stack>
+                            </Box>
+                        ))}
+                    </Stack>
+                )}
+            </Box>
+
+            <Accordion variant="outlined" disableGutters sx={{ mt: 2 }}>
+                <AccordionSummary expandIcon={<ExpandMoreOutlinedIcon />}>
+                    <Typography fontWeight={600}>{t('automation.runResult.technicalInfo')}</Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                    <Stack spacing={1.5}>
+                        {result.run && (
+                            <Box>
+                                <Typography variant="caption" color="text.secondary">
+                                    {t('automation.runResult.runId')}
                                 </Typography>
-                                {finalOutputs.has(step.step_id) && (
-                                    <Chip size="small" color="primary" variant="outlined" label={t('automation.runResult.finalOutput')} />
-                                )}
-                                <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto' }}>
-                                    {t('automation.runResult.duration', { duration: step.duration_ms })}
+                                <Typography variant="body2" sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
+                                    {result.run.run_id}
                                 </Typography>
-                            </Stack>
-                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75, fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
-                                {t('automation.runResult.outputPath')}: {step.output_path}
-                            </Typography>
-                            <Stack direction="row" spacing={1.5} useFlexGap flexWrap="wrap" sx={{ mt: 0.5 }}>
-                                <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-                                    {t('automation.runResult.contentHash')} {shortHash(step.content_hash)}
+                            </Box>
+                        )}
+                        {result.error && (
+                            <Alert severity="info" variant="outlined">
+                                <Typography variant="body2" fontWeight={600}>{result.error.code}</Typography>
+                                <Typography variant="body2">{result.error.message}</Typography>
+                            </Alert>
+                        )}
+                        {result.steps.map(step => (
+                            <Box key={step.step_id} sx={{ p: 1.25, border: 1, borderColor: 'divider', borderRadius: 1 }}>
+                                <Typography variant="body2" fontWeight={600}>{t(`recipes.stepKind.${step.kind}`)}</Typography>
+                                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
+                                    {t('automation.runResult.outputPath')}: {step.output_path}
                                 </Typography>
-                                <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-                                    {t('automation.runResult.schemaHash')} {shortHash(step.schema_hash)}
-                                </Typography>
-                            </Stack>
-                        </Box>
-                    ))}
-                </Stack>
-            )}
+                                <Stack direction="row" spacing={1.5} useFlexGap flexWrap="wrap" sx={{ mt: 0.5 }}>
+                                    <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                                        {t('automation.runResult.contentHash')} {shortHash(step.content_hash)}
+                                    </Typography>
+                                    <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                                        {t('automation.runResult.schemaHash')} {shortHash(step.schema_hash)}
+                                    </Typography>
+                                </Stack>
+                            </Box>
+                        ))}
+                    </Stack>
+                </AccordionDetails>
+            </Accordion>
         </Card>
     );
 };
-
-function typedParameterValues(
-    parameters: RecipeParameter[],
-    values: Record<string, string>,
-): Record<string, unknown> {
-    const result: Record<string, unknown> = {};
-    for (const parameter of parameters) {
-        const raw = values[parameter.id] ?? '';
-        if (raw === '') {
-            if (parameter.default !== undefined || !parameter.required) continue;
-            throw new TypeError(parameter.name);
-        }
-        if (parameter.type === 'integer') {
-            const parsed = Number(raw);
-            if (!Number.isSafeInteger(parsed)) throw new TypeError(parameter.name);
-            result[parameter.id] = parsed;
-        } else if (parameter.type === 'number') {
-            const parsed = Number(raw);
-            if (!Number.isFinite(parsed)) throw new TypeError(parameter.name);
-            result[parameter.id] = parsed;
-        } else if (parameter.type === 'boolean') {
-            if (raw !== 'true' && raw !== 'false') throw new TypeError(parameter.name);
-            result[parameter.id] = raw === 'true';
-        } else {
-            if (!raw && parameter.required) throw new TypeError(parameter.name);
-            result[parameter.id] = raw;
-        }
-    }
-    return result;
-}
-
 
 export const Automation: FC = () => {
     const { t } = useTranslation();
     const [searchParams, setSearchParams] = useSearchParams();
     const requestedVersionId = searchParams.get('version') ?? '';
     const activeWorkspace = useSelector((state: DataFormulatorState) => state.activeWorkspace);
+    const activeModel = useSelector(dfSelectors.getActiveModel);
+    const formulateTimeoutSeconds = useSelector(
+        (state: DataFormulatorState) => state.config.formulateTimeoutSeconds,
+    );
     const enabled = useSelector(
         (state: DataFormulatorState) => state.serverConfig.AUTOMATION_ENABLED,
     );
@@ -221,6 +216,10 @@ export const Automation: FC = () => {
     const requestSequence = useRef(0);
     const translation = useRef(t);
     translation.current = t;
+    const analysisConfig = useMemo(() => activeModel ? {
+        model: buildDistillModelConfig(activeModel),
+        timeoutSeconds: Math.max(1, Math.min(formulateTimeoutSeconds, 300)),
+    } : undefined, [activeModel, formulateTimeoutSeconds]);
 
     const loadDetail = useCallback(async (
         versionId: string,
@@ -352,7 +351,7 @@ export const Automation: FC = () => {
                 completedVersion = await publishRecipe(versionId);
                 completedNotice = t('recipes.publishSucceeded');
             } else if (action === 'run') {
-                const run = await enqueueManualRun(versionId);
+                const run = await enqueueManualRun(versionId, parameterValues());
                 enqueuedRunId = run.run_id;
                 completedNotice = t('automation.runs.queuedNotice', { runId: run.run_id });
             } else {
@@ -517,10 +516,42 @@ export const Automation: FC = () => {
                                     {detail.spec.description && (
                                         <Typography color="text.secondary" sx={{ mt: 1 }}>{detail.spec.description}</Typography>
                                     )}
-                                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, fontFamily: 'monospace' }}>
-                                        {t('recipes.hash')}: {shortHash(detail.version.recipe_hash)}
-                                    </Typography>
                                 </Box>
+
+                                {parameterFields.length > 0 && (
+                                    <Card variant="outlined" sx={{ p: 2, bgcolor: 'action.hover' }}>
+                                        <Typography variant="h6" component="h3">
+                                            {t('automation.runSettings')}
+                                        </Typography>
+                                        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+                                            {t(status === 'published'
+                                                ? 'automation.manualParameterHelp'
+                                                : 'automation.validationParameterHelp')}
+                                        </Typography>
+                                        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 1.5 }}>
+                                            {parameterFields.map(parameter => (
+                                                <TextField
+                                                    key={parameter.id}
+                                                    size="small"
+                                                    select={parameter.type === 'boolean'}
+                                                    type={parameterInputType(parameter)}
+                                                    required={parameter.required}
+                                                    disabled={status === 'validated' || status === 'archived'}
+                                                    label={parameter.name}
+                                                    helperText={parameter.description || undefined}
+                                                    value={parameters[parameter.id] ?? ''}
+                                                    onChange={event => setParameters(current => ({ ...current, [parameter.id]: event.target.value }))}
+                                                    slotProps={{ inputLabel: parameter.type === 'date' ? { shrink: true } : undefined }}
+                                                >
+                                                    {parameter.type === 'boolean' ? [
+                                                        <MenuItem key="true" value="true">{t('recipes.true')}</MenuItem>,
+                                                        <MenuItem key="false" value="false">{t('recipes.false')}</MenuItem>,
+                                                    ] : undefined}
+                                                </TextField>
+                                            ))}
+                                        </Box>
+                                    </Card>
+                                )}
 
                                 <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
                                     {status === 'draft' && (
@@ -534,14 +565,9 @@ export const Automation: FC = () => {
                                         </Button>
                                     )}
                                     {status === 'published' && (
-                                        <>
-                                            <Button variant="contained" startIcon={<PlayArrowOutlinedIcon />} disabled={busy} onClick={() => void perform('run')}>
-                                                {t('recipes.runNow')}
-                                            </Button>
-                                            <Button color="inherit" startIcon={<ArchiveOutlinedIcon />} disabled={busy} onClick={() => void perform('archive')}>
-                                                {t('recipes.archive')}
-                                            </Button>
-                                        </>
+                                        <Button variant="contained" startIcon={<PlayArrowOutlinedIcon />} disabled={busy} onClick={() => void perform('run')}>
+                                            {t('recipes.runNow')}
+                                        </Button>
                                     )}
                                     {busy && <CircularProgress size={24} sx={{ alignSelf: 'center' }} />}
                                 </Stack>
@@ -557,78 +583,79 @@ export const Automation: FC = () => {
                                     <SchedulePanel
                                         versionId={detail.version.version_id}
                                         versionStatus={detail.version.status}
+                                        parameters={detail.spec.parameters}
                                     />
                                 )}
 
-                                <Divider />
-                                <Box>
-                                    <Typography variant="h6" component="h3" sx={{ mb: 1.5 }}>{t('recipes.parameters')}</Typography>
-                                    {status !== 'draft' && parameterFields.length > 0 && (
-                                        <Alert severity="info" sx={{ mb: 1.5 }}>
-                                            {t('automation.defaultBinding')}
-                                        </Alert>
-                                    )}
-                                    {parameterFields.length === 0 ? (
-                                        <Typography color="text.secondary">{t('recipes.noParameters')}</Typography>
-                                    ) : (
-                                        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 2 }}>
-                                            {parameterFields.map(parameter => (
-                                                <TextField
-                                                    key={parameter.id}
-                                                    select={parameter.type === 'boolean'}
-                                                    type={parameter.type === 'date' ? 'date' : parameter.type === 'integer' || parameter.type === 'number' ? 'number' : 'text'}
-                                                    required={parameter.required}
-                                                    disabled={status !== 'draft'}
-                                                    label={parameter.name}
-                                                    value={parameters[parameter.id] ?? ''}
-                                                    onChange={event => setParameters(current => ({ ...current, [parameter.id]: event.target.value }))}
-                                                    slotProps={{ inputLabel: parameter.type === 'date' ? { shrink: true } : undefined }}
-                                                >
-                                                    {parameter.type === 'boolean' ? [
-                                                        <MenuItem key="true" value="true">{t('recipes.true')}</MenuItem>,
-                                                        <MenuItem key="false" value="false">{t('recipes.false')}</MenuItem>,
-                                                    ] : undefined}
-                                                </TextField>
-                                            ))}
+                                <Accordion
+                                    key={detail.version.version_id}
+                                    defaultExpanded={status === 'draft'}
+                                    variant="outlined"
+                                    disableGutters
+                                >
+                                    <AccordionSummary expandIcon={<ExpandMoreOutlinedIcon />}>
+                                        <Box>
+                                            <Typography fontWeight={600}>{t('automation.recipeDetails')}</Typography>
+                                            <Typography variant="body2" color="text.secondary">
+                                                {t('automation.recipeDetailsSummary', {
+                                                    inputCount: detail.spec.inputs.length,
+                                                    stepCount: detail.spec.steps.length,
+                                                })}
+                                            </Typography>
                                         </Box>
-                                    )}
-                                </Box>
-
-                                <Box>
-                                    <Typography variant="h6" component="h3" sx={{ mb: 1.5 }}>{t('recipes.inputs')}</Typography>
-                                    <Stack spacing={1}>
-                                        {detail.spec.inputs.map(input => (
-                                            <Card key={input.id} variant="outlined" sx={{ p: 1.5 }}>
-                                                <Stack direction="row" spacing={1} alignItems="center" useFlexGap flexWrap="wrap">
-                                                    <Chip size="small" label={t(`recipes.inputMode.${input.mode}`)} />
-                                                    <Typography fontWeight={500}>{input.source_id || t('recipes.localInput')}</Typography>
-                                                    <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-                                                        schema {shortHash(input.expected_schema)}
-                                                    </Typography>
+                                    </AccordionSummary>
+                                    <AccordionDetails>
+                                        <Stack spacing={3}>
+                                            <Box>
+                                                <Typography variant="h6" component="h3" sx={{ mb: 1.5 }}>{t('recipes.inputs')}</Typography>
+                                                <Stack spacing={1}>
+                                                    {detail.spec.inputs.map(input => (
+                                                        <Card key={input.id} variant="outlined" sx={{ p: 1.5 }}>
+                                                            <Stack direction="row" spacing={1} alignItems="center" useFlexGap flexWrap="wrap">
+                                                                <Chip size="small" label={t(`recipes.inputMode.${input.mode}`)} />
+                                                                <Typography fontWeight={500}>{input.source_id || t('recipes.localInput')}</Typography>
+                                                                <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                                                                    {t('automation.inputSchema')}: {shortHash(input.expected_schema)}
+                                                                </Typography>
+                                                            </Stack>
+                                                        </Card>
+                                                    ))}
                                                 </Stack>
-                                            </Card>
-                                        ))}
-                                    </Stack>
-                                </Box>
+                                            </Box>
 
-                                <Box>
-                                    <Typography variant="h6" component="h3" sx={{ mb: 1.5 }}>{t('recipes.steps')}</Typography>
-                                    <Stack spacing={1}>
-                                        {detail.spec.steps.map((step, index) => (
-                                            <Card key={step.id} variant="outlined" sx={{ p: 1.5 }}>
-                                                <Stack direction="row" spacing={1.5} alignItems="center">
-                                                    <Chip size="small" color="primary" variant="outlined" label={index + 1} />
-                                                    <Box sx={{ minWidth: 0 }}>
-                                                        <Typography fontWeight={500}>{t(`recipes.stepKind.${step.kind}`)}</Typography>
-                                                        <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-                                                            {shortHash(step.artifact_id)}
-                                                        </Typography>
-                                                    </Box>
+                                            <Box>
+                                                <Typography variant="h6" component="h3" sx={{ mb: 1.5 }}>{t('recipes.steps')}</Typography>
+                                                <Stack spacing={1}>
+                                                    {detail.spec.steps.map((step, index) => (
+                                                        <Card key={step.id} variant="outlined" sx={{ p: 1.5 }}>
+                                                            <Stack direction="row" spacing={1.5} alignItems="center">
+                                                                <Chip size="small" color="primary" variant="outlined" label={index + 1} />
+                                                                <Box sx={{ minWidth: 0 }}>
+                                                                    <Typography fontWeight={500}>{t(`recipes.stepKind.${step.kind}`)}</Typography>
+                                                                    <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                                                                        {t('automation.artifactId')}: {shortHash(step.artifact_id)}
+                                                                    </Typography>
+                                                                </Box>
+                                                            </Stack>
+                                                        </Card>
+                                                    ))}
                                                 </Stack>
-                                            </Card>
-                                        ))}
-                                    </Stack>
-                                </Box>
+                                            </Box>
+
+                                            <Divider />
+                                            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ xs: 'flex-start', sm: 'center' }}>
+                                                <Typography variant="caption" color="text.secondary" sx={{ flex: 1, fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
+                                                    {t('recipes.hash')}: {shortHash(detail.version.recipe_hash)}
+                                                </Typography>
+                                                {status === 'published' && (
+                                                    <Button color="inherit" startIcon={<ArchiveOutlinedIcon />} disabled={busy} onClick={() => void perform('archive')}>
+                                                        {t('recipes.archive')}
+                                                    </Button>
+                                                )}
+                                            </Stack>
+                                        </Stack>
+                                    </AccordionDetails>
+                                </Accordion>
                             </Stack>
                         )}
                     </Paper>
@@ -639,6 +666,7 @@ export const Automation: FC = () => {
                     recipes={recipes}
                     refreshToken={runsRefreshToken}
                     onSelectVersion={selectVersion}
+                    analysisConfig={analysisConfig}
                 />
             </Box>
         </Box>

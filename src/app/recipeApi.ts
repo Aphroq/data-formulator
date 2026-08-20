@@ -30,9 +30,36 @@ export interface RecipeSummary {
 export interface RecipeParameter {
     id: string;
     name: string;
+    description?: string;
     type: 'string' | 'integer' | 'number' | 'boolean' | 'date' | 'datetime';
     required: boolean;
     default?: unknown;
+}
+
+export interface RecipeParameterCandidate {
+    candidate_id: string;
+    parameter_id: string;
+    kind: 'filter' | 'limit' | 'transform';
+    name: string;
+    description?: string;
+    type: RecipeParameter['type'];
+    default: unknown;
+}
+
+export type RecipeParameterMode = 'ask' | 'keep';
+
+export interface RecipeParameterConfiguration {
+    candidate_id: string;
+    name: string;
+    description: string;
+    mode: RecipeParameterMode;
+}
+
+export type RecipeParameterSuggestion = RecipeParameterConfiguration;
+
+export interface RecipeParameterSuggestionResult {
+    suggestions: RecipeParameterSuggestion[];
+    unmatched: string[];
 }
 
 export interface RecipeInput {
@@ -97,7 +124,12 @@ export async function compileRecipe(input: {
     targetArtifactIds: string[];
     name: string;
     description?: string;
+    parameterCandidateIds?: string[];
+    parameterConfigurations?: RecipeParameterConfiguration[];
 }): Promise<{ version: RecipeVersionSummary; spec: RecipeSpec; workflow_markdown: string }> {
+    const parameterSelection = input.parameterConfigurations !== undefined
+        ? { parameter_configurations: input.parameterConfigurations }
+        : { parameter_candidate_ids: input.parameterCandidateIds ?? [] };
     const { data } = await apiRequest<{
         version: RecipeVersionSummary;
         spec: RecipeSpec;
@@ -109,8 +141,49 @@ export async function compileRecipe(input: {
             target_artifact_ids: input.targetArtifactIds,
             name: input.name,
             description: input.description ?? '',
+            ...parameterSelection,
         }),
     });
+    return data;
+}
+
+export async function listRecipeParameterCandidates(
+    targetArtifactIds: string[],
+): Promise<RecipeParameterCandidate[]> {
+    const { data } = await apiRequest<{ candidates: RecipeParameterCandidate[] }>(
+        '/api/recipes/parameter-candidates',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target_artifact_ids: targetArtifactIds }),
+        },
+    );
+    return data.candidates;
+}
+
+export async function suggestRecipeParameterConfigurations(input: {
+    targetArtifactIds: string[];
+    model: Record<string, unknown>;
+    workflowContext?: Record<string, unknown>;
+    name?: string;
+    description?: string;
+    timeoutSeconds?: number;
+}): Promise<RecipeParameterSuggestionResult> {
+    const { data } = await apiRequest<RecipeParameterSuggestionResult>(
+        '/api/recipes/parameter-suggestions',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                target_artifact_ids: input.targetArtifactIds,
+                model: input.model,
+                workflow_context: input.workflowContext ?? {},
+                name: input.name ?? '',
+                description: input.description ?? '',
+                timeout_seconds: input.timeoutSeconds ?? 120,
+            }),
+        },
+    );
     return data;
 }
 

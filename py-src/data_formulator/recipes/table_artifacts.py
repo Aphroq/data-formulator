@@ -26,6 +26,15 @@ def parquet_file_hashes(file_path: Path) -> tuple[HashDigest, HashDigest]:
     )
 
 
+def parquet_logical_schema_hash(file_path: Path) -> HashDigest:
+    """Hash stable Arrow fields without row-count-dependent writer metadata."""
+    file_path = Path(file_path)
+    if not file_path.is_file() or file_path.is_symlink():
+        raise ValueError("Parquet artifact must be a safe regular file")
+    schema = pq.read_schema(file_path).remove_metadata()
+    return HashDigest.sha256(schema.serialize().to_pybytes())
+
+
 def parquet_artifact_hashes(workspace, metadata: TableMetadata) -> tuple[HashDigest, HashDigest]:
     """Hash the complete local parquet and its persisted Arrow schema."""
     file_path = workspace.get_file_path(metadata.filename)

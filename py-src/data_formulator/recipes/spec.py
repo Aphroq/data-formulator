@@ -84,6 +84,7 @@ class ParameterType(StrEnum):
 class BindingTarget(StrEnum):
     LOAD_FILTER_VALUE = "load_filter_value"
     LOAD_LIMIT = "load_limit"
+    TRANSFORM_PARAMETER = "transform_parameter"
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,12 +183,15 @@ class RecipeParameter:
     required: bool = True
     has_default: bool = False
     default_value: FrozenJsonValue = None
+    description: str = ""
 
     def __post_init__(self) -> None:
         if not _PARAMETER_ID_PATTERN.fullmatch(self.id):
             raise ValueError(f"Invalid parameter id: {self.id!r}")
         if not isinstance(self.name, str) or not self.name.strip():
             raise ValueError("Parameter name cannot be empty")
+        if not isinstance(self.description, str) or len(self.description) > 500:
+            raise ValueError("Parameter description must contain at most 500 characters")
         _require_bool(self.required, "required")
         _require_bool(self.has_default, "has_default")
         object.__setattr__(self, "value_type", ParameterType(self.value_type))
@@ -237,17 +241,24 @@ class RecipeParameter:
             "type": self.value_type.value,
             "required": self.required,
         }
+        if self.description:
+            result["description"] = self.description
         if self.has_default:
             result["default"] = thaw_json(self.default_value)
         return result
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "RecipeParameter":
-        _require_exact_fields(data, {"id", "name", "type", "required"}, {"default"})
+        _require_exact_fields(
+            data,
+            {"id", "name", "type", "required"},
+            {"description", "default"},
+        )
         return cls(
             id=data["id"],
             name=data["name"],
             value_type=ParameterType(data["type"]),
+            description=data.get("description", ""),
             required=_require_bool(data["required"], "required"),
             has_default="default" in data,
             default_value=data.get("default"),
@@ -260,6 +271,7 @@ class ParameterBinding:
     step_id: str
     target: BindingTarget
     filter_index: int | None = None
+    slot_name: str | None = None
 
     def __post_init__(self) -> None:
         if not _PARAMETER_ID_PATTERN.fullmatch(self.parameter_id):
@@ -270,8 +282,20 @@ class ParameterBinding:
         if self.target is BindingTarget.LOAD_FILTER_VALUE:
             if type(self.filter_index) is not int or self.filter_index < 0:
                 raise ValueError("load_filter_value binding requires filter_index")
-        elif self.filter_index is not None:
-            raise ValueError("filter_index is only valid for load_filter_value")
+            if self.slot_name is not None:
+                raise ValueError("slot_name is only valid for transform_parameter")
+        elif self.target is BindingTarget.TRANSFORM_PARAMETER:
+            if self.filter_index is not None:
+                raise ValueError("filter_index is only valid for load_filter_value")
+            if (
+                not isinstance(self.slot_name, str)
+                or not _PARAMETER_ID_PATTERN.fullmatch(self.slot_name)
+            ):
+                raise ValueError("transform_parameter binding requires slot_name")
+        elif self.filter_index is not None or self.slot_name is not None:
+            raise ValueError(
+                "filter_index and slot_name are not valid for load_limit"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -281,6 +305,8 @@ class ParameterBinding:
         }
         if self.filter_index is not None:
             result["filter_index"] = self.filter_index
+        if self.slot_name is not None:
+            result["slot_name"] = self.slot_name
         return result
 
     @classmethod
@@ -288,13 +314,14 @@ class ParameterBinding:
         _require_exact_fields(
             data,
             {"parameter_id", "step_id", "target"},
-            {"filter_index"},
+            {"filter_index", "slot_name"},
         )
         return cls(
             parameter_id=data["parameter_id"],
             step_id=data["step_id"],
             target=BindingTarget(data["target"]),
             filter_index=data.get("filter_index"),
+            slot_name=data.get("slot_name"),
         )
 
 
@@ -409,7 +436,12 @@ class RecipeOutput:
 
 
 def _binding_slot(binding: ParameterBinding) -> tuple[Any, ...]:
-    return (binding.step_id, binding.target.value, binding.filter_index)
+    return (
+        binding.step_id,
+        binding.target.value,
+        binding.filter_index,
+        binding.slot_name,
+    )
 
 
 def _validate_binding_slot(
@@ -417,15 +449,19 @@ def _validate_binding_slot(
     parameter: RecipeParameter,
     step: RecipeStep,
 ) -> None:
-    if step.kind is not RecipeStepKind.LOAD:
-        raise ValueError("Recipe parameters may only bind to load steps in v1")
     execution = thaw_json(step.execution)
-    source_step = execution.get("step")
-    if not isinstance(source_step, dict):
-        raise ValueError("Load step is missing connector step execution")
-    query = source_step.get("query") or {}
-    if not isinstance(query, dict):
-        raise ValueError("Load step query must be an object")
+    if binding.target in {
+        BindingTarget.LOAD_FILTER_VALUE,
+        BindingTarget.LOAD_LIMIT,
+    }:
+        if step.kind is not RecipeStepKind.LOAD:
+            raise ValueError("Load parameter binding must reference a load step")
+        source_step = execution.get("step")
+        if not isinstance(source_step, dict):
+            raise ValueError("Load step is missing connector step execution")
+        query = source_step.get("query") or {}
+        if not isinstance(query, dict):
+            raise ValueError("Load step query must be an object")
     if binding.target is BindingTarget.LOAD_FILTER_VALUE:
         filters = query.get("filters") or []
         if (
@@ -439,6 +475,30 @@ def _validate_binding_slot(
     elif binding.target is BindingTarget.LOAD_LIMIT:
         if parameter.value_type is not ParameterType.INTEGER:
             raise ValueError("load_limit binding requires an integer parameter")
+    elif binding.target is BindingTarget.TRANSFORM_PARAMETER:
+        if step.kind is not RecipeStepKind.TRANSFORM:
+            raise ValueError(
+                "Transform parameter binding must reference a transform step"
+            )
+        from data_formulator.recipes.transform_parameters import (
+            normalize_transform_parameter_slots,
+        )
+
+        slots = {
+            item.id: item
+            for item in normalize_transform_parameter_slots(
+                execution.get("parameter_slots", [])
+            )
+        }
+        slot = slots.get(binding.slot_name or "")
+        if slot is None:
+            raise ValueError(
+                "transform_parameter binding does not identify a declared slot"
+            )
+        if parameter.value_type is not slot.value_type:
+            raise ValueError(
+                "transform_parameter binding type does not match its slot"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -502,6 +562,7 @@ class RecipeSpec:
                         item.step_id,
                         item.target.value,
                         -1 if item.filter_index is None else item.filter_index,
+                        item.slot_name or "",
                         item.parameter_id,
                     ),
                 )

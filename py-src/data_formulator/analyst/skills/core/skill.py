@@ -31,6 +31,10 @@ from typing import Any, Generator
 
 from data_formulator.agents.agent_utils import generate_data_summary
 from data_formulator.agents.context import handle_inspect_source_data
+from data_formulator.recipes.transform_parameters import (
+    normalize_transform_parameter_slots,
+    validate_parameterized_transform_code,
+)
 from data_formulator.security.code_signing import sign_result
 
 from data_formulator.analyst.skills.base import (
@@ -128,7 +132,15 @@ class CoreSkill:
                 action.get("input_tables"),
                 ctx.workspace,
             )
-        except ValueError as exc:
+            parameter_slots = normalize_transform_parameter_slots(
+                action.get("parameter_slots", [])
+            )
+            if parameter_slots and output_variable == "params":
+                raise ValueError("output_variable cannot use the reserved name 'params'")
+            if parameter_slots:
+                validate_parameterized_transform_code(code, parameter_slots)
+            serialized_slots = [item.to_dict() for item in parameter_slots]
+        except (TypeError, ValueError) as exc:
             error_msg = str(exc)
             yield {
                 "type": "error",
@@ -156,6 +168,7 @@ class CoreSkill:
             title=title,
             subtitle=subtitle,
             input_tables=input_tables,
+            parameter_slots=serialized_slots,
             messages=ctx.trajectory,
         )
 
@@ -187,6 +200,7 @@ class CoreSkill:
                 title=title,
                 subtitle=subtitle,
                 output_variable=output_variable,
+                parameter_slots=serialized_slots,
             )
             if not isinstance(lineage, dict):
                 raise TypeError("visualize lineage result must be an object")

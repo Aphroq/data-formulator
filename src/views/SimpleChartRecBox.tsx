@@ -1318,6 +1318,7 @@ export const SimpleChartRecBox: FC<{ onInputFocus?: () => void }> = function ({ 
                     code: code || t('chartRec.explorationStepCodeComment', { step: createdTables.length + 1 }),
                     codeSignature: result.content?.result?.code_signature,
                     outputVariable: refinedGoal?.output_variable || 'result_df',
+                    parameterSlots: transformResult.parameter_slots || refinedGoal?.parameter_slots,
                     source: resolvedSourceIds.length > 0 ? resolvedSourceIds : selectedTableIds,
                     dialog: dialog || [],
                     trigger: {

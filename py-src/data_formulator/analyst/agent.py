@@ -938,6 +938,7 @@ class AnalystAgent:
         title: str,
         subtitle: str,
         output_variable: str,
+        parameter_slots: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Commit signed transform + chart provenance, preserving UI output on failure."""
         from data_formulator.recipes.lineage import (
@@ -966,6 +967,7 @@ class AnalystAgent:
                 display_instruction=display_instruction,
                 title=title,
                 subtitle=subtitle,
+                parameter_slots=parameter_slots or (),
             )
             return {
                 "status": "ok",
@@ -1074,6 +1076,7 @@ class AnalystAgent:
         title: str = "",
         subtitle: str = "",
         messages: list[dict] | None = None,
+        parameter_slots: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Run visualize code in sandbox and assemble chart."""
         from data_formulator.sandbox import create_sandbox
@@ -1107,14 +1110,37 @@ class AnalystAgent:
         if was_patched:
             logger.info(f"[AnalystAgent] patched output_variable: {output_variable} = {detected_var}")
 
+        from data_formulator.recipes.transform_parameters import (
+            normalize_transform_parameter_slots,
+            transform_parameter_defaults,
+            validate_parameterized_transform_code,
+        )
+
+        try:
+            slots = normalize_transform_parameter_slots(parameter_slots or [])
+            if slots and output_variable == "params":
+                raise ValueError("output_variable cannot use the reserved name 'params'")
+            if slots:
+                validate_parameterized_transform_code(code, slots)
+        except (TypeError, ValueError):
+            return {
+                "status": "error",
+                "error_message": "Invalid transform parameter declaration.",
+                "error_code": "agent.invalidTransformParameters",
+            }
+        serialized_slots = [item.to_dict() for item in slots]
+
         sandbox = create_sandbox(sandbox_mode)
 
         try:
-            execution_result = sandbox.run_python_code(
-                code=code,
-                workspace=self.workspace,
-                output_variable=output_variable,
-            )
+            sandbox_kwargs = {
+                "code": code,
+                "workspace": self.workspace,
+                "output_variable": output_variable,
+            }
+            if slots:
+                sandbox_kwargs["parameters"] = transform_parameter_defaults(slots)
+            execution_result = sandbox.run_python_code(**sandbox_kwargs)
 
             if execution_result['status'] != 'ok':
                 error_message = execution_result.get('content', 'Unknown error')
@@ -1204,6 +1230,8 @@ class AnalystAgent:
                 "field_metadata": field_metadata,
                 "field_display_names": field_display_names or {},
             }
+            if serialized_slots:
+                refined_goal["parameter_slots"] = serialized_slots
 
             transform_result = {
                 "status": "ok",
@@ -1225,6 +1253,8 @@ class AnalystAgent:
                 "dialog": self._snapshot_dialog(messages),
                 "agent": "AnalystAgent",
             }
+            if serialized_slots:
+                transform_result["parameter_slots"] = serialized_slots
 
             return {
                 "status": "ok",

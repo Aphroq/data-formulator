@@ -113,7 +113,7 @@ M0 在当前锁定的 LiteLLM `1.91.3` 上验证真实登录、普通对话、�
 记录点：
 
 - `load`：DataOperation 成功发布表后，引用完整选定 plan，不使用前端摘要。
-- `transform`：Sandbox 成功且输出表写入后，记录代码、输出变量、父表和 hash。
+- `transform`：Sandbox 成功且输出表写入后，记录代码、输出变量、父表和 hash；若 Analyst 同时声明 scalar typed slot，则先验证代码只通过字面量 `params["slot_id"]` 在受控数据值位置读取它们，再把规范化 slot 定义和默认值纳入同一不可变节点与 artifact id。
 - `chart`：图表成功生成时，记录规范化 chart spec、table artifact 和 hash。
 - `report`：v1 暂不记录。现有报告只保存在前端会话状态，没有可复用的后端持久化保存点；后续若补齐，只允许作为引用 chart artifact 的只读输出包装，不能成为 Recipe 执行步骤。
 
@@ -177,9 +177,19 @@ Compiler 只接受一个或多个目标 artifact id：
 | `external_path` | 仅桌面模式允许，发布时验证路径策略 |
 | `unresolved` | 允许保存草稿，禁止通过 dry run、发布和调度 |
 
-参数只能绑定到预定义的连接器字段、过滤值和日期范围等 typed slot。
+参数只能绑定到预定义的连接器字段、过滤值、行数上限、日期范围，以及不可变 transform Artifact 已声明的 scalar typed slot。
 
-v1 的正常产品入口只编译固定 Recipe，不提供参数定义表单。`parameters` 与 `bindings` 继续保留为机器规范和 Executor 的安全边界，供受控编译路径扩展；Automation 不得自行创建、猜测或修改参数定义。
+v1 的产品入口不提供自由参数定义表单。AnalystAgent 在创作 transform 时可选声明最多 4 个有意义的 `string | integer | number | boolean | date | datetime` slot，当前结果使用声明中的默认值生成。服务端确认 slot 被固定代码作为数据值读取，并阻止把它拼进 Python/SQL、路径或动态标识符；不把这层校验扩展成通用 Python 静态分析器。Slot 定义与签名代码一起进入 Artifact Lineage，Redux 和聊天摘要不是真相源。
+
+参数创作分成三个简单职责：
+
+1. Workflow 上下文回答“哪些选择值得在以后运行时改变”。保存时的可选模型调用复用 `buildLeafEvents`、`buildSessionWorkflowContext` 和 Workflow Distill 的少量参数原则，只提出 0～4 个语义上有价值的选择。
+2. `RecipeCompiler.parameter_candidates()` 回答“当前不可变血缘里哪些值已有 typed binding”。它从 load query 的 filter/limit 和 transform slot 中生成 candidate id、类型和固定 binding。
+3. 用户确认最终要公开哪些运行值。只有语义推荐与当前 candidate 匹配成功的项才能被 AI 预选；用户仍可从折叠的其他候选中手动选择。
+
+这一流程只使用一次模型请求，不增加 Parameter Intent 持久化模型或匹配状态机。请求同时携带 Workflow 上下文和用于绑定的 candidate 摘要，但提示词先判断分析中真正重要的变化，再返回最多 4 个推荐 candidate；模型不再为每个候选输出一条记录。服务端重新读取 durable candidates，对模型返回做简单去重和交集；未知或重复 id 不会进入推荐，也不需要让整次建议失败。模型可以附带少量未匹配的语义名称，前端只显示一句“当前还不能直接调整，可回到分析让 Analyst 生成可调版本”，不持久化这些名称，也不在保存对话框自动改代码或补 slot。
+
+候选初始不选中；AI 成功时只选中匹配的推荐，无模型、无推荐或调用失败时用户仍可手动选择候选或直接保存固定 Recipe。用户确认后，Compiler 再严格校验 candidate id，并确定性生成 `parameters` 与 `bindings`：`ask` 生成 required 且无 default 的参数，`keep` 生成带当前 typed default 的参数；展示名称/说明不影响 binding。Automation 只消费不可变 RecipeSpec。Transform binding 只把已校验值写入固定 `slot_name` 的 `parameter_values`；Executor 通过 Sandbox 的独立 `params` 对象注入，签名源码保持逐字不变。任意 Python/SQL 字符串替换仍不在 v1 范围。
 
 ### 生命周期
 
@@ -195,9 +205,10 @@ draft → validated → published → archived
 
 ### 确定性 Executor
 
-- `load` 复用 DataOperationExecutor 或固定快照。
-- `transform` 验证代码 hash/HMAC 后使用现有 Sandbox。
+- `load` 复用 DataOperationExecutor 或固定快照；Connector 返回过滤列时本地再次执行 source filters 后再投影，覆盖忽略 filter pushdown 的 loader，同时保持已远端过滤并投影的 connector 兼容。
+- `transform` 验证代码 hash/HMAC、slot 声明、受控 AST 用法和 bound value 类型后使用现有 Sandbox；参数通过独立只读输入对象传递，不拼接或改写代码。
 - `chart` 使用已保存规范生成确定性结果。
+- 新编译 Recipe 使用只含字段名、类型与 nullability 的 logical schema fingerprint；行数或 Parquet schema metadata 变化不误报 drift，真实字段/类型变化仍失败关闭。Executor 兼容读取旧版完整 schema hash。
 - 每步写 `events.jsonl`，最终原子写 `manifest.json`。
 
 正常 Run 禁止调用 LLM、TrustGraph、Workflow Replay、重新生成代码或自动改变步骤。Schema 漂移、输入不可解析或关键输出不匹配时进入 `needs_review`。
@@ -219,11 +230,11 @@ SQLite 第一版只保留四张主表：
 
 `runs` 对 `(schedule_id, scheduled_for)` 建唯一约束，防止重复入队。
 
-schema v4 已由 `data_formulator.automation.db.AutomationDatabase` 统一拥有；`RecipeRepository` 和 `AutomationRepository` 都通过它解析绝对路径、打开 WAL/foreign keys/`busy_timeout` 连接并执行 v1 → v2 → v3 → v4 顺序 migration。v3 引入 Schedule/Run，v4 为 Run 增加 `active_attempt_run_id` 与 `cleanup_attempt_run_id`。v2 原地升级、重复打开、事务回滚和未知未来版本失败关闭都有合同测试，任何 repository 都不得重新维护自己的 schema version 或 migration 分支。
+schema v5 已由 `data_formulator.automation.db.AutomationDatabase` 统一拥有；`RecipeRepository` 和 `AutomationRepository` 都通过它解析绝对路径、打开 WAL/foreign keys/`busy_timeout` 连接并执行 v1 → v2 → v3 → v4 → v5 顺序 migration。v3 引入 Schedule/Run，v4 为 Run 增加 `active_attempt_run_id` 与 `cleanup_attempt_run_id`，v5 为 Schedule 增加 `parameter_policy_json`、为 Run 增加不可变 `parameter_values_json`。v2 原地升级、带业务行的 v3/v4 升级、重复打开、事务回滚和未知未来版本失败关闭都有合同测试，任何 repository 都不得重新维护自己的 schema version 或 migration 分支。
 
-Schedule v1 持久化规范化的五段 Cron 表达式和 IANA timezone；“每日”只是 UI 对 Cron 的受控简化。v1 Cron 只接受数值、列表、升序范围和步长，day-of-month/day-of-week 使用标准 union 语义；春季跳时中不存在的墙上分钟跳过，秋季回拨的重复墙上分钟只执行一次。`version_id` 创建后不可修改，切换 RecipeVersion 必须新建 Schedule。存在 enabled Schedule 时归档其 RecipeVersion 必须失败关闭，用户需先显式停用 Schedule；已绑定 archived version 的 Schedule 不允许重新启用。归档不删除不可变版本字节，归档前已经入队并固定该版本的 Run 仍可完成，避免管理动作静默改写既有执行计划。`next_run_at` 统一按 UTC 持久化，解析和展示时才使用 Schedule timezone；重新启用时从启用时刻之后重算，不补跑显式停用期间的周期。
+Schedule v1 持久化规范化的五段 Cron 表达式、IANA timezone 和按固定 RecipeVersion 校验的 parameter policy；“每日”只是 UI 对 Cron 的受控简化。非日期参数使用 typed literal；date/datetime 还可选择 `scheduled_date` / `scheduled_datetime` 与受限天数偏移。Scheduler 在入队时按 Schedule timezone 和 `scheduled_for` 解析 policy、补全默认值，并把实际值冻结到 Run；之后编辑 Schedule 不得改变旧 Run。v1 Cron 只接受数值、列表、升序范围和步长，day-of-month/day-of-week 使用标准 union 语义；春季跳时中不存在的墙上分钟跳过，秋季回拨的重复墙上分钟只执行一次。`version_id` 创建后不可修改，切换 RecipeVersion 必须新建 Schedule。存在 enabled Schedule 时归档其 RecipeVersion 必须失败关闭，用户需先显式停用 Schedule；已绑定 archived version 的 Schedule 不允许重新启用。归档不删除不可变版本字节，归档前已经入队并固定该版本与实际参数的 Run 仍可完成，避免管理动作静默改写既有执行计划。`next_run_at` 统一按 UTC 持久化，解析和展示时才使用 Schedule timezone；重新启用时从启用时刻之后重算，不补跑显式停用期间的周期。
 
-持久化 Run 使用独立的队列状态，不复用 Recipe Core 的终态制品枚举。Run 至少保存明确 scope、固定 version、触发类型、`scheduled_for`、尝试次数、下一次可领取时间、lease owner/token/expiry、取消请求、内部 active/cleanup attempt id、最终安全错误和可校验 artifact reference。逻辑 `run_id` 与每次 Executor 尝试的 artifact run id 分开，避免崩溃恢复或重试与已有的不完整/不可变运行目录冲突；active/cleanup id 不进入公共 API。SQLite 不保存参数值、连接参数、凭据或绝对 artifact 路径；v1 Schedule 和持久化 manual Run 都只运行固定 Recipe/default binding。
+持久化 Run 使用独立的队列状态，不复用 Recipe Core 的终态制品枚举。Run 至少保存明确 scope、固定 version、触发类型、`scheduled_for`、不可变 typed parameter values、尝试次数、下一次可领取时间、lease owner/token/expiry、取消请求、内部 active/cleanup attempt id、最终安全错误和可校验 artifact reference。逻辑 `run_id` 与每次 Executor 尝试的 artifact run id 分开，避免崩溃恢复或重试与已有的不完整/不可变运行目录冲突；active/cleanup id 不进入公共 API。SQLite 只保存 RecipeSpec 允许的非敏感业务值，不保存凭据、连接参数或绝对 artifact 路径；参数不得被用作 secret 容器。Worker 只执行 Run 行冻结的完整值，不在领取或重试时重新解析 Schedule。
 
 当前 repository 已支持 Schedule 创建、查询、列表、编辑、启停和按 `(schedule_id, scheduled_for)` 幂等创建 queued Run；单次 Scheduler tick 会在一个 `BEGIN IMMEDIATE` 事务中完成到期扫描、最多一个停机补偿 Run 入队和 `next_run_at` 推进，任一 Schedule 计算失败时整批回滚。Run repository 已实现 scoped list/get、每次调用生成独立逻辑 Run 的持久化 manual enqueue、合法状态转换、claim/renew/fencing、运行中取消请求、最多 3 次总尝试、过期 lease 恢复和精确 attempt cleanup 门禁；`AutomationWorker.run_once()` 把恢复、清理、claim、明确 scope 打开、固定版本验证、确定性执行和终态写回接成闭环，`AutomationRuntime` 与 `data_formulator_worker` 则负责正式的常驻本机进程生命周期。
 
@@ -266,11 +277,11 @@ Recipe 和 Run 的所有持久化路径都通过现有 `ConfinedDir` 解析；�
 
 最小 API：
 
-- Recipe：compile、get/list、dry-run、publish、archive。
+- Recipe：parameter candidates、可选 authoring-time parameter suggestions、compile、get/list、dry-run、publish、archive。
 - Schedule：create/update、enable/disable、list。
-- Run：manual enqueue、list/get、cancel、manifest/events。
+- Run：manual enqueue、list/get、cancel、manifest/events、result、成功 Run 最终输出表的只读 sample/download，以及显式的一次性 report analysis。
 
-这些 API 已在 `1f5f181d` 落地。`AUTOMATION_ENABLED=false` 时在存储初始化前失败关闭；所有资源访问都由当前 identity 和 durable local Workspace 限定。Schedule 首次排期、重新启用排期和 manual Run 时间由服务端计算，写请求严格拒绝客户端提供的 `next_run_at`、`scheduled_for`、参数、凭据或 Run id。创建 Schedule、启用 Schedule 和 manual enqueue 要求稳定代码签名及 Published RecipeVersion 的完整 default binding；读取、停用和取消不会被不必要地扩大为签名写入边界。Run 公共表示不返回 lease owner、fencing token 或 lease expiry。manifest/events 端点从逻辑 Run 解析 attempt reference，并在返回内容前校验 Workspace scope、安全相对路径、manifest hash、descriptor 和全部文件 hash；活动 Run 或损坏制品失败关闭。
+管理 API 在 `1f5f181d` 落地，2026-08-20 又在同一 scoped 边界补齐 typed values 与结果读取。`AUTOMATION_ENABLED=false` 时在存储初始化前失败关闭；所有资源访问都由当前 identity 和 durable local Workspace 限定。Schedule 首次排期、重新启用排期和 manual Run 时间由服务端计算；manual enqueue 只接受当前 RecipeSpec 声明的 typed `parameters`，Schedule create/update 只接受相同 spec 下的 `parameter_policy`，未知 slot、错误类型、越界偏移和过大 canonical JSON 都失败关闭。客户端仍不能提交 `next_run_at`、`scheduled_for`、凭据或 Run id。创建 Schedule、启用 Schedule 和 manual enqueue 要求稳定代码签名及 Published RecipeVersion；服务端补全默认值并保证 Run 冻结值完整。读取、停用和取消不会被不必要地扩大为签名写入边界。Run 公共表示返回本次非敏感参数与结果引用，但不返回 lease owner、fencing token 或 lease expiry。manifest/events/result 及输出表 sample/download 都先从逻辑 Run 解析 attempt reference，并校验 Workspace scope、安全相对路径、manifest hash、descriptor 和全部文件 hash；sample/download 只允许成功 Run 在 Recipe 中声明的最终输出表，活动 Run、中间表或损坏制品失败关闭。`POST /runs/<id>/analysis` 只接受当前模型配置和受限 timeout，内部先走同一完整性校验，再构造最多 60,000 字节、10 个输出、每输出 20 行/20 列的上下文；严格结构化响应无效时返回安全错误，但不改变 Run 终态。
 
 三个新增产品触点：
 
@@ -278,11 +289,13 @@ Recipe 和 Run 的所有持久化路径都通过现有 `ConfinedDir` 解析；�
 2. 单一 `/automation` 页面中的 Recipes 区域：版本、输入、步骤、dry run、发布、持久化手动入队，以及 dry run 的本次结果摘要。
 3. 同一页面中的 Schedule 与 Runs Inbox 区域：调度设置、状态、Needs Review、错误、日志和输出链接。
 
-M3-D 页面已经实现每日时间到规范化 Cron 的受控转换、原始 Cron/IANA timezone 编辑、固定版本 Schedule 启停，以及按状态筛选的持久化 Runs Inbox。queued/running Run 可请求取消；有最终制品的 Run 可查看已校验的 manifest/events；Needs Review 可返回产生该 Run 的不可变 RecipeVersion。Workspace 或版本快速切换时，旧请求结果不会覆盖新作用域。
+M3-D 页面已经实现每日时间到规范化 Cron 的受控转换、原始 Cron/IANA timezone 编辑、固定版本 Schedule 启停、手动/定时 typed values，以及按状态筛选的持久化 Runs Inbox。Published RecipeVersion 的主操作区先显示本次手动值；每个 Schedule 保存自己的固定值或运行日相对日期策略；Run 列表和结果页显示本次实际冻结值。queued/running Run 可请求取消；失败或 Needs Review Run 查看步骤证据和技术信息，Needs Review 还能返回产生该 Run 的不可变 RecipeVersion；成功 Run 则打开该次制品的只读分析报告。报告上下文只从该 Run 固定并经校验的 RecipeVersion 投影，输出只从终态 artifact 读取；前端把状态、时间、触发方式和冻结参数压成一行，不再重复展示目标说明、只读提示和处理步骤，随后连续呈现全部最终输出。原有图表和表格渲染器、按需支撑数据、分页、排序、筛选、搜索和完整 CSV 下载保持不变。Workspace、版本、Run 或模型快速切换时，旧请求结果不会覆盖新作用域。
+
+Automation 分析报告不是 Workflow Replay、原会话 Report Artifact，也不是新的 Data Thread：打开结果不得创建 Workspace 表、写入 Redux 会话、调用 Agent、重新执行 Recipe、生成新的自然语言结论或提供编辑控件。用户可另行点击“AI 解读”，让现有 LiteLLM Client 对已验证、限量的不可变上下文和结果样本做一次证据约束的解释；这一步不属于 Run/Scheduler/Worker，不重算数据、不改参数、不持久化，也不开放继续追问。如果以后提供“继续分析”，必须是另一个明确创建新会话副本的动作，不能把查看报告或一次性解读伪装成重放。
 
 最终导航只保留现有工作区 rail 上的 `Automation` 入口；`/recipes` 仅作为保留 query/hash 的兼容重定向。不要恢复独立 Recipes 导航，不新增“应用 → 自动化”包装层，也不改变原有项目/Workspace 概念。Recipe Core 提供的生命周期视图在 M3 中被纳入该统一页面，但仍不负责 Schedule repository、Worker 或持久化 Run 历史。
 
-现有 Workflow Replay 保持原入口和名称。Save as Recipe 与 Replay 不共用一个动作。
+现有 Workflow Replay 保持原入口和名称。Save as Recipe、View Run result、AI 解读与 Replay 不共用一个动作；AI 解读只复用 Workflow 已验证的“目标 + 参数 + 有序步骤”上下文组织思路，不复用其语义重做行为。
 
 当前代码没有独立通用 Sidebar；路由和导航修改落在真实的 `src/app/App.tsx` 等现有入口。
 

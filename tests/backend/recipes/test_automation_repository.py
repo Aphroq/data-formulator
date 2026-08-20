@@ -10,6 +10,7 @@ from data_formulator.automation.models import (
     AutomationRunStatus,
     AutomationRunTrigger,
 )
+from data_formulator.automation.parameters import resolve_schedule_parameter_policy
 from data_formulator.automation.repository import (
     AutomationRepository,
     AutomationScopeError,
@@ -64,6 +65,7 @@ def _create_schedule(
     version_id: str,
     *,
     schedule_id: str = "sch_" + "1" * 32,
+    parameter_policy=None,
 ):
     return repository.create_schedule(
         identity_id=workspace.identity_id,
@@ -74,6 +76,7 @@ def _create_schedule(
         timezone_name="UTC",
         next_run_at=datetime(2026, 8, 20, 9, tzinfo=timezone.utc),
         schedule_id=schedule_id,
+        parameter_policy=parameter_policy or {},
     )
 
 
@@ -209,8 +212,66 @@ def test_scheduled_run_enqueue_is_idempotent_for_one_planned_time(
     assert first.attempt_count == 0
     assert first.artifact_run_id is None
     assert first.scheduled_for == "2026-08-20T09:00:00.000000Z"
+    assert first.parameter_values == {}
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 1
+
+
+def test_scheduled_run_freezes_resolved_parameters_before_schedule_edits(
+    tmp_path,
+    recipe_workspace,
+    executable_recipe: CompiledRecipe,
+) -> None:
+    database_path = tmp_path / "automation.db"
+    recipes = RecipeRepository(database_path)
+    published = _publish_version(recipes, recipe_workspace, executable_recipe)
+    automation = AutomationRepository(database_path)
+    schedule = _create_schedule(
+        automation,
+        recipe_workspace,
+        published.version_id,
+        parameter_policy={
+            "as_of": {"source": "scheduled_date", "offset_days": -1},
+            "region": {"source": "literal", "value": "west"},
+        },
+    )
+
+    queued = automation.enqueue_scheduled_run(
+        recipe_workspace.identity_id,
+        recipe_workspace.workspace_id,
+        schedule.schedule_id,
+        scheduled_for=datetime(2026, 8, 20, 1, tzinfo=timezone.utc),
+    )
+    updated = automation.update_schedule(
+        recipe_workspace.identity_id,
+        recipe_workspace.workspace_id,
+        schedule.schedule_id,
+        parameter_policy={
+            "as_of": {"source": "scheduled_date", "offset_days": 0},
+            "region": {"source": "literal", "value": "east"},
+        },
+    )
+
+    assert schedule.parameter_policy["region"]["value"] == "west"
+    assert updated.parameter_policy["region"]["value"] == "east"
+    assert queued.parameter_values == {
+        "as_of": "2026-08-19",
+        "region": "west",
+    }
+    assert queued.parameter_values == resolve_schedule_parameter_policy(
+        schedule.parameter_policy,
+        scheduled_for=queued.scheduled_for,
+        timezone_name=schedule.timezone,
+    )
+
+    with sqlite3.connect(database_path) as connection, pytest.raises(
+        sqlite3.IntegrityError,
+        match="immutable",
+    ):
+        connection.execute(
+            "UPDATE runs SET parameter_values_json = '{}' WHERE run_id = ?",
+            (queued.run_id,),
+        )
 
 
 def test_manual_runs_are_distinct_and_listed_only_inside_their_scope(
@@ -228,15 +289,19 @@ def test_manual_runs_are_distinct_and_listed_only_inside_their_scope(
         recipe_workspace.identity_id,
         recipe_workspace.workspace_id,
         published.version_id,
+        parameter_values={"region": "west"},
     )
     current += timedelta(seconds=1)
     second = automation.enqueue_manual_run(
         recipe_workspace.identity_id,
         recipe_workspace.workspace_id,
         published.version_id,
+        parameter_values={"region": "east"},
     )
 
     assert first.run_id != second.run_id
+    assert first.parameter_values == {"region": "west"}
+    assert second.parameter_values == {"region": "east"}
     assert first.schedule_id is None
     assert first.trigger is AutomationRunTrigger.MANUAL
     assert first.status is AutomationRunStatus.QUEUED

@@ -71,6 +71,44 @@
             "type": "string",
             "description": "snake_case name of the DataFrame variable the code assigns."
           },
+          "parameter_slots": {
+            "type": "array",
+            "maxItems": 4,
+            "description": "Optional meaningful controls for later deterministic Recipe runs. Declare only scalar thresholds, counts, window sizes, category/date values, or similar data values that a user would reasonably change. The code MUST read every declared id with a literal params['id'] lookup in a data comparison/arithmetic expression or a bounded operation such as head, rolling, between, isin, clip, or quantile. Never parameterize Python/SQL text, expressions, operators, file names, table names, column names, callables, or chart encodings.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]{0,63}$",
+                  "description": "Stable snake_case machine id used by params['id']."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Short user-facing label in the user's language."
+                },
+                "description": {
+                  "type": "string",
+                  "description": "One short sentence explaining how changing the value affects the result."
+                },
+                "type": {
+                  "type": "string",
+                  "enum": ["string", "integer", "number", "boolean", "date", "datetime"]
+                },
+                "default": {
+                  "description": "Scalar value used to produce the current result; it must match type.",
+                  "anyOf": [
+                    {"type": "string"},
+                    {"type": "integer"},
+                    {"type": "number"},
+                    {"type": "boolean"}
+                  ]
+                }
+              },
+              "required": ["id", "name", "description", "type", "default"],
+              "additionalProperties": false
+            }
+          },
           "chart": {
             "type": "object",
             "description": "Chart spec: {chart_type, encodings:{x,y,...}, config:{}}. chart_type from the chart type reference."

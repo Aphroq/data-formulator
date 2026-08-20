@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import flask
 import pyarrow as pa
 import pytest
 
 from data_formulator.error_handler import register_error_handlers
+from data_formulator.recipes.canonical import thaw_json
+from data_formulator.recipes.lineage import ArtifactLedger
+from data_formulator.recipes.models import ArtifactType
+from data_formulator.recipes.parameter_suggestions import (
+    RecipeParameterSuggestion,
+    RecipeParameterSuggestionResult,
+)
 from data_formulator.recipes.repository import RecipeRepository
 from data_formulator.routes import recipes as recipe_routes
 from data_formulator.routes.recipes import recipes_bp
@@ -122,6 +131,170 @@ def test_recipe_api_runs_the_persisted_version_lifecycle(
     ).get_json()
     assert rejected["status"] == "error"
     assert rejected["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_recipe_api_exposes_safe_parameter_candidates_for_saved_workflows(
+    recipe_api,
+    executable_recipe,
+    recipe_workspace,
+    monkeypatch,
+) -> None:
+    _app, client, _repository = recipe_api
+    ledger = ArtifactLedger.for_workspace(recipe_workspace)
+    load = next(
+        node for node in ledger.list_nodes()
+        if node.artifact_type is ArtifactType.LOAD
+    )
+    execution = thaw_json(load.execution)
+    execution["step"]["query"] = {
+        "filters": [{"column": "region", "op": "EQ", "value": "west"}],
+        "limit": 100,
+    }
+    parameterized_load = replace(
+        load,
+        origin_id=f"{load.origin_id}/parameter-candidates",
+        execution=execution,
+    )
+    ledger.record(parameterized_load)
+    target_id = parameterized_load.artifact_id
+
+    preview = client.post(
+        "/api/recipes/parameter-candidates",
+        json={"target_artifact_ids": [target_id]},
+    ).get_json()
+
+    assert preview["status"] == "success"
+    candidates = preview["data"]["candidates"]
+    assert [(item["kind"], item["name"], item["default"]) for item in candidates] == [
+        ("filter", "region", "west"),
+        ("limit", "Row limit", 100),
+    ]
+
+    captured: dict = {}
+
+    def suggest(_client, candidate_slots, **kwargs):
+        captured["candidate_ids"] = [item.candidate_id for item in candidate_slots]
+        captured.update(kwargs)
+        return RecipeParameterSuggestionResult(
+            suggestions=(RecipeParameterSuggestion(
+                candidate_id=candidate_slots[0].candidate_id,
+                name="Sales region",
+                description="Region included in this run.",
+                mode="ask",
+            ),),
+            unmatched=("Top products",),
+        )
+
+    model_client = object()
+    monkeypatch.setattr(recipe_routes, "get_client", lambda _config: model_client)
+    monkeypatch.setattr(
+        recipe_routes,
+        "suggest_recipe_parameter_configurations",
+        suggest,
+    )
+    suggested = client.post(
+        "/api/recipes/parameter-suggestions",
+        json={
+            "target_artifact_ids": [target_id],
+            "name": "Regional totals",
+            "description": "Refresh and chart regional totals.",
+            "model": {"endpoint": "openai", "model": "test-model"},
+            "workflow_context": {
+                "threads": [{
+                    "thread_id": "thread-1",
+                    "events": [{
+                        "type": "message",
+                        "from": "user",
+                        "to": "data-agent",
+                        "role": "user",
+                        "content": "Compare regional totals",
+                    }],
+                }],
+            },
+            "timeout_seconds": 45,
+        },
+        headers={"Accept-Language": "en-US"},
+    ).get_json()
+
+    assert suggested["status"] == "success"
+    assert suggested["data"]["suggestions"][0] == {
+        "candidate_id": candidates[0]["candidate_id"],
+        "name": "Sales region",
+        "description": "Region included in this run.",
+        "mode": "ask",
+    }
+    assert suggested["data"]["unmatched"] == ["Top products"]
+    assert captured["candidate_ids"] == [
+        item["candidate_id"] for item in candidates
+    ]
+    assert captured["language_code"] == "en"
+    assert captured["timeout_seconds"] == 45
+
+    compiled = client.post(
+        "/api/recipes/compile",
+        json={
+            "target_artifact_ids": [target_id],
+            "name": "Regional totals",
+            "description": "Refresh and chart regional totals.",
+            "parameter_configurations": suggested["data"]["suggestions"],
+        },
+    ).get_json()
+
+    assert compiled["status"] == "success"
+    assert [item["name"] for item in compiled["data"]["spec"]["parameters"]] == [
+        "Sales region",
+    ]
+    assert "default" not in compiled["data"]["spec"]["parameters"][0]
+
+
+def test_recipe_parameter_suggestions_can_explain_an_unbound_workflow_choice(
+    recipe_api,
+    executable_recipe,
+    monkeypatch,
+) -> None:
+    _app, client, _repository = recipe_api
+    captured: dict[str, object] = {}
+
+    def suggest(_client, candidate_slots, **kwargs):
+        captured["candidate_count"] = len(candidate_slots)
+        captured.update(kwargs)
+        return RecipeParameterSuggestionResult(
+            suggestions=(),
+            unmatched=("Top products",),
+        )
+
+    monkeypatch.setattr(recipe_routes, "get_client", lambda _config: object())
+    monkeypatch.setattr(
+        recipe_routes,
+        "suggest_recipe_parameter_configurations",
+        suggest,
+    )
+    response = client.post(
+        "/api/recipes/parameter-suggestions",
+        json={
+            "target_artifact_ids": list(executable_recipe.spec.target_artifact_ids),
+            "model": {"endpoint": "openai", "model": "test-model"},
+            "workflow_context": {
+                "threads": [{
+                    "thread_id": "regional-totals",
+                    "events": [{
+                        "type": "message",
+                        "from": "user",
+                        "to": "data-agent",
+                        "role": "user",
+                        "content": "Show the top products by regional sales.",
+                    }],
+                }],
+            },
+        },
+    ).get_json()
+
+    assert response["status"] == "success"
+    assert response["data"] == {
+        "suggestions": [],
+        "unmatched": ["Top products"],
+    }
+    assert captured["candidate_count"] == 0
 
 
 def test_recipe_api_is_unavailable_when_feature_flag_is_off(

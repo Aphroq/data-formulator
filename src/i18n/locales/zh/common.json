@@ -44,7 +44,7 @@
     "errorOccurred": "发生错误，请<refreshAction>刷新会话</refreshAction>。如果问题仍然存在，请点击关闭会话。",
     "about": "关于",
     "app": "应用",
-    "automation": "Automation",
+    "automation": "自动化",
     "primaryNavigation": "主导航",
     "recipes": "配方",
     "data": "数据",
@@ -518,6 +518,8 @@
     "restoreOrder": "恢复原始顺序",
     "downloadAsCsv": "下载为 CSV",
     "downloading": "下载中...",
+    "search": "搜索",
+    "searchPlaceholder": "搜索表格…",
     "columnMenu": {
       "openMenu": "列选项",
       "sortAsc": "升序排序",

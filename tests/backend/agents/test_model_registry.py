@@ -49,6 +49,7 @@ SAMPLE_ENV = _make_env({
         "api_key": "sk-secret-deepseek-key",
         "api_base": "https://api.deepseek.com/v1",
         "models": "deepseek-chat",
+        "enable_thinking": "false",
     },
 })
 
@@ -133,6 +134,7 @@ class TestCustomProvider:
         config = registry.get_config("global-deepseek-deepseek-chat")
         assert config is not None
         assert config["endpoint"] == "openai"
+        assert config["enable_thinking"] is False
 
     @patch.dict(os.environ, SAMPLE_ENV, clear=True)
     def test_builtin_provider_uses_own_name_as_endpoint(self):
@@ -152,5 +154,14 @@ class TestCustomProvider:
         config = registry.get_config("global-myvendor-my-model")
         assert config is not None
         assert config["endpoint"] == "openai"
+
+    @patch.dict(os.environ, SAMPLE_ENV, clear=True)
+    def test_provider_thinking_setting_is_not_in_public_model_info(self):
+        registry = ModelRegistry()
+        public = next(
+            item for item in registry.list_public()
+            if item["id"] == "global-deepseek-deepseek-chat"
+        )
+        assert "enable_thinking" not in public
 
 

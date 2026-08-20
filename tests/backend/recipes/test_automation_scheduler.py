@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -247,3 +248,108 @@ def test_tick_rolls_back_all_schedules_when_next_time_calculation_fails(
     ).next_run_at == "2026-08-20T10:00:00.000000Z"
     with sqlite3.connect(repository.database_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
+
+
+def test_two_scheduler_connections_contending_for_one_due_schedule_enqueue_once(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 8, 20, 12, tzinfo=timezone.utc)
+    clock = _MutableClock(now)
+    database_path = tmp_path / "automation.db"
+    setup_repository = AutomationRepository(database_path, clock=clock)
+    _seed_published_version(setup_repository)
+    schedule = _create_schedule(
+        setup_repository,
+        schedule_id="sch_" + "8" * 32,
+        next_run_at=now - timedelta(hours=3),
+    )
+
+    first_has_write_lock = threading.Event()
+    release_first = threading.Event()
+    second_begin_attempted = threading.Event()
+    second_finished = threading.Event()
+    results: list[object | None] = [None, None]
+    failures: list[BaseException] = []
+
+    def hold_first_transaction(current_schedule, after):
+        first_has_write_lock.set()
+        if not release_first.wait(timeout=5):
+            raise AssertionError("Concurrent Scheduler was not released")
+        return AutomationScheduler._calculate_next_run(current_schedule, after)
+
+    first_scheduler = AutomationScheduler(
+        AutomationRepository(database_path, clock=clock),
+        clock=clock,
+        next_run_calculator=hold_first_transaction,
+    )
+    second_repository = AutomationRepository(database_path, clock=clock)
+
+    class ObservedConnection(sqlite3.Connection):
+        def execute(self, sql, parameters=(), /):
+            if sql.strip().upper() == "BEGIN IMMEDIATE":
+                second_begin_attempted.set()
+            return super().execute(sql, parameters)
+
+    def connect_second_repository() -> sqlite3.Connection:
+        connection = sqlite3.connect(
+            database_path,
+            timeout=5.0,
+            factory=ObservedConnection,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 5000")
+        connection.execute("PRAGMA journal_mode = WAL")
+        return connection
+
+    monkeypatch.setattr(
+        second_repository._database,
+        "connect",
+        connect_second_repository,
+    )
+    second_scheduler = AutomationScheduler(second_repository, clock=clock)
+
+    def run_first() -> None:
+        try:
+            results[0] = first_scheduler.tick()
+        except BaseException as exc:  # make thread failures visible to pytest
+            failures.append(exc)
+
+    def run_second() -> None:
+        try:
+            results[1] = second_scheduler.tick()
+        except BaseException as exc:  # make thread failures visible to pytest
+            failures.append(exc)
+        finally:
+            second_finished.set()
+
+    first_thread = threading.Thread(target=run_first)
+    second_thread = threading.Thread(target=run_second)
+    first_thread.start()
+    assert first_has_write_lock.wait(timeout=5)
+    second_thread.start()
+    assert second_begin_attempted.wait(timeout=5)
+    # The observed second connection has called BEGIN IMMEDIATE and cannot
+    # finish while the first connection holds the write lock.
+    assert not second_finished.wait(timeout=0.1)
+    release_first.set()
+    first_thread.join(timeout=10)
+    second_thread.join(timeout=10)
+
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    assert failures == []
+    run_counts = sorted(len(result.runs) for result in results if result is not None)
+    assert run_counts == [0, 1]
+
+    verifier = AutomationRepository(database_path, clock=clock)
+    runs = verifier.list_runs("user:alice", "ws-1")
+    assert len(runs) == 1
+    assert runs[0].schedule_id == schedule.schedule_id
+    assert runs[0].scheduled_for == "2026-08-20T09:00:00.000000Z"
+    assert verifier.get_schedule(
+        "user:alice",
+        "ws-1",
+        schedule.schedule_id,
+    ).next_run_at == "2026-08-21T09:00:00.000000Z"

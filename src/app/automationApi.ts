@@ -1,7 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import { apiRequest } from './apiClient';
+import { apiRequest, assertDownloadResponseOk } from './apiClient';
+import { fetchWithIdentity } from './utils';
 
 
 export type AutomationRunStatus =
@@ -11,6 +12,11 @@ export type AutomationRunStatus =
     | 'failed'
     | 'needs_review'
     | 'cancelled';
+
+export type AutomationParameterPolicy =
+    | { source: 'literal'; value: unknown }
+    | { source: 'scheduled_date'; offset_days: number }
+    | { source: 'scheduled_datetime'; offset_days: number };
 
 export interface AutomationSchedule {
     schedule_id: string;
@@ -22,6 +28,7 @@ export interface AutomationSchedule {
     next_run_at: string;
     created_at: string;
     updated_at: string;
+    parameter_policy: Record<string, AutomationParameterPolicy>;
 }
 
 export interface AutomationRunArtifact {
@@ -45,6 +52,7 @@ export interface AutomationRun {
     error: { code: string; message: string } | null;
     created_at: string;
     updated_at: string;
+    parameters: Record<string, unknown>;
 }
 
 export interface AutomationRunEvent {
@@ -68,6 +76,92 @@ export interface AutomationRunManifest {
     [key: string]: unknown;
 }
 
+export interface AutomationRunResultColumn {
+    name: string;
+    type: 'string' | 'boolean' | 'integer' | 'number' | 'date' | 'datetime' | 'time' | 'duration';
+}
+
+export interface AutomationRunResultTable {
+    name: string;
+    row_count: number;
+    column_count: number;
+    columns: AutomationRunResultColumn[];
+    rows: Record<string, unknown>[];
+    rows_truncated: boolean;
+    columns_truncated: boolean;
+}
+
+export interface AutomationRunResultChart {
+    spec: {
+        chart_type: string;
+        encodings: Record<string, string>;
+        config?: Record<string, unknown>;
+        [key: string]: unknown;
+    };
+    field_metadata: Record<string, unknown>;
+    field_display_names: Record<string, string>;
+}
+
+export interface AutomationRunResultOutput {
+    step_id: string;
+    kind: 'load' | 'transform' | 'chart';
+    title: string;
+    subtitle: string;
+    display_instruction: string;
+    chart: AutomationRunResultChart | null;
+    table: AutomationRunResultTable;
+}
+
+export interface AutomationRunResultReport {
+    title: string;
+    description: string;
+    parameters: Array<{
+        id: string;
+        name: string;
+        description: string;
+        type: 'string' | 'integer' | 'number' | 'boolean' | 'date' | 'datetime';
+    }>;
+    steps: Array<{
+        step_id: string;
+        kind: 'load' | 'transform' | 'chart';
+        title: string;
+    }>;
+}
+
+export interface AutomationRunResult {
+    manifest: AutomationRunManifest;
+    events: AutomationRunEvent[];
+    report: AutomationRunResultReport;
+    outputs: AutomationRunResultOutput[];
+}
+
+export interface AutomationRunAnalysisInsight {
+    finding: string;
+    evidence: string;
+}
+
+export interface AutomationRunAnalysis {
+    summary: string;
+    insights: AutomationRunAnalysisInsight[];
+    caveat: string;
+}
+
+export interface AutomationRunTableSampleRequest {
+    size: number;
+    offset: number;
+    method: 'head' | 'bottom' | 'random';
+    order_by_fields: string[];
+    select_fields?: string[];
+    aggregate_fields_and_functions?: Array<[string | null, string]>;
+    filters?: Record<string, unknown>[];
+    search?: string;
+}
+
+export interface AutomationRunTableSample {
+    rows: Record<string, unknown>[];
+    total_row_count: number;
+}
+
 export async function listSchedules(): Promise<AutomationSchedule[]> {
     const { data } = await apiRequest<{ schedules: AutomationSchedule[] }>(
         '/api/automation/schedules',
@@ -80,6 +174,7 @@ export async function createSchedule(input: {
     name: string;
     cronExpression: string;
     timezone: string;
+    parameterPolicy?: Record<string, AutomationParameterPolicy>;
 }): Promise<AutomationSchedule> {
     const { data } = await apiRequest<{ schedule: AutomationSchedule }>(
         '/api/automation/schedules',
@@ -91,6 +186,7 @@ export async function createSchedule(input: {
                 name: input.name,
                 cron_expression: input.cronExpression,
                 timezone: input.timezone,
+                parameter_policy: input.parameterPolicy ?? {},
             }),
         },
     );
@@ -103,6 +199,7 @@ export async function updateSchedule(
         name?: string;
         cronExpression?: string;
         timezone?: string;
+        parameterPolicy?: Record<string, AutomationParameterPolicy>;
     },
 ): Promise<AutomationSchedule> {
     const { data } = await apiRequest<{ schedule: AutomationSchedule }>(
@@ -116,6 +213,9 @@ export async function updateSchedule(
                     ? {}
                     : { cron_expression: input.cronExpression }),
                 ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
+                ...(input.parameterPolicy === undefined
+                    ? {}
+                    : { parameter_policy: input.parameterPolicy }),
             }),
         },
     );
@@ -134,13 +234,16 @@ export async function setScheduleEnabled(
     return data.schedule;
 }
 
-export async function enqueueManualRun(versionId: string): Promise<AutomationRun> {
+export async function enqueueManualRun(
+    versionId: string,
+    parameters: Record<string, unknown> = {},
+): Promise<AutomationRun> {
     const { data } = await apiRequest<{ run: AutomationRun }>(
         '/api/automation/runs/manual',
         {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ version_id: versionId }),
+            body: JSON.stringify({ version_id: versionId, parameters }),
         },
     );
     return data.run;
@@ -189,4 +292,65 @@ export async function getRunEvents(runId: string): Promise<AutomationRunEvent[]>
         `/api/automation/runs/${encodeURIComponent(runId)}/events`,
     );
     return data.events;
+}
+
+export async function getRunResult(runId: string): Promise<AutomationRunResult> {
+    const { data } = await apiRequest<{ result: AutomationRunResult }>(
+        `/api/automation/runs/${encodeURIComponent(runId)}/result`,
+    );
+    return data.result;
+}
+
+export async function analyzeRunResult(
+    runId: string,
+    input: {
+        model: Record<string, unknown>;
+        timeoutSeconds?: number;
+    },
+): Promise<AutomationRunAnalysis> {
+    const { data } = await apiRequest<{ analysis: AutomationRunAnalysis }>(
+        `/api/automation/runs/${encodeURIComponent(runId)}/analysis`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: input.model,
+                timeout_seconds: input.timeoutSeconds ?? 120,
+            }),
+        },
+    );
+    return data.analysis;
+}
+
+export async function sampleRunResultTable(
+    runId: string,
+    tableName: string,
+    request: AutomationRunTableSampleRequest,
+): Promise<AutomationRunTableSample> {
+    const { data } = await apiRequest<AutomationRunTableSample>(
+        `/api/automation/runs/${encodeURIComponent(runId)}/tables/${encodeURIComponent(tableName)}/sample`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(request),
+        },
+    );
+    return data;
+}
+
+export async function downloadRunResultTable(
+    runId: string,
+    tableName: string,
+    format: 'csv' | 'tsv',
+): Promise<Blob> {
+    const response = await fetchWithIdentity(
+        `/api/automation/runs/${encodeURIComponent(runId)}/tables/${encodeURIComponent(tableName)}/download`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ delimiter: format === 'tsv' ? '\t' : ',' }),
+        },
+    );
+    await assertDownloadResponseOk(response, 'Run result download failed');
+    return response.blob();
 }

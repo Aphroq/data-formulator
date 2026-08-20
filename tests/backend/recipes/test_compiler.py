@@ -19,7 +19,11 @@ from data_formulator.data_operations import (
 )
 from data_formulator.datalake.workspace import Workspace
 from data_formulator.recipes.binding import bind_recipe_parameters
-from data_formulator.recipes.compiler import RecipeCompileError, RecipeCompiler
+from data_formulator.recipes.compiler import (
+    RecipeCompileError,
+    RecipeCompiler,
+    RecipeParameterConfiguration,
+)
 from data_formulator.recipes.lineage import ArtifactLedger, ArtifactLineageError
 from data_formulator.recipes.models import ArtifactNode, ArtifactType
 from data_formulator.recipes.spec import (
@@ -160,6 +164,168 @@ def test_compiler_walks_ancestors_and_builds_stable_recipe(graph: _Graph) -> Non
     assert first.spec.has_unresolved_inputs is False
     assert "## Steps" in first.workflow_markdown
     assert "Regional totals" in first.workflow_markdown
+
+
+def test_compiler_discovers_only_structural_load_parameter_candidates(
+    graph: _Graph,
+) -> None:
+    compiler = RecipeCompiler.for_workspace(graph.workspace)
+
+    candidates = compiler.parameter_candidates((graph.target_artifact_id,))
+
+    assert [(item.kind, item.name, item.value_type, item.default_value) for item in candidates] == [
+        ("filter", "region", ParameterType.STRING, "west"),
+        ("limit", "Row limit", ParameterType.INTEGER, 100),
+    ]
+    selected = compiler.compile(
+        target_artifact_ids=(graph.target_artifact_id,),
+        name="Regional totals",
+        parameter_candidate_ids=(item.candidate_id for item in candidates),
+    )
+    assert [item.name for item in selected.spec.parameters] == ["region", "Row limit"]
+    assert [item.id for item in selected.spec.parameters] == ["region", "row_limit"]
+    assert [item.target for item in selected.spec.bindings] == [
+        BindingTarget.LOAD_FILTER_VALUE,
+        BindingTarget.LOAD_LIMIT,
+    ]
+
+
+def test_compiler_discovers_and_structurally_binds_transform_parameter_slots(
+    graph: _Graph,
+) -> None:
+    graph.workspace.write_parquet(
+        pd.DataFrame({"region": ["east"], "amount": [20]}),
+        "large_orders",
+    )
+    code = (
+        "result_df = orders.loc[orders['amount'] >= "
+        "params['minimum_amount']].copy()"
+    )
+    artifacts = record_visualize_artifacts(
+        graph.workspace,
+        chart_id="chart-large-orders",
+        input_table_names=("orders",),
+        output_table_name="large_orders",
+        code=code,
+        code_signature=sign_code(code),
+        output_variable="result_df",
+        parameter_slots=({
+            "id": "minimum_amount",
+            "name": "Minimum amount",
+            "description": "Only include orders at or above this amount.",
+            "type": "number",
+            "default": 15,
+        },),
+        chart_spec={"chart_type": "Table", "encodings": {}},
+        field_metadata={},
+        field_display_names={},
+        display_instruction="Inspect large orders",
+        title="Large orders",
+        subtitle="",
+    )
+    compiler = RecipeCompiler.for_workspace(graph.workspace)
+
+    candidates = compiler.parameter_candidates((artifacts.chart.artifact_id,))
+    transform_candidate = next(item for item in candidates if item.kind == "transform")
+
+    assert transform_candidate.parameter_id == "minimum_amount"
+    assert transform_candidate.name == "Minimum amount"
+    assert transform_candidate.description == (
+        "Only include orders at or above this amount."
+    )
+    assert transform_candidate.value_type is ParameterType.NUMBER
+    assert transform_candidate.default_value == 15
+    assert transform_candidate.binding.target is BindingTarget.TRANSFORM_PARAMETER
+    assert transform_candidate.binding.slot_name == "minimum_amount"
+
+    compiled = compiler.compile(
+        target_artifact_ids=(artifacts.chart.artifact_id,),
+        name="Large orders",
+        parameter_candidate_ids=(transform_candidate.candidate_id,),
+    )
+    bound = bind_recipe_parameters(compiled.spec, {"minimum_amount": 18.5})
+    transform_execution = next(
+        step.to_dict()["execution"]
+        for step in bound.steps
+        if step.kind is RecipeStepKind.TRANSFORM
+    )
+
+    assert transform_execution["parameter_values"] == {"minimum_amount": 18.5}
+
+
+def test_compiler_applies_confirmed_parameter_metadata_without_changing_slots(
+    graph: _Graph,
+) -> None:
+    compiler = RecipeCompiler.for_workspace(graph.workspace)
+    candidates = compiler.parameter_candidates((graph.target_artifact_id,))
+
+    selected = compiler.compile(
+        target_artifact_ids=(graph.target_artifact_id,),
+        name="Regional totals",
+        parameter_configurations=(
+            RecipeParameterConfiguration(
+                candidate_id=candidates[0].candidate_id,
+                name="Sales region",
+                description="Region included in this run.",
+                mode="ask",
+            ),
+            RecipeParameterConfiguration(
+                candidate_id=candidates[1].candidate_id,
+                name="Maximum rows",
+                description="Safety cap for source rows.",
+                mode="keep",
+            ),
+        ),
+    )
+
+    assert [item.id for item in selected.spec.parameters] == ["region", "row_limit"]
+    assert [item.name for item in selected.spec.parameters] == [
+        "Sales region",
+        "Maximum rows",
+    ]
+    assert [item.description for item in selected.spec.parameters] == [
+        "Region included in this run.",
+        "Safety cap for source rows.",
+    ]
+    assert selected.spec.parameters[0].has_default is False
+    assert selected.spec.parameters[1].has_default is True
+    assert selected.spec.parameters[1].default_value == 100
+    assert [item.target for item in selected.spec.bindings] == [
+        BindingTarget.LOAD_FILTER_VALUE,
+        BindingTarget.LOAD_LIMIT,
+    ]
+
+    serialized = selected.spec.to_dict()["parameters"]
+    assert serialized[0]["description"] == "Region included in this run."
+    assert "default" not in serialized[0]
+    assert serialized[1]["default"] == 100
+
+
+def test_compiler_rejects_parameter_configuration_for_unknown_slot(
+    graph: _Graph,
+) -> None:
+    with pytest.raises(RecipeCompileError, match="parameter candidate"):
+        RecipeCompiler.for_workspace(graph.workspace).compile(
+            target_artifact_ids=(graph.target_artifact_id,),
+            name="Regional totals",
+            parameter_configurations=(RecipeParameterConfiguration(
+                candidate_id="cand_000000000000",
+                name="Invented value",
+            ),),
+        )
+
+
+def test_compiler_rejects_unknown_parameter_candidate_without_saving_a_slot(
+    graph: _Graph,
+) -> None:
+    compiler = RecipeCompiler.for_workspace(graph.workspace)
+
+    with pytest.raises(RecipeCompileError, match="parameter candidate"):
+        compiler.compile(
+            target_artifact_ids=(graph.target_artifact_id,),
+            name="Regional totals",
+            parameter_candidate_ids=("cand_unknown",),
+        )
 
 
 def test_compiler_requires_stable_signing_before_reading_lineage(

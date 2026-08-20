@@ -95,6 +95,16 @@ result and decide your next move.
   not restate the measure or analytical lens named in the title.
 - `code` — Python producing a DataFrame assigned to `output_variable`.
 - `output_variable` — snake_case name the code assigns.
+- `parameter_slots` — optional 0–4 scalar controls worth changing on later
+  deterministic Recipe runs. Prefer meaningful thresholds, Top N/window sizes,
+  category values, and reference dates. The current output must be produced
+  with each declared `default`, and the code must read every slot literally as
+  `params["slot_id"]`. Use slots as data values in comparisons/arithmetic or
+  in bounded operations such as `head`/`tail`, `rolling`, `between`, `isin`,
+  `clip`, `quantile`, and fixed-column sorting options. Do not expose incidental
+  constants. Never use a slot as Python/SQL text, an expression/operator,
+  filename, table/column name, callable, or chart encoding; unsupported call
+  positions are rejected before execution.
 - `chart` — `{chart_type, encodings:{x,y,…}, config:{}}` (chart_type from the
   chart type reference).
 - `input_tables` — workspace table names, as listed in the available-tables

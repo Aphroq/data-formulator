@@ -11,9 +11,11 @@ import {
     compileRecipe,
     dryRunRecipe,
     getRecipeVersion,
+    listRecipeParameterCandidates,
     listRecipes,
     publishRecipe,
     runRecipe,
+    suggestRecipeParameterConfigurations,
 } from '../../../../src/app/recipeApi';
 
 
@@ -23,23 +25,82 @@ beforeEach(() => {
 
 
 describe('Recipe API client', () => {
-    it('compiles only explicit durable artifact ids', async () => {
+    it('inspects, suggests metadata for, and compiles only explicit safe slots', async () => {
         const payload = { version: { version_id: 'rv_1' }, spec: {}, workflow_markdown: '# Recipe' };
-        mocks.apiRequest.mockResolvedValue({ data: payload });
+        const candidates = [{
+            candidate_id: 'cand_1',
+            parameter_id: 'region',
+            kind: 'filter',
+            name: 'region',
+            type: 'string',
+            default: 'west',
+        }];
+        mocks.apiRequest
+            .mockResolvedValueOnce({ data: { candidates } })
+            .mockResolvedValueOnce({ data: { suggestions: [{
+                candidate_id: 'cand_1',
+                name: 'Sales region',
+                description: 'Region included in this run.',
+                mode: 'ask',
+            }], unmatched: ['Top products'] } })
+            .mockResolvedValueOnce({ data: payload });
+
+        await expect(listRecipeParameterCandidates(['art_1'])).resolves.toBe(candidates);
+
+        await expect(suggestRecipeParameterConfigurations({
+            targetArtifactIds: ['art_1'],
+            model: { endpoint: 'openai', model: 'test-model' },
+            workflowContext: { context_id: 'ws-1', threads: [] },
+            name: 'Revenue',
+            description: 'Monthly revenue',
+            timeoutSeconds: 45,
+        })).resolves.toEqual({
+            suggestions: [expect.objectContaining({ name: 'Sales region' })],
+            unmatched: ['Top products'],
+        });
 
         await expect(compileRecipe({
             targetArtifactIds: ['art_1'],
             name: 'Revenue',
             description: 'Monthly revenue',
+            parameterConfigurations: [{
+                candidate_id: 'cand_1',
+                name: 'Sales region',
+                description: 'Region included in this run.',
+                mode: 'ask',
+            }],
         })).resolves.toBe(payload);
 
-        expect(mocks.apiRequest).toHaveBeenCalledWith('/api/recipes/compile', {
+        expect(mocks.apiRequest).toHaveBeenNthCalledWith(1, '/api/recipes/parameter-candidates', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target_artifact_ids: ['art_1'] }),
+        });
+        expect(mocks.apiRequest).toHaveBeenNthCalledWith(2, '/api/recipes/parameter-suggestions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                target_artifact_ids: ['art_1'],
+                model: { endpoint: 'openai', model: 'test-model' },
+                workflow_context: { context_id: 'ws-1', threads: [] },
+                name: 'Revenue',
+                description: 'Monthly revenue',
+                timeout_seconds: 45,
+            }),
+        });
+        expect(mocks.apiRequest).toHaveBeenNthCalledWith(3, '/api/recipes/compile', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 target_artifact_ids: ['art_1'],
                 name: 'Revenue',
                 description: 'Monthly revenue',
+                parameter_configurations: [{
+                    candidate_id: 'cand_1',
+                    name: 'Sales region',
+                    description: 'Region included in this run.',
+                    mode: 'ask',
+                }],
             }),
         });
     });

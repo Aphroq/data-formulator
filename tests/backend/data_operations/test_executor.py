@@ -81,7 +81,7 @@ def _step(display_name: str = "Recent orders", source_id: str = "warehouse"):
 
 def test_executor_materializes_bounded_table_with_provenance(tmp_path: Path) -> None:
     workspace = Workspace("test-user", root_dir=tmp_path)
-    loader = _Loader(pa.table({"id": [1, 2, 3], "region": ["west", "east", "north"]}))
+    loader = _Loader(pa.table({"id": [1, 2, 3], "region": ["north", "west", "east"]}))
     executor = DataOperationExecutor(workspace, lambda _source_id: loader)
     operation = _operation(_step())
 
@@ -91,7 +91,7 @@ def test_executor_materializes_bounded_table_with_provenance(tmp_path: Path) -> 
     assert loader.calls == [("public.orders", {
         "size": 2,
         "source_filters": [{"column": "region", "operator": "IN", "value": ["west", "east"]}],
-        "columns": ["id"],
+        "columns": ["id", "region"],
         "sort_columns": ["created_at"],
         "sort_order": "desc",
     })]
@@ -100,7 +100,7 @@ def test_executor_materializes_bounded_table_with_provenance(tmp_path: Path) -> 
     assert metadata.row_count == 2
     assert metadata.source_table == "public.orders"
     assert metadata.loader_params == {"host": "example.test"}
-    assert workspace.read_data_as_df("recent_orders")["id"].tolist() == [1, 2]
+    assert workspace.read_data_as_df("recent_orders")["id"].tolist() == [2, 3]
     assert result.failed_steps == ()
 
     artifact = ArtifactLedger.for_workspace(workspace).list_nodes()[0]
