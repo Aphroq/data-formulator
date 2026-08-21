@@ -8,7 +8,7 @@
 | Worktree | `D:\projects\dfm-wt-analysis` |
 | 本机实例 | `analysis`：后端 5568、Vite 5174、数据目录 `D:\projects\dfm-runtime\analysis` |
 | 基线 | 共享文档提交，父提交为 Data Formulator `5477f0e` |
-| 当前阶段 | A13-A16 主路径、实时步骤、IOF 验收和 Collection/Profile 收敛已完成；A17 当前 Workspace 轻量连接 UI 已完成。`structured_query` 继续保留，不接入行级语义匹配 |
+| 当前阶段 | A13-A16 主路径、实时步骤、IOF 验收和 Collection/Profile 收敛已完成；A17 TrustGraph 与 A18 Copilot 轻量连接 UI 已完成。`structured_query` 继续保留，不接入行级语义匹配 |
 
 ## 目标
 
@@ -51,6 +51,7 @@
 15. **A14 `agent_explain` 实时步骤（已完成）**：服务端使用官方 WebSocket explain iterator，把 provenance 映射为 `tool_progress`；浏览器继续消费现有 `/analyst-streaming` NDJSON，前端复用 `thinkingSteps`，成功 trace 只增加查询轮数摘要。当前 HTTPS 验证入口已支持 `/api/v1/socket` Upgrade；未新增 `socket_base`、TrustKit 依赖、浏览器直连或第二套 Agent runtime。
 16. **A15 IOF 制造业知识验收（已完成）**：固定 IOF `Release_202602` 的 Annotation Vocabulary、Core 和 Production Planning，保留文件哈希、原始 RDF 和来源关系；真实中文数据清洗输入自动加载 Skill，同一个 TrustGraph Agent 两轮检索后区分生产订单、生产计划和制造操作。公共本体不冒充企业生产知识。
 17. **A16 Collection/Profile 收敛（已完成）**：workspace/bearer 负责授权和所有权隔离，当前调用不跨 workspace；group 只筛选其中的 Agent 可见工具。collection 按生命周期和知识连通性形成长期知识域，由 Agent 在查询时选择领域工具。Knowledge Core 仅在同一域内组合来源。领域工具保持稳定，发布时切换其绑定的 collection 版本。Profile 仍是现有 target 配置；代码已硬切 `trace_collection`、按实际工具描述形成通用任务帧，并从官方 provenance 类型生成与 action 名无关的实时步骤。真实单域、双域和版本切换/回滚均已通过。
+18. **A17/A18 轻量连接管理（已完成）**：TrustGraph 在当前 Workspace 管理非 secret Profile 与 vault reader key；Copilot 在顶部独立入口管理当前 identity 的 device-flow 连接。Copilot 顶部入口和模型弹窗复用同一面板，不复制认证状态机。两个连接图标位于右侧操作区，避免绝对居中的 Workspace 标题与模型按钮发生点击区域重叠。
 
 ## 开发记录
 
@@ -101,6 +102,7 @@
 | 2026-08-21 | A13-A16 分支交付 | 提交默认目标与就绪状态、引用/续接、Copilot 探测复用、官方 `agent_explain` 实时步骤、IOF 验收和 A16 分域路由/版本发布收敛；仓库不含本机目标、bearer 或模型密钥 | 上一行真实场景和完整门禁均通过；提交后工作区只包含本条工程记录 | `d260914a` |
 | 2026-08-21 | TrustGraph 配置语义与业务本体复核 | 删除 target 中无消费者的 `name`、`connect_timeout_seconds`、`max_context_items`，把实际传给官方 WebSocket SDK 的 `read_timeout_seconds` 硬切为 `socket_timeout_seconds`；状态 API/UI 改为 `configured/unconfigured`，明确只表示本地 Profile 和 reader 凭据；跨语言任务帧把常用语/英文等价词提前到首次工具调用，仍只允许缺证时窄化重试。复核 gist、CCO、FIBO、gUFO，未向 TrustGraph 写入候选 | 新合同失败测试先暴露 40 项预期失败，实施后 TrustGraph/route 聚焦 92 项、前端状态 3 项通过。真实双域基线为 4 轮/101.8 秒；首轮直接带中英等价词后降为 2 轮/63.5 秒，两个知识域各检索一次。官方 Explainability follow-up 因 `2.8.14` 内部 `triples_query(g=...)` 与公开签名不一致立即失败，修复已提交上游 `trustgraph-ai/trustgraph#1096`，未接入产品热路径。Windows UTF-8/TTY 后端全量 2346 项通过、13 项跳过、1 项 xfailed、1 项 deselected（既有 symlink 权限项）；前端 51 文件/414 项和 Vite `7.3.3` 生产构建通过；compileall、`uv lock --check`、`uv pip check`、locale JSON 通过 | `965b7570` |
 | 2026-08-21 | A17 TrustGraph 轻量连接配置 | 在现有 Workspace 状态入口增加连接弹窗；当前 identity/workspace 可保存 API、TrustGraph workspace、Flow 和知识工具范围，reader key 只写既有 vault。管理员 `TRUSTGRAPH_TARGETS_JSON` 继续作为后备。显式连接测试使用官方 `Api.flow().list()`，不运行 Agent 查询；普通状态检查仍不访问网络。已有 key 只在 API 与 TrustGraph workspace 均未改变时复用，避免把旧目标凭据带到另一目标。未加入 retrieval collection 选择、摄取、Portal 或 ontology 管理 | 真实界面回显本机管理员默认 Profile，不返回 key；官方 Flow 枚举得到 `default`，2.7 秒完成。Windows UTF-8/TTY 后端全量 2355 项通过、13 项跳过、1 项 xfailed、1 项 deselected（既有 symlink 权限项）；内置 Node `24.19.0` 下前端 51 文件/415 项和 Vite `7.3.3` 生产构建通过；compileall、`uv lock --check`、`uv pip check`、locale JSON 和 `git diff --check` 通过 | `feat: add TrustGraph connection settings` |
+| 2026-08-21 | A18 Copilot 独立连接管理 | 在顶部操作区增加当前 identity 的 Copilot 状态和独立管理弹窗，直接复用模型对话框已有的 `CopilotConnectionPanel`，没有复制 device-flow、轮询、断开或 vault 逻辑。连接变化复用既有模型刷新规则：连接后读取已有 capability 或按原合同探测，断开后撤下 identity 不再可用的模型。TrustGraph 与 Copilot 状态从绝对居中的 Workspace 标题区域移入右侧 flex 操作区，并改为带状态颜色和可访问标签的独立图标，修复连接入口被模型按钮覆盖、点击后误开模型弹窗的问题；feature flag 关闭态仍不渲染、不请求认证接口 | 真实浏览器确认当前 identity 显示 Copilot 已连接，点击 GitHub 图标打开独立“管理 GitHub Copilot 连接”弹窗并显示断开入口；两个连接图标与模型按钮边界无重叠。状态/共享面板聚焦 12 项通过；Windows UTF-8/TTY 后端全量 2355 项通过、13 项跳过、1 项 xfailed、1 项 deselected（既有 symlink 权限项）；内置 Node `24.19.0` 下前端 52 文件/418 项和 Vite `7.3.3` 生产构建通过；locale JSON 和 `git diff --check` 通过 | `feat: add Copilot connection management` |
 
 ## 已确认决策
 

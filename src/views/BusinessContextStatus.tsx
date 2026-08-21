@@ -2,12 +2,12 @@
 // Licensed under the MIT License.
 
 import React, { useEffect, useState } from 'react';
-import { Box, Tooltip, Typography } from '@mui/material';
+import { Box, IconButton, Tooltip } from '@mui/material';
+import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import { useTranslation } from 'react-i18next';
 
 import { apiRequest } from '../app/apiClient';
 import { getUrls } from '../app/utils';
-import { textVar } from '../app/layout';
 import { TrustGraphConnectionDialog } from './TrustGraphConnectionDialog';
 
 type BusinessContextConfigurationStatus = 'disabled' | 'configured' | 'unconfigured';
@@ -60,33 +60,35 @@ export const BusinessContextStatus: React.FC<BusinessContextStatusProps> = ({
             : 'text.disabled';
 
     return (<>
-        <Tooltip title={t('workspace.trustGraphConfigure')} placement="bottom">
-            <Box
-                component="button"
-                type="button"
+        <Tooltip title={`${t('workspace.trustGraphConfigure')} — ${label}`} placement="bottom">
+            <IconButton
+                size="small"
                 aria-label={t('workspace.trustGraphConfigure')}
                 onClick={() => setDialogOpen(true)}
                 sx={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 0.5,
-                    ml: 0.5,
                     color,
-                    whiteSpace: 'nowrap',
-                    border: 0,
-                    bgcolor: 'transparent',
-                    cursor: 'pointer',
-                    p: 0,
+                    p: 0.5,
+                    '&:hover': { color, backgroundColor: 'rgba(0, 0, 0, 0.04)' },
                 }}
             >
+                <HubOutlinedIcon fontSize="small" />
                 <Box
                     component="span"
-                    sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: 'currentColor' }}
+                    role="status"
+                    aria-label={label}
+                    sx={{
+                        position: 'absolute',
+                        width: 1,
+                        height: 1,
+                        p: 0,
+                        m: -1,
+                        overflow: 'hidden',
+                        clip: 'rect(0, 0, 0, 0)',
+                        whiteSpace: 'nowrap',
+                        border: 0,
+                    }}
                 />
-                <Typography role="status" aria-label={label} component="span" sx={{ fontSize: textVar.xxs, color: 'inherit' }}>
-                    {label}
-                </Typography>
-            </Box>
+            </IconButton>
         </Tooltip>
         <TrustGraphConnectionDialog
             open={dialogOpen}

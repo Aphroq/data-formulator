@@ -9,6 +9,7 @@ import {
     DataFormulatorState,
     dfActions,
     dfSelectors,
+    fetchAvailableModels,
     fetchGlobalModelList,
     DEFAULT_ROW_LIMIT,
 } from './dfSlice'
@@ -116,6 +117,7 @@ import { useTranslation } from 'react-i18next';
 import { syncVegaLocale } from '../i18n/vega-locale';
 import { buttonVar, iconVar, textVar } from './layout';
 import { BusinessContextStatus } from '../views/BusinessContextStatus';
+import { CopilotConnectionStatus } from '../views/CopilotConnectionStatus';
 
 // Discord Icon Component
 const DiscordIcon: FC<{ sx?: any }> = ({ sx }) => (
@@ -612,13 +614,8 @@ const WorkspacePickerDialog: React.FC<{open: boolean, onClose: () => void}> = ({
 const WorkspaceMenu: React.FC = () => {
     const [pickerOpen, setPickerOpen] = useState(false);
     const activeWorkspace = useSelector((state: DataFormulatorState) => state.activeWorkspace);
-    const serverConfig = useSelector((state: DataFormulatorState) => state.serverConfig);
     const { t } = useTranslation();
     const diskPersistenceDisabled = false; // all backends support workspace switching
-
-    console.log('Rendering WorkspaceMenu, activeWorkspace:', activeWorkspace, 'serverConfig:', serverConfig); // Debug log for rendering and state
-    console.log(serverConfig); // Debug log for serverConfig
-    console.log(activeWorkspace); // Debug log for activeWorkspace
 
     if (!activeWorkspace) return null;
 
@@ -649,7 +646,6 @@ const WorkspaceMenu: React.FC = () => {
                     <KeyboardArrowDownIcon className="ws-chevron" sx={{ fontSize: iconVar.md, color: 'text.secondary', opacity: 0.4, transition: 'opacity 0.15s' }} />
                 </Box>
             </Tooltip>
-            <BusinessContextStatus workspaceId={activeWorkspace.id} />
             <WorkspacePickerDialog open={pickerOpen} onClose={() => setPickerOpen(false)} />
         </>
     );
@@ -1103,6 +1099,20 @@ const AppShell: FC = () => {
     const [logsOpen, setLogsOpen] = useState(false);
     const exitSession = useExitSession();
     const inSession = isAppPage && !!activeWorkspace;
+    const refreshCopilotModels = useCallback((connected: boolean) => {
+        if (connected) {
+            void dispatch(fetchAvailableModels());
+        } else {
+            void dispatch(fetchGlobalModelList());
+        }
+    }, [dispatch]);
+    const connectionStatuses = activeWorkspace ? (<>
+        <BusinessContextStatus workspaceId={activeWorkspace.id} />
+        <CopilotConnectionStatus
+            enabled={Boolean(serverConfig.GITHUB_COPILOT_ENABLED)}
+            onConnectionChange={refreshCopilotModels}
+        />
+    </>) : null;
 
     return (
         <Box sx={{
@@ -1185,6 +1195,7 @@ const AppShell: FC = () => {
                         )}
                         {isAppPage && isCompactToolbar && (
                             <Box sx={{ display: 'flex', ml: 'auto', alignItems: 'center', gap: 0.5 }}>
+                                {connectionStatuses}
                                 <ModelSelectionButton />
                                 <ConfigDialog open={settingsOpen} onOpenChange={setSettingsOpen} hideTrigger />
                                 {serverConfig.IS_LOCAL_MODE && (
@@ -1222,6 +1233,7 @@ const AppShell: FC = () => {
                         )}
                         {isAppPage && !isCompactToolbar && (
                             <Box sx={{ display: 'flex', ml: 'auto', alignItems: 'center', gap: 0.75 }}>
+                                {connectionStatuses}
                                 <ModelSelectionButton />
                                 <Divider orientation="vertical" variant="middle" flexItem sx={{ my: 1 }} />
                                 <LanguageSwitcher />

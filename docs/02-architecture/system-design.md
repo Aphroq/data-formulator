@@ -187,6 +187,7 @@ TrustGraph 自身 LLM 配置与 Data Formulator LiteLLM 配置相互独立。当
 - Client 正确解析 provider/model 前缀。
 - 可用性检查从文本 ping 升级为能力探测，至少记录 chat、streaming 和 tools。
 - 模型对话框优先复用当前 identity/model 已有的三项 capability 结果；只有连接状态改变、缓存缺失或用户显式复测时才重新访问网络。
+- 顶部操作区在 feature flag 开启时显示当前 identity 的 Copilot 连接状态，并打开独立管理弹窗；弹窗复用模型对话框中的同一个 device-flow 面板，不建立第二套认证状态或凭据逻辑。连接图标和 TrustGraph 图标进入正常 flex 操作区，不与绝对居中的 Workspace 标题叠放。
 - OAuth token 进入安全存储和 provider 刷新流程，不进入前端状态、日志或 Recipe。
 
 M0 在当前锁定的 LiteLLM `1.91.3` 上验证真实登录、普通对话、工具调用、流式返回和 token 刷新。失败时保持 feature flag 关闭，不先升级依赖掩盖问题。

@@ -82,6 +82,8 @@ A13 已完成主路径产品化：目标解析支持 `default` 后备并在请�
 
 这些改动没有引入 TrustGraph 管理 UI、动态目标注册中心、服务端恢复数据库、新的 Agent runtime 或额外查询层。A17 在同一个状态入口增加了当前 Workspace 的轻量连接表单：非 secret Profile 保存在 identity 目录，reader key 进入既有 vault；官方 `flow().list()` 仅在用户显式测试时访问网络，普通状态判断仍只读取本地配置和凭据引用。真正调用失败仍由现有稳定错误合同处理。
 
+A18 为 Copilot 增加了顶部独立连接状态和管理入口，直接复用已有 device-flow 面板，因此连接、等待授权、断开和 identity-scoped vault 生命周期仍只有一套实现。模型对话框继续负责模型选择和显式 capability 复测。两个连接入口改为右侧操作区中的独立图标，避免绝对居中的 Workspace 标题与模型按钮发生点击区域重叠；对应 feature flag 关闭时 Copilot 入口和认证路由仍同时不存在。
+
 A14 的真实 `agent_explain` 探针进一步确认：同一个普通业务问题由 TrustGraph 自动完成两轮检索，每轮实际经过 `grounding → exploration → focus → synthesis → observation`，最终进入 `Conclusion`；本次共收到 17 个 provenance 事件，同时伴随 185 个 `AgentThought` 分片和 243 个 `AgentAnswer` 分片。产品只需要前者的事件类型和轮次，不应把 token 级 thought/answer、observation 正文或参数转发成 UI 步骤。A16 真实事件还表明工具调用可同时声明 `Analysis`、`ToolUse`、`Reflection` 和 `Thought`，锁定 SDK 会把它解析成 `Reflection`；适配器因此只用官方 `rdf:type = tg:Analysis` 精确判断查询开始，不读取 action、thought、参数或原始 triples，也会忽略与查询无关的 `PatternDecision`。产品统一显示“第 N 次业务知识检索”。
 
 A15 已把固定版本的 [IOF 制造业本体](../04-features/analysis-integrations/trustgraph-manufacturing-knowledge.md) 导入 A11/A15 共用的验证 collection：三个官方 RDF 文档共 4,835 条原始 triples，装载后包含 218 个可检索实体上下文。真实中文数据清洗请求自动加载 Skill，并由同一个 TrustGraph Agent 完成两轮检索，正确区分 Production Order、Production Plan 和 Manufacturing Operation。该结果把验收从领域中立合成知识推进到公开制造业知识，但共用 collection 仍含先前合成 fixture，不是干净的生产候选 collection，也不等于企业自己的生产知识已经治理完成。
