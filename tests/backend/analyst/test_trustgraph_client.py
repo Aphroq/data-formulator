@@ -53,7 +53,6 @@ _TOKEN = "tg-test-token"
 
 def make_target(**overrides: Any) -> TrustGraphTarget:
     values: dict[str, Any] = {
-        "name": "business-knowledge",
         "api_base": "https://trustgraph.example.com/root/",
         "flow_id": "default",
         "trace_collection": "business-context-traces",
@@ -205,7 +204,7 @@ def test_target_normalizes_server_owned_agent_fields(
     assert target.flow_id == "default"
     assert target.trace_collection == "business-context-traces"
     assert target.agent_group == "data-formulator-readonly"
-    assert target.read_timeout_seconds == 120.0
+    assert target.socket_timeout_seconds == 120.0
 
 
 @pytest.mark.parametrize(
@@ -216,10 +215,9 @@ def test_target_normalizes_server_owned_agent_fields(
         ("agent_group", "group/escape"),
         ("agent_group", ""),
         ("trace_collection", ""),
-        ("connect_timeout_seconds", 0),
-        ("read_timeout_seconds", math.inf),
+        ("socket_timeout_seconds", 0),
+        ("socket_timeout_seconds", math.inf),
         ("max_response_chars", 511),
-        ("max_context_items", 101),
     ],
 )
 def test_target_rejects_unsafe_or_unbounded_fields(
@@ -414,7 +412,8 @@ def test_default_factory_calls_official_socket_agent_explain(
     assert "tool's name and description" in framing
     assert "relevant read-only knowledge tool" in framing
     assert "request language and indexed terminology may differ" in framing
-    assert "one follow-up call" in framing
+    assert "include concise common-language or English term equivalents" in framing
+    assert "repeat that tool at most once" in framing
     assert "Answer in the request's language" in framing
     assert "knowledge_query" not in framing
     assert "structured_query" not in framing

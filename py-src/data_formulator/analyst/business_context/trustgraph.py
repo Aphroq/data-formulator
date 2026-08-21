@@ -114,21 +114,17 @@ def _bounded_integer(
 class TrustGraphTarget:
     """Server-owned route and read-only Agent group for one workspace."""
 
-    name: str
     api_base: str
     flow_id: str
     trace_collection: str
     agent_group: str
     trustgraph_workspace: str
     credential_ref: str
-    connect_timeout_seconds: float = 3.0
-    read_timeout_seconds: float = 120.0
+    socket_timeout_seconds: float = 120.0
     max_response_chars: int = 131_072
-    max_context_items: int = 50
 
     def __post_init__(self) -> None:
         for field_name in (
-            "name",
             "trace_collection",
             "trustgraph_workspace",
             "credential_ref",
@@ -165,19 +161,10 @@ class TrustGraphTarget:
 
         object.__setattr__(
             self,
-            "connect_timeout_seconds",
+            "socket_timeout_seconds",
             _positive_timeout(
-                self.connect_timeout_seconds,
-                "connect_timeout_seconds",
-                60.0,
-            ),
-        )
-        object.__setattr__(
-            self,
-            "read_timeout_seconds",
-            _positive_timeout(
-                self.read_timeout_seconds,
-                "read_timeout_seconds",
+                self.socket_timeout_seconds,
+                "socket_timeout_seconds",
                 600.0,
             ),
         )
@@ -186,12 +173,6 @@ class TrustGraphTarget:
             "max_response_chars",
             512,
             1_000_000,
-        )
-        _bounded_integer(
-            self.max_context_items,
-            "max_context_items",
-            1,
-            100,
         )
 
 
@@ -229,10 +210,10 @@ def _build_agent_question(request: BusinessContextQuery) -> str:
         "This also applies when the gap arose during analysis, cleaning, or "
         "transformation and the user did not mention an ontology or graph. "
         "If the request language and indexed terminology may differ, preserve "
-        "the business meaning and, when the first observation lacks evidence, "
-        "make one follow-up call to an available read-only knowledge tool using "
-        "concise common-language or English term equivalents. Answer in the "
-        "request's language. "
+        "the business meaning and include concise common-language or English "
+        "term equivalents in the first tool call. If its observation still "
+        "lacks material evidence, repeat that tool at most once with a narrower "
+        "question. Answer in the request's language. "
         "Do not perform row-level semantic matching. If a "
         "multipart question is not fully supported by the first observation, "
         "make a narrower follow-up call to an available read-only tool. Stop "
@@ -355,7 +336,7 @@ def _open_agent_explain(
 
     api = Api(
         url=target.api_base,
-        timeout=target.read_timeout_seconds,
+        timeout=target.socket_timeout_seconds,
         token=token,
         workspace=target.trustgraph_workspace,
     )

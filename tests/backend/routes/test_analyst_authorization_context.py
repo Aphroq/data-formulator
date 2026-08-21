@@ -59,7 +59,6 @@ def _trustgraph_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DF_ALLOWED_API_BASES", "https://trustgraph.example/*")
     monkeypatch.setenv("TRUSTGRAPH_TARGETS_JSON", json.dumps({
         "default": {
-            "name": "default-business-context",
             "api_base": "https://trustgraph.example",
             "flow_id": "policy-flow",
             "trace_collection": "business-context-traces",
@@ -145,7 +144,7 @@ def test_business_context_status_is_hidden_when_feature_is_disabled(
     assert response.get_json()["data"] == {"status": "disabled"}
 
 
-def test_business_context_status_reports_request_scope_readiness_without_querying(
+def test_business_context_status_reports_request_scope_configuration_without_querying(
     agents_client,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -170,11 +169,11 @@ def test_business_context_status_reports_request_scope_readiness_without_queryin
             headers={"X-Workspace-Id": "workspace-status"},
         )
 
-    assert response.get_json()["data"] == {"status": "available"}
+    assert response.get_json()["data"] == {"status": "configured"}
     query.assert_not_called()
 
 
-def test_business_context_status_is_unavailable_without_reader_credential(
+def test_business_context_status_is_unconfigured_without_reader_credential(
     agents_client,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -193,7 +192,7 @@ def test_business_context_status_is_unavailable_without_reader_credential(
             headers={"X-Workspace-Id": "workspace-status"},
         )
 
-    assert response.get_json()["data"] == {"status": "unavailable"}
+    assert response.get_json()["data"] == {"status": "unconfigured"}
 
 
 def test_full_user_request_discovers_then_uses_ready_business_context_skill(

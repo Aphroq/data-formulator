@@ -79,7 +79,7 @@ PREVIEW_ROW_LIMIT = 50
 
 @agent_bp.route('/business-context-status', methods=['GET'])
 def business_context_status():
-    """Return request-local TrustGraph readiness without network I/O."""
+    """Return request-local TrustGraph configuration without network I/O."""
 
     enabled = os.environ.get("TRUSTGRAPH_ENABLED", "").strip().lower() in {
         "1",
@@ -92,7 +92,7 @@ def business_context_status():
 
     workspace_id = get_active_workspace_id()
     if not workspace_id:
-        return json_ok({"status": "unavailable"})
+        return json_ok({"status": "unconfigured"})
 
     try:
         from data_formulator.analyst.business_context.trustgraph_provider import (
@@ -105,8 +105,8 @@ def business_context_status():
             workspace_id=workspace_id,
         ))
     except Exception:
-        return json_ok({"status": "unavailable"})
-    return json_ok({"status": "available"})
+        return json_ok({"status": "unconfigured"})
+    return json_ok({"status": "configured"})
 
 
 @agent_bp.route('/data-operation-preview', methods=['POST'])

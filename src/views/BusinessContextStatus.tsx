@@ -9,7 +9,7 @@ import { apiRequest } from '../app/apiClient';
 import { getUrls } from '../app/utils';
 import { textVar } from '../app/layout';
 
-type BusinessContextReadiness = 'disabled' | 'available' | 'unavailable';
+type BusinessContextConfigurationStatus = 'disabled' | 'configured' | 'unconfigured';
 
 interface BusinessContextStatusProps {
     workspaceId: string;
@@ -19,39 +19,41 @@ export const BusinessContextStatus: React.FC<BusinessContextStatusProps> = ({
     workspaceId,
 }) => {
     const { t } = useTranslation();
-    const [readiness, setReadiness] = useState<BusinessContextReadiness | 'unknown' | null>(null);
+    const [configurationStatus, setConfigurationStatus] = useState<
+        BusinessContextConfigurationStatus | 'unknown' | null
+    >(null);
 
     useEffect(() => {
         let cancelled = false;
-        setReadiness(null);
-        apiRequest<{ status: BusinessContextReadiness }>(
+        setConfigurationStatus(null);
+        apiRequest<{ status: BusinessContextConfigurationStatus }>(
             getUrls().BUSINESS_CONTEXT_STATUS,
             { headers: { 'X-Workspace-Id': workspaceId } },
         ).then(({ data }) => {
             if (cancelled) return;
-            setReadiness(
+            setConfigurationStatus(
                 data.status === 'disabled'
-                || data.status === 'available'
-                || data.status === 'unavailable'
+                || data.status === 'configured'
+                || data.status === 'unconfigured'
                     ? data.status
                     : 'unknown',
             );
         }).catch(() => {
-            if (!cancelled) setReadiness('unknown');
+            if (!cancelled) setConfigurationStatus('unknown');
         });
         return () => { cancelled = true; };
     }, [workspaceId]);
 
-    if (readiness === null || readiness === 'disabled') return null;
+    if (configurationStatus === null || configurationStatus === 'disabled') return null;
 
-    const label = readiness === 'available'
-        ? t('workspace.businessKnowledgeAvailable')
-        : readiness === 'unavailable'
-            ? t('workspace.businessKnowledgeUnavailable')
+    const label = configurationStatus === 'configured'
+        ? t('workspace.businessKnowledgeConfigured')
+        : configurationStatus === 'unconfigured'
+            ? t('workspace.businessKnowledgeUnconfigured')
             : t('workspace.businessKnowledgeUnknown');
-    const color = readiness === 'available'
+    const color = configurationStatus === 'configured'
         ? 'success.main'
-        : readiness === 'unavailable'
+        : configurationStatus === 'unconfigured'
             ? 'warning.main'
             : 'text.disabled';
 

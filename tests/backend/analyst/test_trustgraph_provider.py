@@ -91,7 +91,6 @@ class _RecordingClient:
 
 def _target_config(**overrides: Any) -> dict[str, Any]:
     config = {
-        "name": "governed-business-context",
         "api_base": "https://trustgraph.example",
         "flow_id": "policy-flow",
         "trace_collection": "business-context-traces",
@@ -344,6 +343,18 @@ def test_provider_rejects_scope_substitution_before_client_call(
         )}),
         _environment({"workspace-good": _target_config(
             max_sparql_chars=32_000,
+        )}),
+        _environment({"workspace-good": _target_config(
+            name="legacy-name",
+        )}),
+        _environment({"workspace-good": _target_config(
+            connect_timeout_seconds=3,
+        )}),
+        _environment({"workspace-good": _target_config(
+            read_timeout_seconds=120,
+        )}),
+        _environment({"workspace-good": _target_config(
+            max_context_items=50,
         )}),
     ],
 )

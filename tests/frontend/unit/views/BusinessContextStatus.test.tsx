@@ -29,12 +29,12 @@ describe('BusinessContextStatus', () => {
     });
 
     it('renders the configured state for the current workspace', async () => {
-        mockApiRequest.mockResolvedValueOnce({ data: { status: 'available' } });
+        mockApiRequest.mockResolvedValueOnce({ data: { status: 'configured' } });
 
         render(<BusinessContextStatus workspaceId="workspace-ready" />);
 
         expect(await screen.findByRole('status', {
-            name: 'workspace.businessKnowledgeAvailable',
+            name: 'workspace.businessKnowledgeConfigured',
         })).toBeInTheDocument();
         expect(mockApiRequest).toHaveBeenCalledWith(
             '/api/agent/business-context-status',
@@ -42,21 +42,21 @@ describe('BusinessContextStatus', () => {
         );
     });
 
-    it('shows unavailable and refreshes when the workspace changes', async () => {
+    it('shows unconfigured and refreshes when the workspace changes', async () => {
         mockApiRequest
-            .mockResolvedValueOnce({ data: { status: 'available' } })
-            .mockResolvedValueOnce({ data: { status: 'unavailable' } });
+            .mockResolvedValueOnce({ data: { status: 'configured' } })
+            .mockResolvedValueOnce({ data: { status: 'unconfigured' } });
         const { rerender } = render(
             <BusinessContextStatus workspaceId="workspace-one" />,
         );
         await screen.findByRole('status', {
-            name: 'workspace.businessKnowledgeAvailable',
+            name: 'workspace.businessKnowledgeConfigured',
         });
 
         rerender(<BusinessContextStatus workspaceId="workspace-two" />);
 
         expect(await screen.findByRole('status', {
-            name: 'workspace.businessKnowledgeUnavailable',
+            name: 'workspace.businessKnowledgeUnconfigured',
         })).toBeInTheDocument();
         expect(mockApiRequest).toHaveBeenLastCalledWith(
             '/api/agent/business-context-status',

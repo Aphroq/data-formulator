@@ -6,6 +6,19 @@
 
 本次固定使用 IOF [`Release_202602`](https://github.com/iofoundry/ontology/releases)、提交 `4c905ad22a93a1c6a5893d0907f32330074c8200`，许可证为 [MIT](https://github.com/iofoundry/ontology/blob/4c905ad22a93a1c6a5893d0907f32330074c8200/LICENSE)。[Production Planning](https://github.com/iofoundry/ontology/blob/4c905ad22a93a1c6a5893d0907f32330074c8200/productionplanning/README.md) 在上游仍标记为 provisional，适合公开集成验收，不应直接替代企业已治理的术语、编码和规则。
 
+## GitHub 通用业务本体候选
+
+2026-08-21 对可直接装载的公开 RDF/OWL 资源做了复核。现成资源确实存在，但“通用”不表示能无映射地叠加到当前 IOF 图：
+
+| 候选 | 可复用内容 | 格式/许可 | 对当前项目的判断 |
+| --- | --- | --- | --- |
+| [Semantic Arts gist](https://github.com/semanticarts/gist) | Organization、Person、Agreement、Event、Product、Service 等约百个企业通用概念 | OWL 2 DL；Turtle，发布包另有 RDF/XML、JSON-LD；CC BY 4.0 | 最完整、最易读的通用企业候选，但属于另一套 upper ontology。可作为非制造业知识域的候选底座或建模参考，不与 IOF 全量混装 |
+| [Common Core Ontologies](https://github.com/CommonCoreOntology/CommonCoreOntologies) | BFO 之上的 Agent、Organization、Event、Information、Facility、Artifact、Unit、Currency 等 11 个模块 | OWL/Turtle；BSD-3-Clause | 与同为 BFO 系的 IOF 结构最接近；但上游正进行 3.0/4.0 重构且明确提示迁移窗口，当前只适合固定已发布版本、按缺口选模块做验证 |
+| [FIBO](https://github.com/edmcouncil/fibo) | Foundations、Business Entities、Agreements、Organizations、Products/Services 以及金融业务域 | OWL/RDF；MIT | 成熟且治理严格，但核心目标是金融合同、监管和风险。只有进入金融/法务场景时才建立独立领域知识，不作为制造业默认底座 |
+| [gUFO](https://github.com/nemo-ufes/gufo) | Object、Event、Role、Situation 等轻量基础概念 | OWL 2 DL/Turtle；CC BY 4.0 | 适合构建本体的建模基础，抽象度高，不适合作为面向普通分析问题的现成业务词表 |
+
+当前不新增第三个通用本体 collection，也不把任何候选写入 TrustGraph。现有 IOF Core 已包含 `BusinessOrganization`、`BusinessProcess` 等制造业共同业务概念；组织自己的指标口径、状态、编码、规则和术语仍应以自有 namespace 建成独立 Core，并按授权、发布生命周期和图关系决定装入既有业务知识 collection 还是独立 collection。若确实需要跨图直接遍历正式映射，再把固定版本的最小映射与两侧知识放入同一治理域验收；不能因为用户未来可能同时提问就预先全量合并。
+
 ## 固定来源清单
 
 | 文件 | 用途 | SHA-256 | 官方 RDF triples |
@@ -60,6 +73,6 @@ A16 没有在查询时临时组合 collection，也没有提前为某类问题�
 
 ## 已知来源边界
 
-直接 GraphRAG 响应能返回上述来源，但锁定的 `trustgraph-base==2.8.14` 高层 `AgentAnswer` 不携带中间 GraphRAG 的 `sources`；`agent_explain` 也只提供阶段事件和最终答案。因此 Data Formulator 的真实 Agent 路径当前只展示 session trace，不伪造文档 citation，也不增加第二次低层查询来重建来源。升级 TrustGraph 后只有官方 Agent 合同明确透传来源时才补 citation。
+直接 GraphRAG 响应能返回上述来源，但锁定的 `trustgraph-base==2.8.14` 高层 `AgentAnswer` 不携带中间 GraphRAG 的 `sources`；`agent_explain` 也只提供阶段事件和最终答案。因此 Data Formulator 的真实 Agent 路径当前只展示 session trace，不伪造文档 citation，也不增加第二次低层查询来重建来源。2026-08-21 又用真实四轮双域 session 调用官方 `ExplainabilityClient.fetch_agent_trace()`，SDK 在首次 provenance 读取即因内部调用 `FlowInstance.triples_query(g=...)` 而失败，而同版本公开方法不接受 `g` 参数。修复已提交上游 [trustgraph-ai/trustgraph#1096](https://github.com/trustgraph-ai/trustgraph/pull/1096)；当前产品仍锁定官方 `2.8.14`，不依赖个人 fork 或在 Data Formulator 局部打补丁。只有官方 Agent 终态明确透传来源，或修复进入官方发布并完成真实合同回归后，才重新评估 citation。
 
 这批 IOF 数据证明公开制造业知识可以被真实产品链路检索，不代表组织自己的工位、物料、状态码、质量规则、口径和来源已经治理完成。生产上线仍需用同样的来源、版本、定义、关系和可检索上下文清单装载企业知识，并单独验收保留的 `structured_query` 场景。

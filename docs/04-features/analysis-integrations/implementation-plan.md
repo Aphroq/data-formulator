@@ -256,22 +256,19 @@ DF_ALLOWED_API_BASES=https://trustgraph.example.com/*
 ```json
 {
   "default": {
-    "name": "business-context-default",
     "api_base": "https://trustgraph.example.com",
     "flow_id": "business-knowledge",
     "trace_collection": "business-context-traces",
     "agent_group": "data-formulator-readonly",
     "trustgraph_workspace": "business-knowledge",
     "credential_ref": "trustgraph:business-context-default",
-    "connect_timeout_seconds": 3,
-    "read_timeout_seconds": 120,
-    "max_response_chars": 131072,
-    "max_context_items": 50
+    "socket_timeout_seconds": 120,
+    "max_response_chars": 131072
   }
 }
 ```
 
-`trace_collection` 必填；`collection` 不再接受，出现时由目标配置的未知字段校验直接拒绝。当前开发环境配置和测试已同步更新，不保留别名、双字段优先级或迁移分支。单知识域部署可以让 trace collection 与唯一查询 collection 同名，但不能再由这个名字推断检索范围。
+`trace_collection` 必填；`collection` 不再接受，出现时由目标配置的未知字段校验直接拒绝。`socket_timeout_seconds` 只传给官方 WebSocket SDK 的连接认证和心跳，不是整次 Agent 查询的总截止时间。无运行时消费者的旧 `name`、`connect_timeout_seconds`、`max_context_items` 以及语义不实的 `read_timeout_seconds` 均直接删除并按未知字段拒绝，不保留别名、双字段优先级或迁移分支。单知识域部署可以让 trace collection 与唯一查询 collection 同名，但不能再由这个名字推断检索范围。
 
 TrustGraph 侧的 collection 路由只存在于 Agent group 工具配置中：
 
@@ -349,11 +346,11 @@ events = api.socket().flow(flow_id).agent_explain(
 | `not_configured` | workspace 无目标/凭据 | 该 workspace 未配置业务上下文 | 否 |
 | `invalid_request` | 非对象参数、空/超限问题或上下文、未知字段、非法 session id | 查询不符合合同 | 否 |
 | `unauthorized` | 401/403 | 业务上下文认证失败 | 需要人工处理 |
-| `timeout` | connect/read/total 超时 | 服务暂时超时 | 是 |
+| `timeout` | 官方 socket 认证/心跳超时，或上游 Agent 明确返回超时 | 服务暂时超时 | 是 |
 | `unavailable` | 网络错误、429、5xx | 服务暂时不可用 | 是 |
 | `protocol_error` | 无效 JSON/合同漂移 | 服务响应不符合预期 | 否，先检查集成 |
 
-日志只包含 category、目标的非敏感内部名称、HTTP status（如适用）和 correlation id。原始异常可以作为 `raise ... from ...` 的内部 cause 保留，但不得被序列化到用户事件。
+日志只包含 category、目标 key、HTTP status（如适用）和 correlation id。原始异常可以作为 `raise ... from ...` 的内部 cause 保留，但不得被序列化到用户事件。
 
 ### 5.7 Copilot OAuth 和 capability
 
@@ -694,13 +691,13 @@ A16 仓库门禁：聚焦后端 101 项、Analyst 后端 94 项通过；Windows 
 
 | 层 | 必测场景 |
 | --- | --- |
-| 值对象 | 空/超限 question、可选 context、空 identity/workspace、非法 source URI、timeout/response/context-item budget |
+| 值对象 | 空/超限 question、可选 context、空 identity/workspace、非法 source URI、socket timeout/response budget |
 | 配置 | flag 未设置/false；关闭态不读 vault；精确 workspace Profile 优先、`default` 后备、两者均无；请求时 reader credential 就绪/缺失；`trace_collection` 必填且 `collection` 作为未知字段拒绝；旧六工具字段拒绝；HTTPS/userinfo/query/fragment/origin |
 | 提示与 Skill | 仅一个高层工具；tool-only registry 明确列出工具；未决含义会改变结果才查询；明确规则/机械操作跳过；固定帧只使用当前 group 实际提供的只读知识工具并依据描述选择，不出现固定内部工具名或 collection；不得发明 search/browse；不做行级语义匹配；最小上下文字段齐全；不发送整表/原始敏感值/完整聊天/代码/路径/凭据/路由 |
 | 请求 | 官方 `agent_explain` WebSocket；bearer；服务端 workspace/Flow/trace collection/group；retrieval collection 由 group 工具绑定；session id；空 history；模型参数不能覆盖 Profile；同一 `api_base` 的 WSS Upgrade；结束/异常时 socket close |
 | 响应与引用 | provenance 只映射有限 phase 和 `query_count`；聚合终态 `AgentAnswer`；丢弃 Thought、Observation 正文、参数、triples 和 answer token 事件；仅接收官方显式 `sources`；答案中的任意 URI 不生成 citation；文档标 `source`、session provenance 标 `trace`；旧数据默认 source；缺少终态答案失败关闭 |
 | 大小 | question/context、wire prompt、答案 JSON、source title/URI、引用数量和截断后 JSON 边界；UTF-8/中文不破坏 |
-| 错误 | connect/read timeout；401/403；429；5xx；连接失败；无效 JSON；SDK/REST 合同漂移 |
+| 错误 | socket 认证/心跳 timeout；上游 Agent timeout；401/403；429；5xx；连接失败；无效 JSON；SDK/REST 合同漂移 |
 | 清洗 | token、URL query、response body、外部异常文本不出现在稳定错误、流或日志字段中 |
 | 兼容 | 不导入 TrustGraph Skill 时现有 registry 不变；现有 `ToolResult(text, images)` 构造保持兼容；缺少 `kind`/`resume_text` 的旧 Session 正常恢复 |
 | 用户交互 | `query_business_context` 先显示通用进度，再按真实 `query_index` 原位更新检索/筛选/汇总/完成并在成功/失败后收口；任意合法工具 action 名不影响通用 provenance 阶段和轮次；Sources 与 Retrieval trace 分组正确，成功 trace 显示查询轮数；暂停续接使用有界 `resume_text` 而非固定成功摘要 |
@@ -801,7 +798,8 @@ GitHub Copilot 测试 identity 条件和仓库外 TrustGraph 的历史结构化�
 25. 完成 A14：9443 WSS Upgrade、客户端/Provider/Skill/Agent 流式合同、现有运行步骤、轻量 trace 查询轮数和真实一轮/两轮全链路回归均已落地。
 26. 完成 A16 Collection/Profile 设计纠偏：确认 workspace 承担授权隔离，collection 是同一 workspace 内按治理域形成的扁平分区，检索范围由 group 工具绑定，未知问题由 Agent 在查询时路由，`AgentRequest.collection` 是 trace 语义；不再把跨域总集合作为默认。
 27. 完成 A16 实现和真实验收：硬切 `trace_collection` 且拒绝旧字段，任务帧与进度移除 action 硬编码；完成业务术语、制造业本体的 A-only/B-only/A+B 路由，以及稳定工具 `v3 → v4 → v3` collection 绑定切换。
+28. 完成 TrustGraph Profile 配置语义收口：删除无消费者字段，使用 `socket_timeout_seconds` 表达官方 WebSocket SDK 的真实超时语义，状态 API/UI 只声明 `configured/unconfigured`；跨语言等价词提前到首轮调用后，真实双域查询由四轮降为两轮。Explainability 的 REST triples 合同缺口已提交上游 [trustgraph-ai/trustgraph#1096](https://github.com/trustgraph-ai/trustgraph/pull/1096)，当前产品继续锁定官方 `2.8.14`，不依赖个人 fork。
 
-当前执行：A14 代码/WSS/实时步骤、A15 固定版本 IOF 制造业知识和 A16 Collection/Profile 实现、真实回归及完整门禁均已完成，准备提交。后续部署工作只剩组织自己的生产候选知识，以及保留的 `structured_query` 真实受治理结构化记录场景；二者不通过 Data Formulator 增加摄取或路由层解决。
+当前执行：A14-A16 主路径和本轮 Profile 配置语义收口均已完成。后续部署工作只剩组织自己的生产候选知识，以及保留的 `structured_query` 真实受治理结构化记录场景；二者不通过 Data Formulator 增加摄取或路由层解决。上游 Explainability 修复只有在官方发布后才升级并重跑真实合同。
 
 `acdfb3c5` 保留 A0-A11 的技术基础和历史验证，`3d345091` 包含 A12 原生 Agent 收敛及配套文档。A12 产品代码和真实验收已经完成；六工具历史结果只作为底层技术证据。

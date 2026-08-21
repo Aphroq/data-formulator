@@ -228,7 +228,6 @@ def test_registry_only_advertises_trustgraph_when_request_scope_is_ready(
         "TRUSTGRAPH_ENABLED": "true",
         "TRUSTGRAPH_TARGETS_JSON": json.dumps({
             "default": {
-                "name": "default-context",
                 "api_base": "https://trustgraph.example",
                 "flow_id": "policy-flow",
                 "trace_collection": "business-context-traces",

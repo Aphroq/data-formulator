@@ -39,17 +39,14 @@ TRUSTGRAPH_TARGETS_ENV_KEY = "TRUSTGRAPH_TARGETS_JSON"
 MAX_TRUSTGRAPH_TARGETS_JSON_CHARS = 262_144
 
 _TARGET_FIELDS = frozenset({
-    "name",
     "api_base",
     "flow_id",
     "trace_collection",
     "agent_group",
     "trustgraph_workspace",
     "credential_ref",
-    "connect_timeout_seconds",
-    "read_timeout_seconds",
+    "socket_timeout_seconds",
     "max_response_chars",
-    "max_context_items",
 })
 
 VaultGetter = Callable[[], "CredentialVault | None"]
@@ -88,7 +85,6 @@ def _load_target(
         raise _error(BusinessContextErrorCategory.NOT_CONFIGURED)
 
     values: dict[str, Any] = dict(raw_target)
-    values.setdefault("name", target_key)
     try:
         return TrustGraphTarget(**values)
     except (TypeError, ValueError) as exc:
