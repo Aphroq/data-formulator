@@ -79,11 +79,15 @@ def _event_lines(response) -> list[dict]:
 @pytest.fixture()
 def agents_client():
     from data_formulator.routes.agents import agent_bp
+    from data_formulator.routes.trustgraph_connections import (
+        trustgraph_connection_bp,
+    )
 
     app = flask.Flask(__name__)
     app.config["TESTING"] = True
     app.config["CLI_ARGS"] = {}
     app.register_blueprint(agent_bp)
+    app.register_blueprint(trustgraph_connection_bp)
     return app.test_client()
 
 
@@ -157,7 +161,7 @@ def test_business_context_status_reports_request_scope_configuration_without_que
             return {"bearer_token": "reader-token"}
 
     with (
-        patch("data_formulator.routes.agents.get_identity_id", return_value="user:42"),
+        patch("data_formulator.routes.trustgraph_connections.get_identity_id", return_value="user:42"),
         patch(
             "data_formulator.analyst.business_context.trustgraph_provider._default_vault_getter",
             return_value=Vault(),
@@ -181,7 +185,7 @@ def test_business_context_status_is_unconfigured_without_reader_credential(
     vault = SimpleNamespace(retrieve=lambda identity_id, source_key: None)
 
     with (
-        patch("data_formulator.routes.agents.get_identity_id", return_value="user:42"),
+        patch("data_formulator.routes.trustgraph_connections.get_identity_id", return_value="user:42"),
         patch(
             "data_formulator.analyst.business_context.trustgraph_provider._default_vault_getter",
             return_value=vault,
@@ -193,6 +197,162 @@ def test_business_context_status_is_unconfigured_without_reader_credential(
         )
 
     assert response.get_json()["data"] == {"status": "unconfigured"}
+
+
+def test_business_context_connection_returns_non_secret_workspace_profile(
+    agents_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _trustgraph_environment(monkeypatch)
+    from data_formulator.analyst.business_context.trustgraph_profiles import make_target
+
+    target = make_target(
+        workspace_id="workspace-status",
+        api_base="https://trustgraph.example",
+        trustgraph_workspace="manufacturing",
+        flow_id="analysis",
+        tool_group="ontology-readonly",
+    )
+    vault = SimpleNamespace(retrieve=lambda identity, source: {"bearer_token": "reader-secret"})
+    with (
+        patch("data_formulator.routes.trustgraph_connections.get_identity_id", return_value="user:42"),
+        patch(
+            "data_formulator.analyst.business_context.trustgraph_profiles.load_workspace_profile",
+            return_value=target,
+        ),
+        patch("data_formulator.auth.vault.get_credential_vault", return_value=vault),
+    ):
+        response = agents_client.get(
+            "/api/agent/business-context-connection",
+            headers={"X-Workspace-Id": "workspace-status"},
+        )
+
+    data = response.get_json()["data"]
+    assert data["status"] == "configured"
+    assert data["source"] == "workspace"
+    assert data["connection"]["flow_id"] == "analysis"
+    assert data["connection"]["tool_group"] == "ontology-readonly"
+    assert "reader-secret" not in json.dumps(data)
+
+
+def test_business_context_connection_save_uses_vault_and_workspace_profile(
+    agents_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _trustgraph_environment(monkeypatch)
+    stored = []
+    vault = SimpleNamespace(
+        retrieve=lambda identity, source: None,
+        store=lambda identity, source, value: stored.append((identity, source, value)),
+    )
+    with (
+        patch("data_formulator.routes.trustgraph_connections.get_identity_id", return_value="user:42"),
+        patch("data_formulator.auth.vault.get_credential_vault", return_value=vault),
+        patch(
+            "data_formulator.analyst.business_context.trustgraph_profiles.save_workspace_profile",
+        ) as save_profile,
+    ):
+        save_profile.side_effect = lambda identity, workspace, **values: __import__(
+            "data_formulator.analyst.business_context.trustgraph_profiles",
+            fromlist=["make_target"],
+        ).make_target(workspace_id=workspace, **values)
+        response = agents_client.put(
+            "/api/agent/business-context-connection",
+            headers={"X-Workspace-Id": "workspace-status"},
+            json={
+                "api_base": "https://trustgraph.example",
+                "trustgraph_workspace": "manufacturing",
+                "flow_id": "analysis",
+                "tool_group": "ontology-readonly",
+                "bearer_token": "reader-secret",
+            },
+        )
+
+    assert response.get_json()["data"]["status"] == "configured"
+    assert stored[0][0] == "user:42"
+    assert stored[0][1].startswith("trustgraph:workspace:")
+    assert stored[0][2] == {"bearer_token": "reader-secret"}
+    save_profile.assert_called_once()
+
+
+def test_business_context_connection_test_lists_flows_without_saving(
+    agents_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _trustgraph_environment(monkeypatch)
+    flow_api = SimpleNamespace(list=lambda: ["secondary", "default", "secondary"])
+    api = SimpleNamespace(flow=lambda: flow_api)
+    with (
+        patch("data_formulator.routes.trustgraph_connections.get_identity_id", return_value="user:42"),
+        patch("trustgraph.api.Api", return_value=api) as api_factory,
+        patch(
+            "data_formulator.analyst.business_context.trustgraph_profiles.save_workspace_profile",
+        ) as save_profile,
+    ):
+        response = agents_client.post(
+            "/api/agent/business-context-connection/test",
+            headers={"X-Workspace-Id": "workspace-status"},
+            json={
+                "api_base": "https://trustgraph.example",
+                "trustgraph_workspace": "manufacturing",
+                "flow_id": "default",
+                "tool_group": "ontology-readonly",
+                "bearer_token": "reader-secret",
+            },
+        )
+
+    assert response.get_json()["data"] == {"flows": ["default", "secondary"]}
+    api_factory.assert_called_once_with(
+        url="https://trustgraph.example",
+        timeout=20,
+        token="reader-secret",
+        workspace="manufacturing",
+    )
+    save_profile.assert_not_called()
+
+
+def test_saved_server_token_is_not_reused_for_a_different_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "DF_ALLOWED_API_BASES",
+        "https://trustgraph.example/*,https://other-trustgraph.example/*",
+    )
+    from data_formulator.analyst.business_context.trustgraph_profiles import make_target
+    from data_formulator.errors import AppError
+    from data_formulator.routes import trustgraph_connections
+
+    current = make_target(
+        workspace_id="workspace-status",
+        api_base="https://trustgraph.example",
+        trustgraph_workspace="manufacturing",
+    )
+    candidate = make_target(
+        workspace_id="workspace-status",
+        api_base="https://other-trustgraph.example",
+        trustgraph_workspace="manufacturing",
+    )
+    vault = SimpleNamespace(retrieve=lambda identity, source: (
+        {"bearer_token": "server-token"}
+        if source == current.credential_ref.replace("workspace:", "server:")
+        else None
+    ))
+    from dataclasses import replace
+    server_target = replace(
+        current,
+        credential_ref=current.credential_ref.replace("workspace:", "server:"),
+    )
+    monkeypatch.setattr(trustgraph_connections, "_vault", lambda: vault)
+    monkeypatch.setattr(
+        trustgraph_connections,
+        "_configured_target",
+        lambda identity, workspace: (server_target, "server"),
+    )
+
+    with pytest.raises(AppError, match="Reader API key required"):
+        trustgraph_connections._connection_token(
+            {}, "user:42", "workspace-status", candidate,
+        )
 
 
 def test_full_user_request_discovers_then_uses_ready_business_context_skill(

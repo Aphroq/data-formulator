@@ -263,6 +263,7 @@ def _register_blueprints():
     # Import agent routes (imports AI/ML libraries: litellm, sklearn, etc.)
     with spinner("Loading AI agents"):
         from data_formulator.routes.agents import agent_bp
+        from data_formulator.routes.trustgraph_connections import trustgraph_connection_bp
     
     # Import session routes
     from data_formulator.routes.sessions import session_bp
@@ -278,6 +279,7 @@ def _register_blueprints():
     # Register blueprints
     app.register_blueprint(tables_bp)
     app.register_blueprint(agent_bp)
+    app.register_blueprint(trustgraph_connection_bp)
     app.register_blueprint(session_bp)
     app.register_blueprint(demo_stream_bp)
     app.register_blueprint(logs_bp)

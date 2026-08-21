@@ -54,7 +54,7 @@ TrustGraph 的 `release/v2.8` 是移动分支。开发、测试和问题复现�
 
 | 能力 | 产品判断 |
 | --- | --- |
-| TrustGraph 原生 Agent | 作为外部只读业务上下文检索提供者；服务器知识 Profile 绑定 workspace、Flow、只读工具组和 trace collection，实际检索 collection 由工具组中的查询工具配置，Data Formulator 只调用一次高层查询 |
+| TrustGraph 原生 Agent | 作为外部只读业务上下文检索提供者；知识 Profile 绑定 workspace、Flow、只读工具组和 trace collection，实际检索 collection 由工具组中的查询工具配置，Data Formulator 只调用一次高层查询 |
 | `knowledge-query` | 第一版生产工具组的必需能力；由 TrustGraph Agent 按需多轮使用，不直接注册到 Data Formulator |
 | `structured-query` | A12 已证明配置和传输可用；现有只读工具组继续保留该能力，不因 A13 尚无依赖场景而移除。Data Formulator 不把它设为第一版必需能力，后续用确实需要受治理结构化记录的场景补充真实验收 |
 | Explainability | 已使用锁定 SDK 的 `agent_explain` 实时 provenance，把事件类型归一化成查询轮次/阶段并保留真实 Agent 检索轨迹标识。轨迹不是文档来源，隐藏 thought、observation 正文、参数和原始 triples 不进入前端；只有官方响应明确给出的文档来源才进入 citation |
@@ -72,7 +72,7 @@ TrustGraph 的 `ontology` 配置是给摄取流程使用的规则：它告诉系
 A16 的最小设计是：
 
 - 先按授权和所有权划分 workspace/Profile；当前一次 Agent 调用不跨 workspace。随后在同一 workspace 内按长期治理边界划分 collection，而不是按某次问题划分：发布生命周期不同，或不应共享图关系和检索排名的知识分开；需要在同一图中建立关系并统一检索的同一知识域可以放在一起。Knowledge Core 仍用于复用来源抽取结果，`load_kg_core(id, flow, collection)` 只把同一知识域需要的 Core 装入其版本化 collection，不负责猜测未来问题或合并所有领域。
-- Data Formulator 只选择一个服务器知识 Profile。Profile 保存 TrustGraph workspace、Flow、只读 Agent group、trace collection 和凭据引用；workspace/bearer 才是授权边界，group 只是本轮 Agent 可见工具的产品路由清单，不新增 IAM。问题到来后由 TrustGraph Agent 选择工具并按需多轮调用，Data Formulator 不保存 retrieval collection 数组、不动态扫描 workspace，也不实现 fan-out/结果合并。
+- Data Formulator 每个请求只解析一个知识 Profile。管理员可提供服务器默认 Profile，当前 identity 可为某个 Data Formulator workspace 保存精确覆盖；Profile 保存 TrustGraph workspace、Flow、只读 Agent group、trace collection 和凭据引用。workspace/bearer 才是授权边界，group 只是本轮 Agent 可见工具的产品路由清单，不新增 IAM。问题到来后由 TrustGraph Agent 选择工具并按需多轮调用，Data Formulator 不保存 retrieval collection 数组、不动态扫描知识，也不实现 fan-out/结果合并。
 - 锁定版本的内置知识查询工具把 collection 固定在工具配置中，Agent 不会自动枚举 workspace 下的全部 collection。因此工具组是知识域清单，但不是问题清单；同一治理域只有一个 collection 时可以只配置一个稳定领域工具，存在多个知识域时则使用描述清楚的不同工具名。领域工具名、描述和 group 标签保持稳定，发布新版本时只切换它绑定的 collection；旧版、测试和归档 collection 不同时暴露给 Agent。`structured_query` 保留，行级语义匹配仍不接入。
 - 固定任务帧已改为依据本轮实际可见工具的名称和描述选择最小充分集合，不再点名任何内部 action；进度依据官方 provenance 类型和阶段归一化成通用查询轮次，也不再维护工具名 allowlist。
 
@@ -80,7 +80,7 @@ A16 的最小设计是：
 
 A13 已完成主路径产品化：目标解析支持 `default` 后备并在请求时核对目标/凭据就绪；当前 Workspace 菜单显示“已配置/未配置”的本地配置状态，该状态不冒充网络健康检查；tool-only Skill 在 registry 中明确列出工具而不是显示“无 action”；完整 `/analyst-streaming` 路径覆盖自动查询、明确规则/机械任务跳过和服务不可用时不编造；前端显示一次业务知识核对进度；`source` 与 `trace` 分开展示；会话续接保留有界最终答案而不是只留下通用成功摘要；Copilot 模型对话框复用已有 capability 结果，并提供显式复测。
 
-这些改动没有引入 TrustGraph 管理 UI、动态目标注册中心、服务端恢复数据库、新的 Agent runtime 或额外查询层。可用性判断只读取现有服务器配置和当前 identity 的凭据引用，不在构造提示或状态展示时做外部网络健康检查；真正调用失败仍由现有稳定错误合同处理。A13 已在当前 Qwen/TrustGraph 环境重跑自动查询、明确规则跳过和运行期失败三条完整用户路径。
+这些改动没有引入 TrustGraph 管理 UI、动态目标注册中心、服务端恢复数据库、新的 Agent runtime 或额外查询层。A17 在同一个状态入口增加了当前 Workspace 的轻量连接表单：非 secret Profile 保存在 identity 目录，reader key 进入既有 vault；官方 `flow().list()` 仅在用户显式测试时访问网络，普通状态判断仍只读取本地配置和凭据引用。真正调用失败仍由现有稳定错误合同处理。
 
 A14 的真实 `agent_explain` 探针进一步确认：同一个普通业务问题由 TrustGraph 自动完成两轮检索，每轮实际经过 `grounding → exploration → focus → synthesis → observation`，最终进入 `Conclusion`；本次共收到 17 个 provenance 事件，同时伴随 185 个 `AgentThought` 分片和 243 个 `AgentAnswer` 分片。产品只需要前者的事件类型和轮次，不应把 token 级 thought/answer、observation 正文或参数转发成 UI 步骤。A16 真实事件还表明工具调用可同时声明 `Analysis`、`ToolUse`、`Reflection` 和 `Thought`，锁定 SDK 会把它解析成 `Reflection`；适配器因此只用官方 `rdf:type = tg:Analysis` 精确判断查询开始，不读取 action、thought、参数或原始 triples，也会忽略与查询无关的 `PatternDecision`。产品统一显示“第 N 次业务知识检索”。
 

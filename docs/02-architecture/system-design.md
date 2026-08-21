@@ -86,7 +86,7 @@ Data Formulator 发给外部提供者的载荷保持简单：
 | 层 | 只负责什么 |
 | --- | --- |
 | `AnalystAgent` | 判断是否存在会改变分析结果的业务含义缺口，并提交一个聚焦问题 |
-| TrustGraph target（文档中称知识 Profile） | 绑定 API、workspace、Flow、一个只读 group、trace collection 和凭据引用；它只是现有服务器配置项，不是新数据库实体或 collection 清单 |
+| TrustGraph target（文档中称知识 Profile） | 绑定 API、workspace、Flow、一个只读 group、trace collection 和凭据引用；管理员默认来自服务器配置，identity/workspace 精确覆盖是一个非 secret JSON 配置，不是 collection 清单或知识管理实体 |
 | Agent group | 通过 TrustGraph 工具的 group 标签筛出本轮 Agent 可见的查询工具；它是产品路由清单，不是新的 IAM 边界 |
 | 查询工具 | 用名称和描述说明知识范围，并静态绑定自己的 retrieval collection |
 | TrustGraph Agent | 根据当前问题选择一个或多个工具、按需多轮调用并汇总答案 |
@@ -116,19 +116,19 @@ Data Formulator 发给外部提供者的载荷保持简单：
 
 Data Formulator 既不保存 retrieval collection 数组，也不枚举 workspace、fan-out 或合并跨 collection 排名。它只发送一个服务器绑定的 group；问题到来后由 TrustGraph Agent 读取组内工具描述完成路由。查询期间不创建 collection、不调用 `load_kg_core`、不修改 group。若将来出现大量动态 collection，锁定版本缺少原生 catalog/router，应作为 TrustGraph 能力缺口单独处理；A16 不为尚未出现的规模增加组件。
 
-知识 Profile 继续复用现有 `TRUSTGRAPH_TARGETS_JSON` 的“精确 Data Formulator workspace → `default`”解析；一个 Profile 只进入一个 TrustGraph workspace。工具配置和 collection 版本由 TrustGraph UI/CLI 管理，Profile 不复制这些清单。单知识域可以只有一个稳定领域知识工具；同一 workspace 内的多知识域配置少量、描述清楚的工具。工具描述只说明知识内容、权威范围和明确排除项，不枚举预期问题或写行业特例。现有 `structured_query` 保留；group 不加入 row embeddings、通用文本补全、写操作、摄取或管理工具。
+知识 Profile 按“当前 identity/workspace 精确覆盖 → `TRUSTGRAPH_TARGETS_JSON` 精确项或 `default` 管理员后备”解析；一个 Profile 只进入一个 TrustGraph workspace。精确覆盖只保存 API、workspace、Flow 和知识工具范围，reader token 以派生的 `trustgraph:workspace:*` 引用进入现有 vault；固定 trace collection 不进入 UI。工具配置和 retrieval collection 版本仍由 TrustGraph UI/CLI 管理，Profile 不复制这些清单。单知识域可以只有一个稳定领域知识工具；同一 workspace 内的多知识域配置少量、描述清楚的工具。工具描述只说明知识内容、权威范围和明确排除项，不枚举预期问题或写行业特例。现有 `structured_query` 保留；group 不加入 row embeddings、通用文本补全、写操作、摄取或管理工具。
 
 固定任务帧不写死任何内部工具名，只要求原生 Agent 使用本轮实际提供的只读知识工具、选择最小充分集合、必要时补查，并在证据不足时停止。跨语言首轮缺证时仍可保持业务含义补查一次。进度也不根据 `knowledge_query`/`structured_query` 名称分支，而只把可信 provenance 阶段归一化成通用“第 N 次业务知识检索”。
 
 A16 已完成三个语义收敛：`TrustGraphTarget` 和目标 JSON 只接受必填 `trace_collection`，旧 `collection` 字段直接触发配置错误；任务帧依据本轮实际可见的只读知识工具及描述选择最小充分集合；实时进度按官方 provenance 类型和阶段计数，不维护 action 名单。真实单域、跨域和稳定工具 collection 版本切换均已验证。除此之外不增加 collection 配置层、catalog、查询协调器、前端选择器或新的 Agent runtime。
 
-每次创建 `AnalystAgent` 时，用现有 target resolver 对知识 Profile 做一次不访问网络的就绪判断：当前 identity/workspace 能解析到精确或默认 Profile，且 vault 中存在对应 reader 凭据时，registry 才向模型提供 TrustGraph Skill；否则不宣称该能力可用。`GET /api/agent/business-context-status` 复用同一判断给当前 Workspace 菜单显示配置状态，不调用 TrustGraph 网络。Provider 在真正调用时仍重复解析并失败关闭，避免把 registry 或 UI 状态当成授权/健康检查。全局 flag 继续决定模块是否导入；这里不增加后台探测或缓存服务。
+每次创建 `AnalystAgent` 时，用同一个 target resolver 对知识 Profile 做一次不访问网络的就绪判断：当前 identity/workspace 能解析到用户精确覆盖或管理员后备，且 vault 中存在对应 reader 凭据时，registry 才向模型提供 TrustGraph Skill；否则不宣称该能力可用。`GET /api/agent/business-context-status` 复用同一判断给当前 Workspace 菜单显示配置状态，不调用 TrustGraph 网络。用户显式打开连接弹窗时可读取非 secret 字段；显式点击测试才通过官方 `Api.flow().list()` 验证连接并列出 Flow，20 秒超时，不运行 Agent 查询。Provider 在真正查询时仍重复解析并失败关闭，避免把 registry 或 UI 状态当成授权/健康检查。全局 flag 继续决定模块是否导入；这里不增加后台探测或缓存服务。
 
 TrustGraph 的 ontology 配置是给摄取流程使用的规则，用来约束可抽取的类型、属性和关系；知识查询搜索的则是其工具所绑定 collection 中已经导入的知识。需要在分析和清洗中自动核对的类定义、属性、domain/range 和业务关系，应由部署方连同来源实际装载到相应的可查询 collection，并建立图实体上下文；随后由该 Profile 的只读知识工具检索。Data Formulator 不直读 ontology 配置，也不为此增加 SPARQL 或 triples 产品工具。
 
 公开 IOF 制造业验收进一步固定了部署侧的最小装载合同：原始知识 triples 进入 GraphRAG 实际查询的默认知识图；文件、版本、哈希和 RDF-star 派生关系进入 `urn:graph:source`；原始 RDF 保存在 Library；实体上下文只使用上游 label、定义、示例、父类和关系，不由装载器编造业务定义。完整来源清单见 [TrustGraph 制造业知识准备与验收](../04-features/analysis-integrations/trustgraph-manufacturing-knowledge.md)。这仍是 TrustGraph 部署职责，不增加 Data Formulator 写路径。
 
-产品内部继续使用锁定的官方 Python SDK，但业务查询改用 `Api.socket().flow(...).agent_explain(...)` 这一条原生流式路径；Flow、trace collection、只读 group、TrustGraph workspace、credential 和 session id 仍全部由服务端 Profile 绑定，retrieval collection 由 group 中各查询工具绑定。浏览器不直连 TrustGraph，也不接收 bearer 或目标配置。同步 `query()` 只作为消费同一 explain iterator 的兼容入口，不保留一套并行 REST fallback，不实现自己的搜索、查询规划或 Agent loop。MCP 只作为独立外部互操作入口；锁定镜像的出站 `mcp-tool` 与其 MCP 客户端签名不兼容，内部 Agent 不依赖该路径。
+产品内部继续使用锁定的官方 Python SDK，业务查询只走 `Api.socket().flow(...).agent_explain(...)` 这一条原生流式路径；Flow、trace collection、只读 group、TrustGraph workspace、credential 和 session id 均由解析后的 Profile 绑定，retrieval collection 由 group 中各查询工具绑定。浏览器不直连 TrustGraph，连接 API 只返回非 secret 路由字段和 `has_credential`，永不返回 bearer。同步 `query()` 只作为消费同一 explain iterator 的入口，不保留一套并行 REST fallback，不实现自己的搜索、查询规划或 Agent loop。MCP 只作为独立外部互操作入口；锁定镜像的出站 `mcp-tool` 与其 MCP 客户端签名不兼容，内部 Agent 不依赖该路径。
 
 TrustGraph 返回内容按不可信证据处理。Data Formulator 消费最终答案和结构化 provenance 事件类型，但不回传或展示 `AgentThought`、`AgentObservation` 正文、工具参数、原始 triples 或 token 级答案分片。每次请求由 Data Formulator 生成 session id，并用官方 Agent provenance URI 形成真实轨迹引用；只有 TrustGraph 官方响应明确给出的文档来源才作为文档 citation，禁止递归收集任意 RDF/RDFS/实体 IRI 冒充来源。供应商无关的 `ContextItem.kind` 区分 `source` 与 `trace`，旧数据缺省为 `source`；前端的 Sources 只列文档来源，trace 以独立的紧凑检索轨迹展示，并在标题中保留实际查询轮数和终态。若无答案、认证失败、超时、服务错误或协议漂移，查询失败关闭；若答案本身说明证据不足，`AnalystAgent` 不得据此执行会改变语义的数据操作。
 

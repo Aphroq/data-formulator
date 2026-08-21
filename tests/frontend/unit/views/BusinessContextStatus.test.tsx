@@ -1,6 +1,6 @@
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -14,6 +14,8 @@ vi.mock('../../../../src/app/apiClient', () => ({
 vi.mock('../../../../src/app/utils', () => ({
     getUrls: () => ({
         BUSINESS_CONTEXT_STATUS: '/api/agent/business-context-status',
+        BUSINESS_CONTEXT_CONNECTION: '/api/agent/business-context-connection',
+        BUSINESS_CONTEXT_CONNECTION_TEST: '/api/agent/business-context-connection/test',
     }),
 }));
 
@@ -73,5 +75,36 @@ describe('BusinessContextStatus', () => {
 
         await vi.waitFor(() => expect(mockApiRequest).toHaveBeenCalledOnce());
         expect(container).toBeEmptyDOMElement();
+    });
+
+    it('opens the current workspace connection dialog from the status', async () => {
+        mockApiRequest
+            .mockResolvedValueOnce({ data: { status: 'configured' } })
+            .mockResolvedValueOnce({
+                data: {
+                    status: 'configured',
+                    source: 'workspace',
+                    connection: {
+                        api_base: 'https://trustgraph.example',
+                        trustgraph_workspace: 'manufacturing',
+                        flow_id: 'default',
+                        tool_group: 'ontology-readonly',
+                        has_credential: true,
+                    },
+                },
+            });
+
+        render(<BusinessContextStatus workspaceId="workspace-ready" />);
+        fireEvent.click(await screen.findByRole('button', {
+            name: 'workspace.trustGraphConfigure',
+        }));
+
+        expect(await screen.findByRole('dialog')).toBeInTheDocument();
+        expect(screen.getByDisplayValue('https://trustgraph.example')).toBeInTheDocument();
+        expect(screen.queryByDisplayValue('reader-secret')).not.toBeInTheDocument();
+        expect(mockApiRequest).toHaveBeenLastCalledWith(
+            '/api/agent/business-context-connection',
+            { headers: { 'X-Workspace-Id': 'workspace-ready' } },
+        );
     });
 });

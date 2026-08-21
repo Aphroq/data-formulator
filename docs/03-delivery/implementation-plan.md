@@ -53,7 +53,7 @@ M0 不启动 Docker。数据库和 TrustGraph 合同验证使用已有可访问�
 
 - 通用引用通道，以及 TrustGraph 原生 Agent 的单一只读业务上下文 Skill。
 - identity/workspace/citation 契约及前端持久化显示。
-- 服务端知识 Profile 绑定 TrustGraph workspace、Flow、只读 Agent group、trace collection 和 credential reference，并支持“Data Formulator workspace 精确覆盖 → `default`”解析、请求时就绪判断和当前 Workspace 配置状态。
+- 知识 Profile 绑定 TrustGraph workspace、Flow、只读 Agent group、trace collection 和 credential reference，并支持“identity/workspace 精确覆盖 → 管理员服务器精确项或 `default` 后备”解析、请求时就绪判断和当前 Workspace 配置状态。轻量连接 UI 只管理非 secret 路由和 vault 中的 reader key，显式测试用官方 SDK 列出 Flow；不接入 collection/摄取管理。
 - 聚焦问题 + 最小数据上下文的通用查询合同；workspace/bearer 负责授权和所有权隔离，同一 workspace 内的只读 group 按治理域提供一个或少量 collection-bound 查询工具，TrustGraph Agent 在问题到来后自行选择并按需多轮调用。Knowledge Core 只在同一知识域内复用/组合来源，不预先为未知问题制作跨域总集合，也不做跨 workspace 联邦查询。现有组继续保留 `structured-query`，但不作为 Data Formulator 第一版验收前置，后续以受治理结构化记录场景单独验收。
 - 最终答案、文档来源、独立检索轨迹、由 `agent_explain` provenance 压缩出的实时查询轮次/阶段、会话续接和故障降级合同。
 - TrustGraph 官方 UI 继续承担摄取、Context Core 管理和完整知识图谱工作台；Data Formulator 不复制这些能力。
@@ -76,7 +76,7 @@ M0 不启动 Docker。数据库和 TrustGraph 合同验证使用已有可访问�
 
 ### M4：稳定化
 
-- TrustGraph 原生 Agent 在真实业务上下文场景中的端到端产品收口；A13 已用未预加载 Skill 的完整用户输入路由覆盖自动查询、跳过查询、服务不可用和续接合同，A14 已用官方 `agent_explain` 把真实多轮查询状态接入现有运行步骤，A15 已用固定版本 IOF Core/Production Planning 完成公开制造业知识的中文真实清洗验收。A16 已硬切 `trace_collection`、泛化任务帧和实时进度，并真实验证单域路由、跨域按需多轮调用和稳定工具 collection 版本切换/回滚。企业自己的生产候选知识及保留的 `structured_query` 真实结构化记录场景仍须独立准备和验收；需要管理 UI 时打开官方 `trustgraph-ui`。
+- TrustGraph 原生 Agent 在真实业务上下文场景中的端到端产品收口；A13-A16 已覆盖自动路由、实时多轮步骤、IOF 制造业验收、分域路由和稳定工具 collection 版本切换/回滚。A17 提供当前 Workspace 的轻量连接 UI 和官方 Flow 枚举。企业自己的生产候选知识及保留的 `structured_query` 真实结构化记录场景仍须独立准备和验收；collection、工具、ontology、摄取和图谱管理继续打开官方 `trustgraph-ui`。
 - Copilot 模型配置复用已取得的 capability 结果，只在连接变化、缓存缺失或显式复测时重新探测。
 - 保留既有授权、引用、错误和大小边界的回归测试，不把它们继续拆成独立功能里程碑。
 - 长时间运行、崩溃恢复、重复调度和重启测试。

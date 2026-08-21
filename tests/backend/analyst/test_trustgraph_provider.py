@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from trustgraph.api.types import AgentAnswer
@@ -223,6 +224,39 @@ def test_resolver_prefers_exact_workspace_target_over_default(
     assert vault.calls == [
         ("user:42", "trustgraph:workspace-context"),
     ]
+
+
+def test_resolver_prefers_identity_workspace_profile_over_server_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DF_ALLOWED_API_BASES", _ALLOWLIST)
+    for key, value in _environment({"default": _target_config()}).items():
+        monkeypatch.setenv(key, value)
+    from data_formulator.analyst.business_context.trustgraph_profiles import make_target
+
+    workspace_target = make_target(
+        workspace_id="workspace-good",
+        api_base="https://trustgraph.example",
+        trustgraph_workspace="workspace-knowledge",
+        flow_id="workspace-flow",
+        tool_group="workspace-readonly",
+    )
+    factory = _ExplainFactory()
+    vault = _Vault({"bearer_token": _TOKEN})
+    with patch(
+        "data_formulator.analyst.business_context.trustgraph_profiles.load_workspace_profile",
+        return_value=workspace_target,
+    ):
+        provider = resolve_trustgraph_provider(
+            _authorization(),
+            vault_getter=lambda: vault,
+            explain_iterator_factory=factory,
+        )
+        provider.query(_query())
+
+    assert vault.calls == [("user:42", workspace_target.credential_ref)]
+    assert factory.calls[0][0].flow_id == "workspace-flow"
+    assert factory.calls[0][0].agent_group == "workspace-readonly"
 
 
 def test_resolver_rejects_collection_instead_of_treating_it_as_an_alias(

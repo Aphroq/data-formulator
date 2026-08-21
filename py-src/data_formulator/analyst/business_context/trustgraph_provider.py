@@ -56,7 +56,7 @@ def _error(category: BusinessContextErrorCategory) -> BusinessContextError:
     return BusinessContextError(category)
 
 
-def _load_target(
+def load_server_target(
     workspace_id: str,
     environment: Mapping[str, str],
 ) -> TrustGraphTarget:
@@ -171,7 +171,18 @@ def resolve_trustgraph_provider(
     if not isinstance(authorization, SkillAuthorization):
         raise _error(BusinessContextErrorCategory.NOT_CONFIGURED)
 
-    target = _load_target(authorization.workspace_id, source_environment)
+    target = None
+    if environment is None:
+        from data_formulator.analyst.business_context.trustgraph_profiles import (
+            load_workspace_profile,
+        )
+
+        target = load_workspace_profile(
+            authorization.identity_id,
+            authorization.workspace_id,
+        )
+    if target is None:
+        target = load_server_target(authorization.workspace_id, source_environment)
     if (
         not target.credential_ref.startswith("trustgraph:")
         or len(target.credential_ref) == len("trustgraph:")
@@ -215,5 +226,6 @@ __all__ = [
     "MAX_TRUSTGRAPH_TARGETS_JSON_CHARS",
     "TRUSTGRAPH_TARGETS_ENV_KEY",
     "TrustGraphProvider",
+    "load_server_target",
     "resolve_trustgraph_provider",
 ]

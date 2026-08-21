@@ -8,7 +8,7 @@
 | Worktree | `D:\projects\dfm-wt-analysis` |
 | 本机实例 | `analysis`：后端 5568、Vite 5174、数据目录 `D:\projects\dfm-runtime\analysis` |
 | 基线 | 共享文档提交，父提交为 Data Formulator `5477f0e` |
-| 当前阶段 | A13 主路径、A14 `agent_explain` 实时查询步骤、A15 IOF 制造业知识验收和 A16 Collection/Profile 收敛均已完成。`structured_query` 继续保留，不接入行级语义匹配 |
+| 当前阶段 | A13-A16 主路径、实时步骤、IOF 验收和 Collection/Profile 收敛已完成；A17 当前 Workspace 轻量连接 UI 已完成。`structured_query` 继续保留，不接入行级语义匹配 |
 
 ## 目标
 
@@ -100,6 +100,7 @@
 | 2026-08-21 | A16 Collection/Profile 实现与真实验收 | 目标合同直接删除 `collection` 并只接受必填 `trace_collection`，无旧字段兼容；任务帧依据本轮实际只读工具的名称与描述选择最小充分集合，不写死 action；实时步骤按官方 `Analysis` 类型和 GraphRAG 阶段计数。真实混合类型工具事件虽被锁定 SDK 解析成 `Reflection`，适配器也只精确识别该事件自身的 `tg:Analysis` 类型，不公开 action、thought、参数或 triples。TrustGraph 验收组使用稳定业务术语工具、制造业本体工具并保留 `structured_query`，没有行级语义工具 | 干净业务术语 Core 装入 `dfm-business-glossary-v3`，固定 IOF Core 装入 `dfm-iof-release-202602-v2`；A-only 只调用术语工具，B-only 只调用本体工具，A+B 各调用一次并得到两轮完整实时步骤。由同一 Core 发布 `dfm-business-glossary-v4` 后，仅切换稳定工具绑定即可在 Data Formulator 请求不变时查询成功，随后已切回 `v3`。外部文本补全消费者曾因中止请求留下队列工作，精确重载该处理组后恢复；锁定 SDK 缺少总请求取消仍列为运维风险。聚焦后端 101 项、Analyst 后端 94 项通过；Windows UTF-8/TTY 全量后端 2343 项通过、13 项跳过、1 项 xfailed、1 项 deselected（仅既有 symlink 权限项）；内置 Node `24.19.0` 下前端 51 文件/414 项和 Vite `7.3.3` 生产构建通过；compileall、`uv lock --check`、`uv pip check` 通过 | 待提交 |
 | 2026-08-21 | A13-A16 分支交付 | 提交默认目标与就绪状态、引用/续接、Copilot 探测复用、官方 `agent_explain` 实时步骤、IOF 验收和 A16 分域路由/版本发布收敛；仓库不含本机目标、bearer 或模型密钥 | 上一行真实场景和完整门禁均通过；提交后工作区只包含本条工程记录 | `d260914a` |
 | 2026-08-21 | TrustGraph 配置语义与业务本体复核 | 删除 target 中无消费者的 `name`、`connect_timeout_seconds`、`max_context_items`，把实际传给官方 WebSocket SDK 的 `read_timeout_seconds` 硬切为 `socket_timeout_seconds`；状态 API/UI 改为 `configured/unconfigured`，明确只表示本地 Profile 和 reader 凭据；跨语言任务帧把常用语/英文等价词提前到首次工具调用，仍只允许缺证时窄化重试。复核 gist、CCO、FIBO、gUFO，未向 TrustGraph 写入候选 | 新合同失败测试先暴露 40 项预期失败，实施后 TrustGraph/route 聚焦 92 项、前端状态 3 项通过。真实双域基线为 4 轮/101.8 秒；首轮直接带中英等价词后降为 2 轮/63.5 秒，两个知识域各检索一次。官方 Explainability follow-up 因 `2.8.14` 内部 `triples_query(g=...)` 与公开签名不一致立即失败，修复已提交上游 `trustgraph-ai/trustgraph#1096`，未接入产品热路径。Windows UTF-8/TTY 后端全量 2346 项通过、13 项跳过、1 项 xfailed、1 项 deselected（既有 symlink 权限项）；前端 51 文件/414 项和 Vite `7.3.3` 生产构建通过；compileall、`uv lock --check`、`uv pip check`、locale JSON 通过 | `965b7570` |
+| 2026-08-21 | A17 TrustGraph 轻量连接配置 | 在现有 Workspace 状态入口增加连接弹窗；当前 identity/workspace 可保存 API、TrustGraph workspace、Flow 和知识工具范围，reader key 只写既有 vault。管理员 `TRUSTGRAPH_TARGETS_JSON` 继续作为后备。显式连接测试使用官方 `Api.flow().list()`，不运行 Agent 查询；普通状态检查仍不访问网络。已有 key 只在 API 与 TrustGraph workspace 均未改变时复用，避免把旧目标凭据带到另一目标。未加入 retrieval collection 选择、摄取、Portal 或 ontology 管理 | 真实界面回显本机管理员默认 Profile，不返回 key；官方 Flow 枚举得到 `default`，2.7 秒完成。Windows UTF-8/TTY 后端全量 2355 项通过、13 项跳过、1 项 xfailed、1 项 deselected（既有 symlink 权限项）；内置 Node `24.19.0` 下前端 51 文件/415 项和 Vite `7.3.3` 生产构建通过；compileall、`uv lock --check`、`uv pip check`、locale JSON 和 `git diff --check` 通过 | `feat: add TrustGraph connection settings` |
 
 ## 已确认决策
 
@@ -113,7 +114,7 @@
 - 引用 URI 只接受 `http`、`https` 和 `urn`，Agent router 再校验、按 URI 去重并限制每个工具事件最多 50 项；Reasoning log 只记录数量和 provider。
 - `ToolResult.public_summary` 是外部工具正文的可选安全替代，只用于前端工具事件和运维摘要，完整正文仍只作为模型观察。
 - Skill frontmatter 的通用 `enabled_if` 是后端 availability 门；flag 关闭时对应 Skill 不进入 registry，Python 模块也不导入。
-- TrustGraph 使用 `TRUSTGRAPH_TARGETS_JSON` 保存非 secret 目标；解析顺序固定为当前 Data Formulator workspace 的精确 key 优先、保留 key `default` 后备。`credential_ref` 必须在独立 `trustgraph:` namespace 中，并通过现有 identity-scoped vault 解析 `bearer_token`。
+- TrustGraph Profile 解析顺序固定为当前 identity/workspace 保存的精确覆盖优先，随后使用 `TRUSTGRAPH_TARGETS_JSON` 的 Data Formulator workspace 精确 key 或保留 key `default`。用户 Profile 的凭据引用由 workspace 派生并处于独立 `trustgraph:` namespace；管理员 Profile 也只能引用该 namespace，`bearer_token` 始终通过现有 identity-scoped vault 解析。
 - 每次构造 Agent registry 时复用同一目标解析器做本地就绪判断；只有目标和当前 identity 的 reader 凭据均存在才提供 TrustGraph Skill，不做外部健康探测。当前 Workspace 菜单通过只读状态 endpoint 显示同一配置判断，不能据此声称服务在线；Provider 调用时仍重新授权并失败关闭。
 - `ToolResult.public_summary` 继续只服务公开工具事件和日志；有界 `resume_text` 只把最终答案和官方明确来源用于模型 trajectory 续接，不保存 hidden thought、原始响应或凭据，也不增加服务端恢复数据库。
 - 前端引用字段只做可选增量，不提升 Session schema 版本；旧 Session 缺字段时保持原对象形状和 UI，现有自动保存、恢复以及 ZIP 导出/导入会原样保留结构化引用。
@@ -125,7 +126,7 @@
 - 高层查询只发送聚焦问题和可选最小上下文。最小上下文包括当前操作/决策、相关数据源或表的角色、字段名和类型、少量非敏感代表值或脱敏值模式、用户明确约束；不发送整表、无关行、原始敏感值、完整聊天、代码、路径、identity/workspace 或目标配置。
 - TrustGraph workspace 是授权/所有权边界，collection 是其中的扁平知识分区，不是目录或自动检索层级；各 RAG/structured 工具自己绑定一个 collection。Knowledge Core 是 workspace 级独立抽取制品，可通过 `load_kg_core(id, flow, collection)` 在同一治理域内复用和组合来源；它不是未知问题的路由机制，也不要求把所有领域预先合并。锁定 SDK 的 `AgentRequest.collection` 用于 session provenance trace，不能作为全部内部工具的 retrieval 路由。
 - bearer 绑定的 TrustGraph workspace 是授权和所有权边界；Agent group 只是该 workspace 内本轮模型可见工具的路由清单，不新增 IAM。组内按发布生命周期和知识连通性配置一个或少量 collection-bound 工具，Agent 根据当前问题选择并可多轮调用。领域工具名、范围描述和 group 标签保持稳定，发布时只切换其 collection 版本；固定任务帧遵循当前 group 实际工具，不硬编码 `knowledge_query`。现有组继续保留 `structured_query`，后续再用受治理结构化记录做独立验收。不向该组加入 row embeddings/行级语义匹配、通用文本补全、写操作、摄取或管理工具。
-- Data Formulator 的服务端知识 Profile 只绑定 TrustGraph workspace、Flow、单个 Agent group、trace collection 和凭据引用；不保存 retrieval collection 数组，不动态扫描 workspace，不 fan-out，也不自行合并跨 collection 排名。用户、前端和模型不能选择 Profile 或原始 collection id。
+- Data Formulator 的知识 Profile 只绑定 TrustGraph workspace、Flow、单个 Agent group、trace collection 和凭据引用；管理员默认可由服务器配置，当前用户可在 Workspace 菜单保存精确覆盖。前端可编辑 API、workspace、Flow 和高级知识工具范围，但不能选择原始 retrieval collection id；模型不能选择或覆盖 Profile。系统不保存 retrieval collection 数组，不动态扫描知识，不 fan-out，也不自行合并跨 collection 排名。
 - Core 装载和各知识域 collection 的版本发布只发生在查询前的 TrustGraph 控制面；每次 `query_business_context` 只读取 group 已绑定的已发布集合，绝不临时创建 collection、调用 `load_kg_core`、枚举 Core 或切换 group。当前产品源码也不存在这些写路径。
 - ontology 配置用于指导摄取流程；Agent 搜索的是工具所绑定 collection 中已经导入的知识。需要自动核对的类型定义、属性、domain/range 和关系必须由部署方连同来源实际装载到相应知识域，并建立图实体上下文。
 - 公共制造业验收使用固定版本 IOF 文件和哈希：知识 triples 进入 GraphRAG 默认知识图，来源元数据进入 `urn:graph:source`，原始文件保存在 Library。跨语言首轮缺证时只允许保持原含义再补查一次，不维护硬编码制造业翻译表。
@@ -133,7 +134,7 @@
 - TrustGraph UI 不进入 Data Formulator：官方 `trustgraph-ui`/`@trustgraph/trustkit` 已覆盖图谱浏览、Ontology、SPARQL、GraphQL 和摄取工作流。`trustkit@2.0.3` 已发布但要求 React 19，完整 `AgentWithTimelineView` 还拥有自己的 Agent/session/state 链；Data Formulator 只借鉴 ExplainTimeline 的紧凑交互，不安装包、不复制源码、不升级 React，完整 UI 独立使用。
 - A14 继续使用现有服务器目标、reader bearer 和 `/analyst-streaming` NDJSON。TrustGraph WebSocket 只存在于后端；同一 `api_base` 必须支持 `/api/v1/socket` WSS Upgrade，不为当前本机代理问题增加第二套 endpoint 配置。
 - 官方 MCP server 暴露了大量查询和管理工具，但产品后端不再叠加 MCP 客户端；MCP 只作为外部自动化兼容面。`2.8.14` 生成部署中 MCP 默认 gateway 端口与实际 API Gateway 存在 `8888/8088` 差异，且 flow 镜像的出站 `mcp-tool` 仍使用已失效的 `headers=` 客户端签名；启用时必须由 TrustGraph 上游修复/升级后单独验收，不能在本项目局部打补丁。
-- TrustGraph 请求体中的 `workspace` 只用于路由，bearer token 仍是目标 workspace 的授权边界；Data Formulator workspace 必须先经过服务端允许目标映射，不能由前端直接指定 Flow、collection、Agent group 或 token。
+- TrustGraph 请求体中的 `workspace` 只用于路由，bearer token 仍是目标 workspace 的授权边界；当前 Workspace 连接 UI 可以保存 Flow、workspace 和只读工具组，但目标 API 仍须通过服务端 URL allowlist，token 只提交到后端 vault 且不会读回。前端和模型都不能指定 retrieval collection，也不能在查询 payload 中覆盖已解析 Profile。
 - LiteLLM `1.91.3` 已包含 `github_copilot/*` 的 chat、streaming、tools 和短期 Copilot token 刷新代码，但其内置 Authenticator 会在进程用户目录保存 token，并在普通模型调用中同步执行 device flow；它不能直接作为多 identity 的 Data Formulator 凭据层。
 - Copilot device flow 由 Data Formulator endpoint 驱动，长期 GitHub access token 只进入现有 identity-scoped encrypted credential vault；轮询必须遵守 GitHub 返回的 `interval`、`expires_in` 和 `slow_down`，不能在普通模型请求中固定休眠等待。
 - A4 实际只使用现有 encrypted credential vault 保存长期 GitHub token；Flask Session 不保存 device code 或 token。未完成 transaction 是有上限的进程内状态，服务重启后需重新开始，完成后的 identity-scoped 连接可从 vault 恢复。

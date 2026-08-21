@@ -31,7 +31,7 @@ Workflow Replay 保留为灵活的“分析方法复用”；Recipe 是严格的
 - 在现有 `AnalystAgent` 中按需调用一个高层业务上下文查询工具；用户不需要了解 TrustGraph、本体、RDF、SPARQL 或 GraphQL。
 - TrustGraph 原生 Agent 使用服务器知识 Profile 绑定的只读工具组自行迭代检索。workspace/bearer 负责授权和所有权隔离，工具组只列出该 workspace 内本轮 Agent 可见的知识域查询工具，不预先列出用户会问的问题；每个 `knowledge-query` 静态绑定一个按发布生命周期和知识连通性划分的 collection，Agent 在问题到来后按工具描述选择一个或多个并可继续追问。同一治理域可以只有一个查询工具，但不为方便跨域提问而预先制作总集合。现有工具组可以继续保留 `structured-query`，但 Data Formulator 不把它设为第一版必需能力，后续用确实需要受治理结构化记录的场景单独验收。Data Formulator 不把这些底层操作暴露成一组模型工具，也不接入行级语义匹配。
 - 查询只发送聚焦业务问题和最小相关上下文；上下文仅含当前操作、数据源/表角色、相关字段与类型、非敏感代表值或脱敏值模式及用户约束，不发送整表、无关行、原始敏感值、完整聊天历史、凭据或外部目标配置；结果作为不可信证据返回，并保留真实检索轨迹标识。
-- 知识 Profile 支持一个服务器默认配置和按 Workspace 精确覆盖；Profile 绑定 TrustGraph workspace、Flow、只读 Agent group、Agent trace collection 和 reader 凭据引用，不向用户或模型暴露原始 collection id。当前 identity/workspace 未配置 Profile 或 reader 凭据时，不向 Agent 宣称该能力可用。Workspace 菜单显示这一配置状态但不声称服务在线；查询过程中把 TrustGraph `agent_explain` 的真实 provenance 压缩为按轮次更新的安全步骤，文档来源与检索轨迹分开展示。
+- 知识 Profile 支持一个管理员提供的服务器默认配置，以及当前用户为某个 Data Formulator Workspace 保存的精确覆盖。Workspace 菜单提供轻量连接配置：API 地址、TrustGraph workspace、reader key、Flow 和高级知识工具范围；连接测试只用官方 SDK 枚举该 workspace 的 Flow。reader key 只进入现有 identity-scoped vault，浏览器不读回；界面不暴露 retrieval collection id。当前 identity/workspace 未配置 Profile 或 reader 凭据时，不向 Agent 宣称该能力可用。配置状态不声称服务在线；查询过程中把 TrustGraph `agent_explain` 的真实 provenance 压缩为按轮次更新的安全步骤，文档来源与检索轨迹分开展示。
 - 可选使用 GitHub Copilot 模型，并验证 OAuth device、刷新、流式和工具调用。
 - 为加载、转换、图表和报告建立后端权威 Artifact Lineage。
 - 从选定产物编译、dry run、发布和手动运行 Recipe。
@@ -55,7 +55,7 @@ Workflow Replay 保留为灵活的“分析方法复用”；Recipe 是严格的
 - 不增加第二个产品 Agent 或新的 Data Formulator Agent runtime；TrustGraph 原生 Agent 只是外部业务上下文检索提供者，不拥有 Data Thread、Workspace 或本地操作。
 - 不把 TrustGraph Agent 的隐藏思考、observation 正文、工具参数或外部内容提升为系统指令或展示给用户；Data Formulator 只消费最终答案、可验证来源、轨迹标识，以及由 `agent_explain` 事件类型归一化出的查询轮次和阶段状态。
 - 不把 TrustGraph 的底层目录、本体、RDF、SPARQL、GraphQL 或行向量接口直接注册为 `AnalystAgent` 工具。
-- 不为 TrustGraph 增加目标或 collection 选择器、摄取管理页、通用租户配置系统或服务端暂停恢复存储；Data Formulator 不动态枚举整个 TrustGraph workspace，不对 collection 数组并发 fan-out，也不自行合并多路检索排名。
+- 不为 TrustGraph 增加 collection 选择器、摄取管理页、Portal 镜像、通用租户管理系统或服务端暂停恢复存储；当前 Workspace 的轻量连接表单不扩展成 TrustGraph 控制面。Data Formulator 不动态枚举整个 TrustGraph workspace 的知识，不对 collection 数组并发 fan-out，也不自行合并多路检索排名。
 - 不在 Data Formulator 增加文档摄取、Processing 或 Context Core load/unload/bulk 管理入口。
 - 不自建或复制 TrustGraph 工作台；需要管理和可视化时复用官方 `trustgraph-ui`。
 - 不把 `@trustgraph/trustkit`、其 React 状态层或浏览器直连 WebSocket 引入 Data Formulator；实时步骤继续使用现有 MUI、Data Thread 和服务端 NDJSON 通道。
